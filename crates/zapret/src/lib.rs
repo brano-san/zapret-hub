@@ -1,6 +1,8 @@
 //! The Flowseal `zapret-discord-youtube` folder as `service.bat` sees it.
 
 pub mod batparse;
+pub mod checks;
+pub mod discord_cache;
 pub mod fakes;
 pub mod flags;
 pub mod folder;
