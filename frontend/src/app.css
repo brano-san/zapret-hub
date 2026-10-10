@@ -1,0 +1,92 @@
+:root {
+  --bg: #f4f6f8;
+  --panel: #ffffff;
+  --text: #1c2126;
+  --muted: #5d6874;
+  --border: #d8dde3;
+  --accent: #2563eb;
+  --ok: #1f9d55;
+  --warn: #b7791f;
+  --bad: #d64545;
+  --hover: #eaeef3;
+  color-scheme: light;
+  font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+}
+
+:root[data-theme="dark"] {
+  --bg: #15181c;
+  --panel: #1d2126;
+  --text: #e4e8ec;
+  --muted: #98a2ad;
+  --border: #323840;
+  --accent: #5b8def;
+  --ok: #3fbf72;
+  --warn: #e0a83a;
+  --bad: #ef6b6b;
+  --hover: #262b31;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+
+.ok {
+  color: var(--ok);
+}
+
+.warn {
+  color: var(--warn);
+}
+
+.bad {
+  color: var(--bad);
+}
+
+.muted {
+  color: var(--muted);
+}
