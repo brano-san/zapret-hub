@@ -38,6 +38,43 @@ fn the_dpi_suite_falls_back_to_its_cache() {
     );
 }
 
+/// What `Folder::open` checks and nothing else: no strategy, no winws that could run.
+fn bare_folder() -> (tempfile::TempDir, zapret::folder::Folder) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("service.bat"), "").unwrap();
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::write(root.join("bin").join("winws.exe"), b"").unwrap();
+    std::fs::write(root.join("bin").join("WinDivert64.sys"), b"").unwrap();
+    std::fs::create_dir_all(root.join("lists")).unwrap();
+    let folder = zapret::folder::Folder::open(root).unwrap();
+    (dir, folder)
+}
+
+/// Needs only `curl.exe` (the check that comes first). `run` is never called here with a
+/// strategy: it would stop the zapret service of this machine.
+#[test]
+fn a_request_without_strategies_is_refused_before_anything_changes() {
+    let (_dir, folder) = bare_folder();
+    let data = tempfile::tempdir().unwrap();
+    let request = Request {
+        suite: Suite::Standard,
+        strategies: Vec::new(),
+    };
+    let err = tester::run::run(
+        &folder,
+        data.path(),
+        &request,
+        None,
+        &AtomicBool::new(false),
+        &|_| {},
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("no strategies"), "{err}");
+    assert!(!zapret::snapshot::pending_path(data.path()).exists());
+    assert!(!tester::history::dir(data.path()).exists());
+}
+
 #[test]
 #[ignore = "needs admin rights, E:\\Zapret and the network; stops zapret for about a minute"]
 fn live_run_of_two_strategies() {

@@ -42,6 +42,9 @@ const READY: Duration = Duration::from_secs(5);
 /// The pause `test zapret.ps1` makes once winws is up.
 const SETTLE: Duration = Duration::from_millis(300);
 
+/// What can fail is checked and fetched first, while zapret still works; then the state is saved,
+/// zapret stopped and the strategies run. The state is put back even when something panics (the
+/// panic goes on afterwards).
 pub fn run(
     folder: &Folder,
     data_dir: &Path,
@@ -54,12 +57,18 @@ pub fn run(
         probe::curl::available(),
         "curl.exe was not found: the tests need Windows 10 1803 or newer"
     );
+    anyhow::ensure!(!request.strategies.is_empty(), "no strategies to test");
     let id = exec::LocalTime::now().stamp();
+    let work = prepare(folder, data_dir, request, socks5)?;
     let pending = pending_path(data_dir);
     // An earlier pending.json is restored first; when that fails nothing starts (spec 10).
     let snapshot = zapret::snapshot::begin(folder, "tests", &pending)?;
-    let outcome = run_strategies(folder, data_dir, request, socks5, cancel, progress);
-    progress(Progress::Restoring);
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let outcome = run_strategies(folder, request, &work, cancel, progress);
+        let canceled = cancel.load(Ordering::Relaxed);
+        progress(Progress::Restoring);
+        (outcome, canceled)
+    }));
     let restore_error = snapshot.restore(folder).err().map(|err| format!("{err:#}"));
     match &restore_error {
         // Put back: the file has done its job.
@@ -74,13 +83,27 @@ pub fn run(
             pending.display()
         ),
     }
-    let mut strategies = outcome?;
+    let (outcome, canceled) = match ran {
+        Ok(done) => done,
+        Err(panic) => std::panic::resume_unwind(panic),
+    };
+    let mut strategies = match outcome {
+        Ok(strategies) => strategies,
+        Err(err) => {
+            return Err(match restore_error {
+                Some(restore) => anyhow::anyhow!(
+                    "{err:#}\n\nthe previous state was not restored either: {restore}"
+                ),
+                None => err,
+            });
+        }
+    };
     crate::rank::sort(request.suite, &mut strategies);
     let run = TestRun {
         id,
         suite: request.suite,
         flowseal_version: folder.version(),
-        canceled: cancel.load(Ordering::Relaxed),
+        canceled,
         restore_error,
         strategies,
     };
@@ -95,17 +118,15 @@ enum Work {
     Dpi(Vec<DpiTarget>, PathBuf),
 }
 
-fn run_strategies(
+/// Reads or downloads what the checks need. The DPI suite takes up to a minute to fetch and needs
+/// the bypass, so this runs before zapret is stopped, and a failure leaves nothing to restore.
+fn prepare(
     folder: &Folder,
     data_dir: &Path,
     request: &Request,
     socks5: Option<&str>,
-    cancel: &AtomicBool,
-    progress: &(dyn Fn(Progress) + Sync),
-) -> anyhow::Result<Vec<StrategyResult>> {
-    zapret::service::stop(zapret::service::SERVICE)?;
-    zapret::procs::kill_all("winws.exe")?;
-    let work = match request.suite {
+) -> anyhow::Result<Work> {
+    Ok(match request.suite {
         Suite::Standard => {
             let targets = zapret::targets::load(folder);
             let extra = crate::rank::extra_targets(&targets);
@@ -122,10 +143,23 @@ fn run_strategies(
             let targets = crate::dpi::load(&cache, socks5)?;
             let payload = cache.join("dpi-payload.bin");
             probe::curl::write_payload(&payload)?;
-            zapret::ipset::enter_test_any(folder)?;
             Work::Dpi(targets, payload)
         }
-    };
+    })
+}
+
+fn run_strategies(
+    folder: &Folder,
+    request: &Request,
+    work: &Work,
+    cancel: &AtomicBool,
+    progress: &(dyn Fn(Progress) + Sync),
+) -> anyhow::Result<Vec<StrategyResult>> {
+    zapret::service::stop(zapret::service::SERVICE)?;
+    zapret::procs::kill_all("winws.exe")?;
+    if matches!(work, Work::Dpi(..)) {
+        zapret::ipset::enter_test_any(folder)?;
+    }
     let total = request.strategies.len() as u32;
     let mut results = Vec::new();
     for (index, name) in request.strategies.iter().enumerate() {
@@ -137,7 +171,7 @@ fn run_strategies(
             total,
             name: name.clone(),
         });
-        let result = run_one(folder, name, &work, cancel);
+        let result = run_one(folder, name, work, cancel);
         if cancel.load(Ordering::Relaxed) {
             break; // cut short: not a result
         }
