@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use zapret::game_filter::{self, GameFilter, GameFilterMode};
 use zapret::ipset::IpsetMode;
 use zapret::procs::Proc;
-use zapret::snapshot::{ServiceSnap, Snapshot, pending_path};
+use zapret::snapshot::{self, ServiceSnap, Snapshot, pending_path};
 
 fn filter(mode: GameFilterMode, tcp: &str, udp: &str) -> GameFilter {
     GameFilter {
@@ -59,6 +59,40 @@ fn a_damaged_pending_json_is_an_error_naming_the_file() {
     fs::write(&path, "{").unwrap();
     let err = Snapshot::load(&path).unwrap_err().to_string();
     assert!(err.contains("pending.json"), "{err}");
+}
+
+// `begin` restores an earlier pending.json first; that touches the services, so only the paths
+// that restore nothing are tested here.
+#[test]
+fn begin_with_nothing_pending_takes_and_saves_a_snapshot() {
+    let dir = common::fake_zapret();
+    let folder = common::folder(&dir);
+    let data = tempfile::tempdir().unwrap();
+    let pending = pending_path(data.path());
+
+    let snap = snapshot::begin(&folder, "tests", &pending).unwrap();
+    assert_eq!(snap.operation, "tests");
+    assert_eq!(Snapshot::load(&pending).unwrap(), Some(snap));
+}
+
+#[test]
+fn begin_does_not_start_over_a_damaged_pending_json() {
+    let dir = common::fake_zapret();
+    let folder = common::folder(&dir);
+    let data = tempfile::tempdir().unwrap();
+    let pending = pending_path(data.path());
+    fs::create_dir_all(pending.parent().unwrap()).unwrap();
+    fs::write(&pending, "{").unwrap();
+
+    let err = snapshot::begin(&folder, "tests", &pending)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("pending.json"), "{err}");
+    assert_eq!(
+        fs::read_to_string(&pending).unwrap(),
+        "{",
+        "the file stays for whoever looks into it"
+    );
 }
 
 #[test]

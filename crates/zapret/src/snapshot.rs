@@ -37,6 +37,31 @@ pub fn pending_path(data_dir: &Path) -> PathBuf {
     data_dir.join("state").join("pending.json")
 }
 
+/// Starts a mutating operation (spec 10). A `pending` file an earlier operation left is restored
+/// first; when that fails, or the file cannot be read, nothing starts and the file stays. After a
+/// successful restore the file is removed; then the state is taken and written to `pending`.
+pub fn begin(folder: &Folder, operation: &str, pending: &Path) -> anyhow::Result<Snapshot> {
+    if let Some(earlier) = Snapshot::load(pending)? {
+        let (file, was) = (pending.display(), &earlier.operation);
+        earlier.restore(folder).map_err(|err| {
+            anyhow::anyhow!(
+                "{file} holds the unfinished operation \"{was}\" and its state could not be restored, so \"{operation}\" did not start:\n{err:#}"
+            )
+        })?;
+        Snapshot::clear(pending).map_err(|err| {
+            anyhow::anyhow!(
+                "{file} was restored but could not be removed, so \"{operation}\" did not start: {err:#}"
+            )
+        })?;
+        log::info!(
+            "{file}: the state before the unfinished \"{was}\" is back, the file is removed"
+        );
+    }
+    let snapshot = Snapshot::take(folder, operation);
+    snapshot.save(pending)?;
+    Ok(snapshot)
+}
+
 impl Snapshot {
     pub fn take(folder: &Folder, operation: &str) -> Self {
         let status = service::status(SERVICE);
