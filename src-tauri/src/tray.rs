@@ -1,7 +1,5 @@
 //! The tray icon (spec 9.3): its color says whether zapret works, its menu switches strategies.
 
-use std::time::{Duration, Instant};
-
 use tauri::image::Image;
 use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -157,21 +155,16 @@ fn background(
     });
 }
 
-/// «Выход». A test run is canceled first and puts zapret back: quitting must not leave the
-/// service stopped.
+/// «Выход». A test run is canceled and puts zapret back; any other change finishes first. The wait
+/// is on another thread (menu events come on the event-loop one).
 fn quit(app: &AppHandle) {
-    let state = actions::state(app);
-    if !state.testing() {
-        app.exit(0);
-        return;
-    }
-    state.cancel_tests();
+    actions::state(app).cancel_tests();
     let app = app.clone();
     std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(60);
-        while actions::state(&app).testing() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(200));
-        }
+        // A change or a whole test run holds the turn: once it is ours, zapret is settled and
+        // `pending.json` is cleared. Forgotten, not dropped: `exit` only asks the event loop to
+        // stop, and no change may start in between.
+        std::mem::forget(actions::state(&app).turn());
         app.exit(0);
     });
 }

@@ -82,17 +82,12 @@ pub fn restart(app: &AppHandle) -> anyhow::Result<QuickCheck> {
     finish_with_check(app, result)
 }
 
-/// Reads only, but during a test run it would check the strategy under test.
+/// Reads only, but in the queue: a restart or an apply that is half done would fail it for nothing,
+/// and during a test run (`change` refuses it) it would check the strategy under test. A refusal
+/// changes nothing, so it is not announced.
 pub fn quick_check(app: &AppHandle) -> anyhow::Result<QuickCheck> {
-    let state = state(app);
-    anyhow::ensure!(
-        !state.testing(),
-        "a test run is going: wait for it or cancel it"
-    );
-    let result = state
-        .folder()
-        .map(|folder| zapret::service::quick_check(&folder));
-    finish_with_check(app, result)
+    let check = state(app).change(|folder| Ok(zapret::service::quick_check(folder)))?;
+    finish_with_check(app, Ok(check))
 }
 
 pub fn check_flowseal_update(app: &AppHandle) -> anyhow::Result<Option<String>> {

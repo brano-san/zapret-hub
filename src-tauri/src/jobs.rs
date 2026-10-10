@@ -6,7 +6,7 @@ use tauri::AppHandle;
 use tauri_specta::Event as _;
 use tester::model::{Suite, TestRun};
 use tester::run::{Progress, Request};
-use zapret::service::SvcState;
+use zapret::service::{QuickCheck, SvcState};
 use zapret::snapshot::{Snapshot, pending_path};
 
 use crate::actions::{self, state};
@@ -131,8 +131,10 @@ pub fn start(app: &AppHandle) {
             // First: a download that hangs (up to 30 s per attempt) must not hold back the tray's
             // first color.
             background_check(&app);
-            if version_checked.is_none_or(|at| at.elapsed() >= VERSION_EVERY) {
-                check_version(&app);
+            // The day counts from a check that ran: a skipped or failed one is tried again on the
+            // next tick.
+            if version_checked.is_none_or(|at| at.elapsed() >= VERSION_EVERY) && check_version(&app)
+            {
                 version_checked = Some(Instant::now());
             }
             std::thread::sleep(QUICK_EVERY);
@@ -140,33 +142,45 @@ pub fn start(app: &AppHandle) {
     });
 }
 
-/// A notification only when a running service stops passing (spec 9.3).
+/// A toast only when a check that passed now fails while the service runs (spec 9.3). Not for a
+/// first check (at logon the network may not be up yet), and not again on every tick of a service
+/// that stays broken.
+fn stopped_passing(before: Option<&QuickCheck>, now: &QuickCheck) -> bool {
+    now.service == SvcState::Running && !now.ok && before.is_some_and(|before| before.ok)
+}
+
 fn background_check(app: &AppHandle) {
     let before = state(app).quick();
-    // No folder yet, or a test run: nothing to check.
+    // No folder yet, or a test run: nothing to check, and nothing to say about it.
     let Ok(check) = actions::quick_check(app) else {
         return;
     };
-    let was_passing = before.is_none_or(|before| before.ok);
-    if check.service == SvcState::Running && !check.ok && was_passing {
+    if stopped_passing(before.as_ref(), &check) {
         notify::show(app, texts::QUICK_FAILED, &texts::quick_result(&check));
     }
 }
 
-/// When Flowseal's own flag asks for it; one notification per new version.
-fn check_version(app: &AppHandle) {
+/// When Flowseal's own flag asks for it; one notification per new version. True when the check
+/// ran: no folder, the flag off (both silent) and a failed download all return false.
+fn check_version(app: &AppHandle) -> bool {
     let state = state(app);
-    let Ok(folder) = state.folder() else { return };
+    let Ok(folder) = state.folder() else {
+        return false;
+    };
     if !zapret::flags::check_updates(&folder) {
-        return;
+        return false;
     }
     let known = state.update();
     match actions::check_flowseal_update(app) {
         Ok(Some(version)) if known.as_deref() != Some(version.as_str()) => {
             notify::show(app, texts::UPDATE, &texts::update(&version));
+            true
         }
-        Ok(_) => {}
-        Err(err) => log::warn!("cannot check the Flowseal version: {err:#}"),
+        Ok(_) => true,
+        Err(err) => {
+            log::warn!("cannot check the Flowseal version: {err:#}");
+            false
+        }
     }
 }
 
@@ -244,5 +258,39 @@ fn recover(app: &AppHandle) {
             texts::RECOVERY_FAILED,
             format!("{}\n\n{err:#}", texts::recovery_failed(&pending)),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check(ok: bool, service: SvcState) -> QuickCheck {
+        QuickCheck {
+            ok,
+            service,
+            winws_running: ok,
+            checks: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_toast_only_when_a_passing_check_starts_failing() {
+        let pass = check(true, SvcState::Running);
+        let fail = check(false, SvcState::Running);
+        assert!(stopped_passing(Some(&pass), &fail));
+        assert!(
+            !stopped_passing(None, &fail),
+            "a first check has nothing it stopped passing"
+        );
+        assert!(
+            !stopped_passing(Some(&fail), &fail),
+            "no second toast while it stays broken"
+        );
+        assert!(!stopped_passing(Some(&pass), &pass));
+        assert!(
+            !stopped_passing(Some(&pass), &check(false, SvcState::Stopped)),
+            "a stopped service is the tray's gray, not a toast"
+        );
     }
 }
