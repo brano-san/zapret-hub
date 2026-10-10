@@ -1,5 +1,6 @@
 //! The Flowseal `zapret-discord-youtube` folder as `service.bat` sees it.
 
+pub mod batparse;
 pub mod folder;
 pub mod strategies;
 pub mod targets;
