@@ -1,6 +1,6 @@
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[test]
 fn captures_stdout_and_the_exit_code() {
@@ -39,6 +39,25 @@ fn stops_when_canceled() {
     .unwrap();
     assert!(out.canceled);
     assert!(out.elapsed < Duration::from_secs(5));
+}
+
+#[test]
+fn a_grandchild_holding_the_pipes_does_not_outlive_the_timeout() {
+    // `cmd` starts `ping` and `ping` keeps stdout open: killing only `cmd` leaves `run` waiting
+    // for the pipes (about 7 s here), so the whole process tree has to end.
+    let started = Instant::now();
+    let out = exec::run(
+        Command::new("cmd").args(["/c", "ping -n 8 127.0.0.1"]),
+        Duration::from_millis(300),
+        None,
+    )
+    .unwrap();
+    assert!(out.timed_out);
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
 }
 
 #[test]

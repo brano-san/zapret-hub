@@ -10,4 +10,4 @@ description = "Runs external programs for Zapret Hub: no console window, timeout
 [dependencies]
 anyhow.workspace = true
 log.workspace = true
-windows = { workspace = true, features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_SystemInformation"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_System_Threading"] }
