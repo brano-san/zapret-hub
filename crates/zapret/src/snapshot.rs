@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::folder::Folder;
+use crate::game_filter::{self, GameFilter};
 use crate::ipset::{self, IpsetMode};
 use crate::procs::{self, Proc};
 use crate::service::{self, SERVICE, SvcState};
@@ -26,6 +27,9 @@ pub struct Snapshot {
     pub manual_winws: Vec<Proc>,
     pub ipset: IpsetMode,
     pub ipset_backup: bool,
+    /// The flag file `utils\game_filter.enabled`, which the `game_filter` operation writes
+    /// before it reinstalls the service.
+    pub game_filter: GameFilter,
 }
 
 /// `data/state/pending.json`
@@ -55,6 +59,7 @@ impl Snapshot {
                 .collect(),
             ipset: ipset::mode(folder),
             ipset_backup: ipset::has_backup(folder),
+            game_filter: game_filter::read(folder),
         }
     }
 
@@ -85,10 +90,15 @@ impl Snapshot {
         }
     }
 
-    /// The files: the DPI test switch undone, the ipset mode as it was.
+    /// The files: the DPI test switch undone, the ipset mode and the game filter as they were. The
+    /// game filter is written only when it reads differently, so a file edited by hand stays.
     pub fn restore_files(&self, folder: &Folder) -> anyhow::Result<()> {
         ipset::leave_test_any(folder)?;
-        ipset::set_mode(folder, self.ipset)
+        ipset::set_mode(folder, self.ipset)?;
+        if game_filter::read(folder) != self.game_filter {
+            game_filter::write(folder, &self.game_filter)?;
+        }
+        Ok(())
     }
 
     /// Everything. Every step is tried even after one fails; the failures come back together.
@@ -99,7 +109,7 @@ impl Snapshot {
                 errors.push(format!("{step}: {err:#}"));
             }
         };
-        note("ipset", self.restore_files(folder));
+        note("files", self.restore_files(folder));
         note("stop zapret", service::stop(SERVICE));
         note("stop winws", procs::kill_all("winws.exe"));
         note("service", self.restore_service());

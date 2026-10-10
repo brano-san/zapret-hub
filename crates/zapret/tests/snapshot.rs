@@ -3,9 +3,18 @@ mod common;
 use std::fs;
 use std::path::PathBuf;
 
+use zapret::game_filter::{self, GameFilter, GameFilterMode};
 use zapret::ipset::IpsetMode;
 use zapret::procs::Proc;
 use zapret::snapshot::{ServiceSnap, Snapshot, pending_path};
+
+fn filter(mode: GameFilterMode, tcp: &str, udp: &str) -> GameFilter {
+    GameFilter {
+        mode,
+        tcp: tcp.into(),
+        udp: udp.into(),
+    }
+}
 
 fn sample(ipset: IpsetMode) -> Snapshot {
     Snapshot {
@@ -23,6 +32,7 @@ fn sample(ipset: IpsetMode) -> Snapshot {
         }],
         ipset,
         ipset_backup: false,
+        game_filter: filter(GameFilterMode::Tcp, "2000-2100", "1024-65535"),
     }
 }
 
@@ -66,6 +76,34 @@ fn restore_files_returns_the_ipset_after_a_killed_run() {
     zapret::ipset::set_mode(&folder, IpsetMode::None).unwrap(); // a mode switch that failed later
     snap.restore_files(&folder).unwrap();
     assert_eq!(fs::read_to_string(&list).unwrap(), "1.1.1.0/24\r\n");
+}
+
+#[test]
+fn restore_files_returns_the_game_filter_a_failed_change_left_behind() {
+    let dir = common::fake_zapret();
+    let folder = common::folder(&dir);
+    let before = filter(GameFilterMode::Tcp, "2000-2100", "1024-65535");
+    game_filter::write(&folder, &before).unwrap();
+    let snap = Snapshot::take(&folder, "game_filter");
+    assert_eq!(snap.game_filter, before);
+
+    // The change writes the file first and reinstalls the service after it, which failed.
+    game_filter::write(&folder, &filter(GameFilterMode::Udp, "1024-65535", "3000")).unwrap();
+    snap.restore_files(&folder).unwrap();
+    assert_eq!(game_filter::read(&folder), before);
+}
+
+#[test]
+fn restore_files_leaves_a_game_filter_file_that_reads_the_same() {
+    let dir = common::fake_zapret();
+    let folder = common::folder(&dir);
+    let file = dir.path().join("utils").join("game_filter.enabled");
+    let by_hand = "; my ports\r\nmode=all\r\ntcp=2000\r\n";
+    fs::write(&file, by_hand).unwrap();
+    let snap = Snapshot::take(&folder, "tests");
+
+    snap.restore_files(&folder).unwrap();
+    assert_eq!(fs::read_to_string(&file).unwrap(), by_hand);
 }
 
 #[test]
