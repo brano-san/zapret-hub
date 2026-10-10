@@ -52,28 +52,38 @@ pub fn is_running(image: &str) -> bool {
     !find(image).is_empty()
 }
 
-/// `taskkill /IM <image> /F`, when one runs.
+/// `taskkill /IM <image> /F`, when one runs. A process that ends between the check and taskkill
+/// makes taskkill fail: with none left that is done; otherwise the error carries taskkill's output.
 pub fn kill_all(image: &str) -> anyhow::Result<()> {
     if !is_running(image) {
         return Ok(());
     }
-    exec::run(
+    let output = exec::run(
         Command::new("taskkill").args(["/IM", image, "/F"]),
         Duration::from_secs(15),
         None,
-    )?
-    .check()?;
+    )?;
+    if !output.success() && !is_running(image) {
+        log::info!(target: "exec", "{image} ended by itself before taskkill reached it");
+        return Ok(());
+    }
+    output.check()?;
     Ok(())
 }
 
-/// Starts a process from a snapshot again, without a window, not waiting for it.
+/// Starts a process from a snapshot again, without a window, not waiting for it. It gets no
+/// standard handles: a long-lived winws must not hold a pipe of ours open.
 pub fn spawn_detached(proc: &Proc) -> anyhow::Result<()> {
     let exe = proc
         .exe
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("pid {} had no executable path", proc.pid))?;
     let mut cmd = Command::new(exe);
-    cmd.args(&proc.args).creation_flags(exec::CREATE_NO_WINDOW);
+    cmd.args(&proc.args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(exec::CREATE_NO_WINDOW);
     if let Some(dir) = exe.parent() {
         cmd.current_dir(dir);
     }

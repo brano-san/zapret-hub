@@ -1,0 +1,138 @@
+//! What a mutating operation may change, written down before it starts (spec 10):
+//! `data/state/pending.json` outlives a crash, `restore` puts everything back.
+
+use std::path::{Path, PathBuf};
+
+use crate::folder::Folder;
+use crate::ipset::{self, IpsetMode};
+use crate::procs::{self, Proc};
+use crate::service::{self, SERVICE, SvcState};
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ServiceSnap {
+    pub image_path: String,
+    pub auto_start: bool,
+    pub running: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Snapshot {
+    /// The operation it guards: `apply`, `tests`, `ipset`, `game_filter`, `remove_service`.
+    pub operation: String,
+    pub service: Option<ServiceSnap>,
+    /// `zapret-discord-youtube` in the registry.
+    pub strategy: Option<String>,
+    /// winws started by a `.bat`, not by the service.
+    pub manual_winws: Vec<Proc>,
+    pub ipset: IpsetMode,
+    pub ipset_backup: bool,
+}
+
+/// `data/state/pending.json`
+pub fn pending_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("state").join("pending.json")
+}
+
+impl Snapshot {
+    pub fn take(folder: &Folder, operation: &str) -> Self {
+        let status = service::status(SERVICE);
+        let service = service::config(SERVICE).map(|config| ServiceSnap {
+            image_path: config.image_path,
+            auto_start: config.auto_start,
+            running: matches!(
+                status,
+                Some((SvcState::Running | SvcState::StartPending, _))
+            ),
+        });
+        let service_pid = status.map(|(_, pid)| pid).filter(|pid| *pid != 0);
+        Self {
+            operation: operation.to_owned(),
+            service,
+            strategy: service::strategy(),
+            manual_winws: procs::find("winws.exe")
+                .into_iter()
+                .filter(|p| Some(p.pid) != service_pid)
+                .collect(),
+            ipset: ipset::mode(folder),
+            ipset_backup: ipset::has_backup(folder),
+        }
+    }
+
+    pub fn save(&self, path: &Path) -> anyhow::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(path, serde_json::to_string_pretty(self)?)?;
+        Ok(())
+    }
+
+    /// `None` when no operation was left unfinished.
+    pub fn load(path: &Path) -> anyhow::Result<Option<Self>> {
+        match std::fs::read_to_string(path) {
+            Ok(text) => Ok(Some(
+                serde_json::from_str(&text)
+                    .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?,
+            )),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub fn clear(path: &Path) -> anyhow::Result<()> {
+        match std::fs::remove_file(path) {
+            Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(err.into()),
+            _ => Ok(()),
+        }
+    }
+
+    /// The files: the DPI test switch undone, the ipset mode as it was.
+    pub fn restore_files(&self, folder: &Folder) -> anyhow::Result<()> {
+        ipset::leave_test_any(folder)?;
+        ipset::set_mode(folder, self.ipset)
+    }
+
+    /// Everything. Every step is tried even after one fails; the failures come back together.
+    pub fn restore(&self, folder: &Folder) -> anyhow::Result<()> {
+        let mut errors: Vec<String> = Vec::new();
+        let mut note = |step: &str, result: anyhow::Result<()>| {
+            if let Err(err) = result {
+                errors.push(format!("{step}: {err:#}"));
+            }
+        };
+        note("ipset", self.restore_files(folder));
+        note("stop zapret", service::stop(SERVICE));
+        note("stop winws", procs::kill_all("winws.exe"));
+        note("service", self.restore_service());
+        for proc in &self.manual_winws {
+            note("start winws", procs::spawn_detached(proc));
+        }
+        log::info!(
+            "state before {} restored, {} errors",
+            self.operation,
+            errors.len()
+        );
+        anyhow::ensure!(errors.is_empty(), "{}", errors.join("\n\n"));
+        Ok(())
+    }
+
+    fn restore_service(&self) -> anyhow::Result<()> {
+        let Some(snap) = &self.service else {
+            return service::stop_and_delete(SERVICE);
+        };
+        let same = service::config(SERVICE).is_some_and(|config| {
+            config.image_path == snap.image_path && config.auto_start == snap.auto_start
+        });
+        if !same {
+            service::stop_and_delete(SERVICE)?;
+            service::create(&snap.image_path, snap.auto_start)?;
+        }
+        if let Some(name) = &self.strategy {
+            service::set_strategy(name)?;
+        }
+        if snap.running {
+            service::start(SERVICE)
+        } else {
+            service::stop(SERVICE)
+        }
+    }
+}
