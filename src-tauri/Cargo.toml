@@ -23,13 +23,22 @@ test = false
 tauri-build.workspace = true
 
 [dependencies]
+exec.workspace = true
+probe.workspace = true
+tester.workspace = true
+zapret.workspace = true
 anyhow.workspace = true
 log.workspace = true
+serde.workspace = true
 specta.workspace = true
 specta-typescript.workspace = true
 tauri.workspace = true
 tauri-plugin-dialog.workspace = true
 tauri-plugin-single-instance.workspace = true
 tauri-specta.workspace = true
-windows = { workspace = true, features = ["Win32_UI_WindowsAndMessaging"] }
+toml.workspace = true
+windows = { workspace = true, features = ["Data_Xml_Dom", "UI_Notifications", "Win32_UI_WindowsAndMessaging"] }
 windows-registry.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

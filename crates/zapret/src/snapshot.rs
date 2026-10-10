@@ -45,7 +45,7 @@ pub fn begin(folder: &Folder, operation: &str, pending: &Path) -> anyhow::Result
         let (file, was) = (pending.display(), &earlier.operation);
         earlier.restore(folder).map_err(|err| {
             anyhow::anyhow!(
-                "{file} holds the unfinished operation \"{was}\" and its state could not be restored, so \"{operation}\" did not start:\n{err:#}"
+                "{file} holds the unfinished operation \"{was}\" and its state could not be restored, so \"{operation}\" did not start. Deleting {file} lets operations go on without restoring that state.\n\n{err:#}"
             )
         })?;
         Snapshot::clear(pending).map_err(|err| {

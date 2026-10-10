@@ -1,11 +1,16 @@
 <script lang="ts">
-  import { commands } from "$lib/ipc/bindings";
+  import { commands, type Overview } from "$lib/ipc/bindings";
 
-  let version = $state("");
-  void commands.appVersion().then((v) => (version = v));
+  let overview = $state<Overview | null>(null);
+  let error = $state("");
+  void commands.getOverview().then((answer) => {
+    if (answer.status === "ok") overview = answer.data;
+    else error = answer.error;
+  });
 </script>
 
 <main>
   <h1>Zapret Hub</h1>
-  <p class="muted">{version}</p>
+  {#if error}<p class="bad">{error}</p>{/if}
+  <pre>{JSON.stringify(overview, null, 2)}</pre>
 </main>
