@@ -219,3 +219,14 @@ fn quote_arg(arg: &str, root_dp0: &str) -> String {
         format!("\\\"{root_dp0}{inner}\\\"")
     }
 }
+
+/// A strategy file with the folder's current game filter, as «Применить» and the tests see it.
+pub fn parse_file(folder: &crate::folder::Folder, path: &Path) -> anyhow::Result<ParsedArgs> {
+    let bat = crate::read_text(path)?;
+    parse(
+        &bat,
+        &folder.root_dp0(),
+        &crate::game_filter::read(folder).vars(),
+    )
+    .map_err(|err| err.context(path.display().to_string()))
+}

@@ -1,9 +1,14 @@
 //! The Flowseal `zapret-discord-youtube` folder as `service.bat` sees it.
 
 pub mod batparse;
+pub mod fakes;
+pub mod flags;
 pub mod folder;
+pub mod game_filter;
+pub mod ipset;
 pub mod strategies;
 pub mod targets;
+pub mod user_lists;
 
 use std::path::Path;
 
