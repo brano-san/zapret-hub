@@ -28,18 +28,35 @@ pub fn needs_update(current: &str, flowseal: &str) -> bool {
     !current.contains(first) || !current.contains(last)
 }
 
-/// `current` with its zapret-hub block replaced by `block`, or the block appended.
-pub fn merge(current: &str, block: &str) -> String {
-    let mut kept: Vec<&str> = Vec::new();
-    let mut inside = false;
+/// The lines of `current` outside the zapret-hub block, and the lines inside it. A block is a
+/// begin marker closed by an end marker. Any other marker is a stray line and goes alone: a begin
+/// that lost its end (hosts is edited by hand) must not eat the lines after it.
+fn split(current: &str) -> (Vec<&str>, Vec<&str>) {
+    let (mut outside, mut block, mut pending) = (Vec::new(), Vec::new(), Vec::new());
+    let mut open = false;
     for line in current.lines() {
         match line.trim() {
-            BEGIN => inside = true,
-            END => inside = false,
-            _ if !inside => kept.push(line),
-            _ => {}
+            // A begin that is still open was never closed: what it collected is ordinary lines.
+            BEGIN => {
+                outside.append(&mut pending);
+                open = true;
+            }
+            END => {
+                block.append(&mut pending);
+                open = false;
+            }
+            _ if open => pending.push(line),
+            _ => outside.push(line),
         }
     }
+    outside.append(&mut pending);
+    (outside, block)
+}
+
+/// `current` with its zapret-hub block replaced by `block`, or the block appended. A begin marker
+/// without an end marker is dropped on its own; every line after it stays.
+pub fn merge(current: &str, block: &str) -> String {
+    let (mut kept, _) = split(current);
     while kept.last().is_some_and(|line| line.trim().is_empty()) {
         kept.pop();
     }
@@ -69,16 +86,7 @@ pub struct HostsPlan {
 }
 
 pub fn plan(current: &str, flowseal: &str) -> HostsPlan {
-    let mut inside = false;
-    let mut old_block: Vec<&str> = Vec::new();
-    for line in current.lines() {
-        match line.trim() {
-            BEGIN => inside = true,
-            END => inside = false,
-            _ if inside => old_block.push(line),
-            _ => {}
-        }
-    }
+    let (_, old_block) = split(current);
     let added = flowseal
         .lines()
         .filter(|line| !line.trim().is_empty() && !current.lines().any(|c| c == *line))

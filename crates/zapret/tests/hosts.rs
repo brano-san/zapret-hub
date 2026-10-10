@@ -39,6 +39,37 @@ fn plan_lists_what_comes_and_what_goes() {
 }
 
 #[test]
+fn merge_keeps_the_lines_after_an_unterminated_begin() {
+    let current = "127.0.0.1 localhost\r\n# zapret-hub begin\r\n1.2.3.4 mine.com\r\n";
+    let merged = merge(current, "5.6.7.8 b.com");
+    assert_eq!(
+        merged,
+        "127.0.0.1 localhost\r\n1.2.3.4 mine.com\r\n\r\n# zapret-hub begin\r\n5.6.7.8 b.com\r\n# zapret-hub end\r\n"
+    );
+    assert_eq!(
+        merge(&merged, "5.6.7.8 b.com"),
+        merged,
+        "the stray marker must not come back"
+    );
+
+    // A stray begin in front of a complete block: the marker goes, the lines up to the block stay.
+    let current =
+        "a\r\n# zapret-hub begin\r\nx\r\n# zapret-hub begin\r\nold\r\n# zapret-hub end\r\ny\r\n";
+    assert_eq!(
+        merge(current, "new"),
+        "a\r\nx\r\ny\r\n\r\n# zapret-hub begin\r\nnew\r\n# zapret-hub end\r\n"
+    );
+}
+
+#[test]
+fn plan_does_not_count_the_lines_of_an_unterminated_begin_as_its_own() {
+    let current = "127.0.0.1 localhost\r\n# zapret-hub begin\r\n1.2.3.4 mine.com\r\n";
+    let p = plan(current, "5.6.7.8 b.com\r\n");
+    assert_eq!(p.added, ["5.6.7.8 b.com"]);
+    assert!(p.removed.is_empty(), "{:?}", p.removed);
+}
+
+#[test]
 #[ignore = "needs the network"]
 fn live_flowseal_version_is_readable() {
     let version = zapret::updates::latest_version(None).unwrap();
