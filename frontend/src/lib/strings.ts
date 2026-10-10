@@ -88,6 +88,7 @@ export const S = {
     cache: "Кэш Discord не очищен",
     removeService: "Служба не удалена",
     wizard: "Настройки не сохранены",
+    start: "Окно не загрузило данные",
   },
   svc: {
     NotInstalled: "не установлена",

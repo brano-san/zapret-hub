@@ -2,6 +2,13 @@
   import { confirmation } from "$lib/confirm.svelte";
   import { S } from "$lib/strings";
 
+  let cancelButton = $state<HTMLButtonElement>();
+
+  // Focus leaves the button behind the backdrop: Enter or Space must not press it again.
+  $effect(() => {
+    if (confirmation.question) cancelButton?.focus();
+  });
+
   function onkeydown(event: KeyboardEvent): void {
     if (event.key === "Escape" && confirmation.question) confirmation.answer(false);
   }
@@ -16,7 +23,7 @@
       <h2 id="confirm-title">{question.title}</h2>
       <pre>{question.text}</pre>
       <div class="buttons">
-        <button onclick={() => confirmation.answer(false)}>{S.common.cancel}</button>
+        <button bind:this={cancelButton} onclick={() => confirmation.answer(false)}>{S.common.cancel}</button>
         <button class={question.danger ? "danger" : "primary"} onclick={() => confirmation.answer(true)}>
           {question.yes}
         </button>

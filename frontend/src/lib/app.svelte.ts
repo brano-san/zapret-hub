@@ -69,17 +69,22 @@ async function pullNotices(): Promise<void> {
 
 /** Once, from `App.svelte`: listeners first, so nothing that happens meanwhile is missed. */
 export async function start(): Promise<void> {
-  await events.stateChanged.listen(() => {
-    app.revision++;
-    void refreshOverview();
-  });
-  await events.noticesChanged.listen(() => void pullNotices());
-  await events.testProgress.listen(() => void refreshLive());
-  await events.testsFinished.listen(({ payload }) => {
-    finishes++;
-    app.live = null;
-    app.finished = payload.run_id;
-  });
-  await loadSettings();
-  await Promise.all([pullNotices(), refreshOverview(), refreshLive()]);
+  try {
+    await events.stateChanged.listen(() => {
+      app.revision++;
+      void refreshOverview();
+    });
+    await events.noticesChanged.listen(() => void pullNotices());
+    await events.testProgress.listen(() => void refreshLive());
+    await events.testsFinished.listen(({ payload }) => {
+      finishes++;
+      app.live = null;
+      app.finished = payload.run_id;
+    });
+    await loadSettings();
+    await Promise.all([pullNotices(), refreshOverview(), refreshLive()]);
+  } catch (err) {
+    // `listen`, `getSettings`, `takeNotices` and `testLive` return no `Answer`: they reject only when the IPC is broken.
+    notices.push({ level: "Error", title: S.failed.start, text: String(err) });
+  }
 }
