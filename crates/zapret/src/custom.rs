@@ -287,16 +287,21 @@ pub fn write_bat(folder: &Folder, s: &CustomStrategy) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Validates `s`, then writes its record and its `.bat`. `new` refuses a name already in use (a
-/// record or a file); otherwise the record must exist.
+/// Checks `s`'s name against the store, validates it, then writes its record and its `.bat`. `new`
+/// refuses a name already in use (a record or a file); otherwise the record must exist. A name that
+/// is taken or missing, or a record that does not parse, is reported before winws runs.
 pub fn save(
     folder: &Folder,
     store: &Store,
     s: &CustomStrategy,
     new: bool,
 ) -> anyhow::Result<CustomStrategy> {
-    let (s, _) = validate(folder, s)?;
-    let exists = store.get(&s.name).is_ok();
+    let s = s.normalized()?;
+    // `list`, not `get`: a record that cannot be read is its own error, naming the file.
+    let exists = store
+        .list()?
+        .iter()
+        .any(|record| record.name.eq_ignore_ascii_case(&s.name));
     if new {
         anyhow::ensure!(
             !exists && !bat_path(folder, &s).exists(),
@@ -306,6 +311,7 @@ pub fn save(
     } else {
         anyhow::ensure!(exists, "no custom strategy named {}", s.name);
     }
+    let (s, _) = validate(folder, &s)?;
     store.save(&s)?;
     write_bat(folder, &s)?;
     Ok(s)

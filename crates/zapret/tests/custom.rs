@@ -215,6 +215,57 @@ fn nothing_is_stored_when_winws_does_not_start() {
     assert!(!zapret_dir.path().join("general (HUB Test 1).bat").exists());
 }
 
+// In the next two tests the fake folder's winws.exe cannot start, so an error that is not a spawn
+// error proves `save` stopped before the dry run.
+#[test]
+fn a_corrupt_record_is_reported_before_winws_runs() {
+    let zapret_dir = common::fake_zapret();
+    let folder = common::folder(&zapret_dir);
+    let data = tempfile::tempdir().unwrap();
+    std::fs::write(data.path().join("bad.toml"), "name = ").unwrap();
+    let store = Store::new(data.path());
+    for new in [true, false] {
+        let err = zapret::custom::save(&folder, &store, &sample(), new).unwrap_err();
+        let err = format!("{err:#}");
+        assert!(err.contains("bad.toml"), "new = {new}: {err}");
+        assert!(
+            !err.contains("no custom strategy named"),
+            "new = {new}: {err}"
+        );
+    }
+    let written: Vec<_> = std::fs::read_dir(data.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(written, ["bad.toml"], "no record was written");
+    assert!(!zapret_dir.path().join("general (HUB Test 1).bat").exists());
+}
+
+#[test]
+fn a_name_in_use_or_missing_is_reported_before_winws_runs() {
+    let zapret_dir = common::fake_zapret();
+    let folder = common::folder(&zapret_dir);
+    let data = tempfile::tempdir().unwrap();
+    let store = Store::new(data.path().join("strategies"));
+    let attempt = |s: &CustomStrategy, new| {
+        let err = zapret::custom::save(&folder, &store, s, new).unwrap_err();
+        format!("{err:#}")
+    };
+    assert!(attempt(&sample(), false).contains("no custom strategy named Test 1"));
+
+    store.save(&sample()).unwrap();
+    let upper = CustomStrategy {
+        name: "TEST 1".into(),
+        ..sample()
+    };
+    assert!(attempt(&upper, true).contains("the name TEST 1 is taken"));
+
+    // A file without a record takes the name as well.
+    store.remove("Test 1").unwrap();
+    zapret::custom::write_bat(&folder, &sample()).unwrap();
+    assert!(attempt(&sample(), true).contains("the name Test 1 is taken"));
+}
+
 #[test]
 #[ignore = "needs E:\\Zapret and admin rights"]
 fn live_clone_of_alt11_passes_winws_dry_run() {
