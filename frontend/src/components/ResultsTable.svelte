@@ -1,0 +1,151 @@
+<script lang="ts">
+  import type { StrategyResult, Suite } from "$lib/ipc/bindings";
+  import { ms } from "$lib/format";
+  import { sortBy, type Direction } from "$lib/sort";
+  import { S } from "$lib/strings";
+  import TargetChecks from "./TargetChecks.svelte";
+
+  interface Props {
+    suite: Suite;
+    /** Best first for a finished run; in arrival order for a live one. */
+    results: StrategyResult[];
+    onApply?: (name: string) => void;
+    disabled?: boolean;
+  }
+
+  let { suite, results, onApply, disabled = false }: Props = $props();
+
+  type Key = "rank" | "name" | "errors" | "latency" | "ping" | "discord" | "youtube" | "dbd" | "blocked" | "fail" | "ok";
+  interface Item {
+    result: StrategyResult;
+    rank: number;
+  }
+
+  const STANDARD: Key[] = ["rank", "name", "errors", "latency", "ping", "discord", "youtube", "dbd"];
+  const DPI: Key[] = ["rank", "name", "blocked", "fail", "ok"];
+  // A strategy that did not start sorts after every one that did.
+  const WORST = Number.MAX_SAFE_INTEGER;
+
+  let key = $state<Key>("rank");
+  let dir = $state<Direction>("asc");
+  let open = $state<string | null>(null);
+
+  const columns = $derived(suite === "Standard" ? STANDARD : DPI);
+  const failed = (part: { ok: number; total: number }) => part.total - part.ok;
+
+  function value({ result, rank }: Item): number | string | null {
+    const s = result.score;
+    const broken = result.launch_error !== null;
+    switch (key) {
+      case "rank":
+        return rank;
+      case "name":
+        return result.name;
+      case "errors":
+        return broken ? WORST : failed(s);
+      case "latency":
+        return broken ? null : s.median_ms;
+      case "ping":
+        return s.ping_median_ms;
+      case "discord":
+        return s.discord.total > 0 ? failed(s.discord) : null;
+      case "youtube":
+        return s.youtube.total > 0 ? failed(s.youtube) : null;
+      case "dbd":
+        return s.dbd.median_ms;
+      case "blocked":
+        return broken ? WORST : s.likely_blocked;
+      case "fail":
+        return broken ? WORST : s.fail;
+      case "ok":
+        return broken ? null : -s.ok;
+    }
+  }
+
+  const items = $derived(sortBy(results.map((result, index) => ({ result, rank: index + 1 })), value, dir));
+
+  function sortOn(column: Key): void {
+    if (key === column) {
+      dir = dir === "asc" ? "desc" : "asc";
+    } else {
+      key = column;
+      dir = "asc";
+    }
+  }
+</script>
+
+<table>
+  <thead>
+    <tr>
+      {#each columns as column (column)}
+        <th>
+          <button class="head" onclick={() => sortOn(column)}>
+            {S.results[column]}{key === column ? (dir === "asc" ? " ↑" : " ↓") : ""}
+          </button>
+        </th>
+      {/each}
+      {#if onApply}<th></th>{/if}
+    </tr>
+  </thead>
+  <tbody>
+    {#each items as { result, rank } (result.name)}
+      <tr class:selected={open === result.name}>
+        {#each columns as column (column)}
+          <td>{@render cell(column, result, rank)}</td>
+        {/each}
+        {#if onApply}
+          <td><button {disabled} onclick={() => onApply?.(result.name)}>{S.common.apply}</button></td>
+        {/if}
+      </tr>
+      {#if open === result.name}
+        <tr>
+          <td colspan={columns.length + (onApply ? 1 : 0)}><TargetChecks {result} /></td>
+        </tr>
+      {/if}
+    {/each}
+  </tbody>
+</table>
+
+{#snippet cell(column: Key, result: StrategyResult, rank: number)}
+  {@const s = result.score}
+  {#if column === "rank"}
+    {rank}
+  {:else if column === "name"}
+    <button class="link" onclick={() => (open = open === result.name ? null : result.name)}>{result.name}</button>
+  {:else if result.launch_error !== null}
+    {#if column === "errors" || column === "blocked"}<span class="bad">{S.results.launch}</span>{/if}
+  {:else if column === "errors"}
+    <span class={failed(s) === 0 ? "ok" : "bad"} title={S.results.breakdown(s)}>{failed(s)} / {s.total}</span>
+  {:else if column === "latency"}
+    {ms(s.median_ms)}
+  {:else if column === "ping"}
+    {ms(s.ping_median_ms)} <span class="muted">{s.ping_ok}/{s.ping_total}</span>
+  {:else if column === "discord"}
+    {@render profile(s.discord.ok, s.discord.total)}
+  {:else if column === "youtube"}
+    {@render profile(s.youtube.ok, s.youtube.total)}
+  {:else if column === "dbd"}
+    {ms(s.dbd.median_ms)}
+    {#if failed(s.dbd) > 0}<span class="bad">−{failed(s.dbd)}</span>{/if}
+  {:else if column === "blocked"}
+    <span class={s.likely_blocked > 0 ? "bad" : "ok"}>{s.likely_blocked}</span>
+  {:else if column === "fail"}
+    {s.fail}
+  {:else}
+    {s.ok} / {s.total}
+  {/if}
+{/snippet}
+
+{#snippet profile(ok: number, total: number)}
+  {#if total > 0}<span class={ok === total ? "ok" : "warn"}>{ok}/{total}</span>{:else}—{/if}
+{/snippet}
+
+<style>
+  .head {
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font-weight: 600;
+  }
+</style>
