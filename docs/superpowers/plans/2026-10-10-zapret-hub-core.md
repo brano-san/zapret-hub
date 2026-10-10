@@ -16,7 +16,7 @@
 - Крейты не зависят от `tauri`: только `serde` и `specta`-derive для DTO. Логика в крейтах, в `src-tauri` — маршрутизация IPC, трей, окно, автозапуск.
 - Данные рядом с exe: `zapret-hub.toml`, `data/strategies/*.toml`, `data/tests/*.json`, `data/cache/dpi-suite.json`, `data/state/pending.json`, `data/logs/YYYY-MM-DD.log`.
 - Флаги, списки, служба и значение реестра `zapret-discord-youtube` — в тех же местах и форматах, что у `service.bat`. Оригинальные `service.bat` и `test zapret.ps1` продолжают работать.
-- Каждый внешний процесс запускается через `exec::run`: таймаут, без окна, в журнал пишутся команда, код выхода, полный stdout и stderr. Ничего не обрезается.
+- Каждый внешний процесс запускается через `exec::run`: таймаут, без окна, в журнал пишутся команда, код выхода, полный stdout и stderr. Ничего не обрезается. Исключение — долгоживущий winws: тестовый (им владеет `procs::Winws`, он же его останавливает и собирает вывод) и ручной winws, возвращаемый из снимка (`procs::spawn_detached`). Они запускаются напрямую, без окна, а командная строка и pid пишутся в журнал (задача 6).
 - Изменяющие операции идут строго по одной. Смена стратегии, тесты, ipset, игровой фильтр и удаление службы делают снимок до первого изменения и откатываются по нему при ошибке.
 - Рейтинг стандартного набора: (запуск не удался) → число не-OK проверок по возрастанию → медиана `time_total` успешных проверок → порядок меню `service.bat` (естественная сортировка имён). ICMP-пинг показывается отдельно и в сортировке не участвует. Отличие от спецификации 7.4 обосновано в задаче 11.
 - Интерфейс на русском, все строки фронтенда в `frontend/src/lib/strings.ts`, строки трея и уведомлений — в `src-tauri/src/texts.rs`. Тема светлая/тёмная по системе, в настройках можно зафиксировать.
@@ -26,6 +26,7 @@
 - Тесты, которым нужны права администратора, служба, WinDivert или папка `E:\Zapret`, помечены `#[ignore]` и запускаются вручную.
 - `npm run tauri dev` и готовый exe запускаются только из повышенного терминала: exe помечен `requireAdministrator`. Всё остальное — сборка, тесты, `cargo run -p zapret-hub --bin export-bindings`, `npm run check` — работает в обычном терминале: манифест с повышением получает только `zapret-hub.exe` (задача 13).
 - После каждого изменения команд или DTO: `cargo run -p zapret-hub --bin export-bindings` и коммит `frontend/src/lib/ipc/bindings.ts` вместе с изменением.
+- Код в плане не отформатирован rustfmt. Перед каждым коммитом с Rust-кодом — `cargo fmt --all` (настройки по умолчанию, без `rustfmt.toml`); `cargo clippy --workspace --all-targets -- -D warnings` тоже чистый на каждом коммите. Переформатирование — не отклонение от плана.
 
 ## На что смотреть при ревью
 
@@ -273,7 +274,7 @@ fn a_failed_check_carries_the_whole_output() {
     let out = exec::run(Command::new("cmd").args(["/c", "echo out& echo err 1>&2& exit 1"]), Duration::from_secs(10), None).unwrap();
     let err = out.check().unwrap_err().to_string();
     assert!(err.contains("exit code 1"), "{err}");
-    assert!(err.contains("out") && err.contains("err"), "{err}");
+    assert!(err.contains("--- stdout ---\nout") && err.contains("--- stderr ---\nerr"), "{err}");
 }
 
 #[test]
@@ -281,8 +282,15 @@ fn decode_reads_utf8_utf16_and_oem() {
     assert_eq!(exec::decode("ok ✓".as_bytes()), "ok ✓");
     assert_eq!(exec::decode(&[b'a', 0, b'b', 0, b'c', 0, b'd', 0]), "abcd");
     assert_eq!(exec::decode(&[0xFF, 0xFE, b'x', 0]), "x");
-    // "Привет" in cp866, as `sc` prints it on Russian Windows: one char per byte in any OEM page.
-    assert_eq!(exec::decode(&[0x8F, 0xE0, 0xA8, 0xA2, 0xA5, 0xE2]).chars().count(), 6);
+    // "Привет" in cp866, as `sc` prints it on Russian Windows: one char per byte in any single-byte
+    // OEM page. With Windows' "UTF-8 for worldwide language support" the OEM page is 65001 and
+    // these bytes are not text there.
+    let text = exec::decode(&[0x8F, 0xE0, 0xA8, 0xA2, 0xA5, 0xE2]);
+    if unsafe { windows::Win32::Globalization::GetOEMCP() } == 65001 {
+        assert!(!text.is_empty());
+    } else {
+        assert_eq!(text.chars().count(), 6);
+    }
 }
 
 #[test]
@@ -441,7 +449,7 @@ pub fn decode(bytes: &[u8]) -> String {
         return utf16le(rest);
     }
     let odd_zeros = bytes.iter().skip(1).step_by(2).filter(|b| **b == 0).count();
-    if bytes.len() >= 4 && bytes.len() % 2 == 0 && odd_zeros * 4 > bytes.len() {
+    if bytes.len() >= 4 && bytes.len().is_multiple_of(2) && odd_zeros * 4 > bytes.len() {
         return utf16le(bytes);
     }
     match std::str::from_utf8(bytes) {
@@ -451,10 +459,7 @@ pub fn decode(bytes: &[u8]) -> String {
 }
 
 fn utf16le(bytes: &[u8]) -> String {
-    let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-        .collect();
+    let units: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
     String::from_utf16_lossy(&units)
 }
 
@@ -1627,6 +1632,15 @@ fn disabled_game_filter_puts_port_12() {
 }
 
 #[test]
+fn a_caret_before_an_exclamation_mark_is_an_escape() {
+    // general (FAKE TLS AUTO).bat: service.bat passes `!` to winws, not `^!`.
+    let bat = "start \"z\" /min \"%BIN%winws.exe\" --filter-tcp=443 --dpi-desync-fake-tls=^! ^\r\n--new\r\n";
+    let parsed = parse(bat, "C:\\z\\", &GameFilterVars::disabled()).unwrap();
+    assert!(parsed.final_args.contains("--dpi-desync-fake-tls !"), "{}", parsed.final_args);
+    assert!(!parsed.final_args.contains('^'), "{}", parsed.final_args);
+}
+
+#[test]
 fn a_file_without_winws_is_not_a_strategy() {
     assert!(parse("@echo off\r\necho hi\r\n", "C:\\z\\", &GameFilterVars::disabled()).is_err());
 }
@@ -1703,7 +1717,8 @@ pub fn parse(bat: &str, root_dp0: &str, vars: &GameFilterVars) -> anyhow::Result
         if line.is_empty() || line.starts_with(';') {
             continue;
         }
-        let mut line = expand(line, root_dp0, &bin, &lists, vars);
+        let line = if line.contains('!') { unescape_carets(line) } else { line.to_owned() };
+        let mut line = expand(&line, root_dp0, &bin, &lists, vars);
         if !capture && line.to_ascii_lowercase().contains("winws.exe") {
             capture = true;
         }
@@ -1761,6 +1776,21 @@ pub fn parse(bat: &str, root_dp0: &str, vars: &GameFilterVars) -> anyhow::Result
     }
     anyhow::ensure!(capture, "no winws.exe command in the strategy file");
     Ok(ParsedArgs { final_args: args })
+}
+
+/// `set "line=%%a"` under delayed expansion: in a line that has a `!`, cmd reads every `^` as an
+/// escape and keeps the character after it (`--dpi-desync-fake-tls=^!` → `=!`); a trailing `^` goes.
+fn unescape_carets(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '^' {
+            out.extend(chars.next());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Byte offset right after the first case-insensitive occurrence of an ASCII `needle`.
@@ -1841,7 +1871,7 @@ fn quote_arg(arg: &str, root_dp0: &str) -> String {
 - [ ] **Шаг 4: Тесты разбора проходят**
 
 Run: `cargo test -p zapret --test batparse`
-Expected: PASS, 4 теста.
+Expected: PASS, 5 тестов.
 
 - [ ] **Шаг 5: Генератор эталонов**
 
@@ -1849,8 +1879,8 @@ Expected: PASS, 4 теста.
 
 ```bat
 @echo off
-:: Regenerates crates\zapret\tests\fixtures from a Flowseal folder: a copy of every strategy
-:: .bat and the "Final args" line that service.bat :service_install builds for it. The :parse
+:: Regenerates crates\zapret\tests\fixtures from a Flowseal folder: a copy of every general*.bat
+:: strategy and the "Final args" line that service.bat :service_install builds for it. The :parse
 :: block is copied from service.bat, with %~dp0 replaced by %ROOT%.
 :: Usage: tools\gen-bat-fixtures.cmd E:\Zapret
 setlocal EnableDelayedExpansion
@@ -1871,12 +1901,10 @@ set "GameFilter=1024-65535"
 set "GameFilterTCP=1024-65535"
 set "GameFilterUDP=1024-65535"
 
-for %%F in ("%ROOT%*.bat") do (
-    set "fname=%%~nxF"
-    if /i not "!fname:~0,7!"=="service" (
-        copy /y "%%~fF" "%OUT%" > nul
-        call :parse "%%~fF" > "%OUT%%%~nF.args"
-    )
+:: Flowseal's strategies only: other .bat files in the folder may be the user's own scripts.
+for %%F in ("%ROOT%general*.bat") do (
+    copy /y "%%~fF" "%OUT%" > nul
+    call :parse "%%~fF" > "%OUT%%%~nF.args"
 )
 echo Fixtures written to %OUT%
 exit /b 0
@@ -2825,16 +2853,27 @@ fn finds_a_process_with_its_arguments() {
     assert_eq!(ours.args, ["-n", "20", "127.0.0.1"]);
     assert!(ours.exe.as_ref().is_some_and(|e| e.to_string_lossy().to_lowercase().ends_with("ping.exe")));
     child.kill().unwrap();
+    child.wait().unwrap();
 }
 
 #[test]
-#[ignore = "needs admin rights and E:\\Zapret"]
+#[ignore = "needs admin rights and the zapret service installed from E:\\Zapret"]
 fn live_status_of_the_zapret_service() {
-    eprintln!("zapret: {:?}", zapret::service::status(zapret::service::SERVICE));
-    eprintln!("config: {:?}", zapret::service::config(zapret::service::SERVICE));
-    eprintln!("strategy: {:?}", zapret::service::strategy());
-    eprintln!("timestamps: {:?}", zapret::service::tcp_timestamps());
-    eprintln!("candidates: {:?}", zapret::folder::candidates());
+    let status = zapret::service::status(zapret::service::SERVICE);
+    let config = zapret::service::config(zapret::service::SERVICE);
+    let strategy = zapret::service::strategy();
+    let timestamps = zapret::service::tcp_timestamps();
+    let candidates = zapret::folder::candidates();
+    eprintln!("zapret: {status:?}\nconfig: {config:?}\nstrategy: {strategy:?}\ntimestamps: {timestamps:?}\ncandidates: {candidates:?}");
+    assert!(status.is_some(), "the zapret service is not installed");
+    let config = config.expect("the service has a configuration");
+    assert!(config.image_path.to_lowercase().contains("winws.exe"), "{}", config.image_path);
+    assert!(strategy.is_some(), "service.bat records the installed strategy in the registry");
+    assert!(timestamps.is_some(), "netsh reports the TCP timestamps setting");
+    assert!(
+        candidates.iter().any(|root| root.to_string_lossy().trim_end_matches('\\').eq_ignore_ascii_case(r"E:\Zapret")),
+        "{candidates:?}"
+    );
 }
 ```
 
@@ -3334,12 +3373,22 @@ Run: `cargo test -p zapret --test service`
 Expected: PASS, 3 теста (живой тест пропущен).
 
 Run (из повышенного терминала): `cargo test -p zapret --test service -- --ignored --nocapture`
-Expected: печатает состояние службы `zapret`, её `binPath`, имя стратегии, `Some(true)` для timestamps и `E:\Zapret` среди кандидатов.
+Expected: PASS; печатает состояние службы `zapret`, её `binPath`, имя стратегии, значение TCP timestamps и `E:\Zapret` среди кандидатов.
 
-- [ ] **Шаг 6: Коммит**
+- [ ] **Шаг 6: Правка спецификации**
+
+В `docs/superpowers/specs/2026-10-10-zapret-hub-core-design.md`, раздел 10, после пункта «У каждого внешнего процесса таймаут; зависший процесс завершается, это записывается как ошибка.» добавить пункт:
+
+```
+- Исключение — долгоживущий winws: тестовый (его запускает, останавливает и читает `procs::Winws`)
+  и ручной winws, возвращаемый из снимка. Таймаута у них нет по смыслу; командная строка и pid
+  пишутся в журнал при запуске.
+```
+
+- [ ] **Шаг 7: Коммит**
 
 ```bash
-git add crates/zapret
+git add crates/zapret docs/superpowers/specs/2026-10-10-zapret-hub-core-design.md
 git commit -m "feat(zapret): manage the zapret service and winws processes"
 ```
 
@@ -3665,9 +3714,18 @@ fn discord_cache_is_cleared_for_installed_builds_only() {
 #[ignore = "reads this machine's services, registry and E:\\Zapret"]
 fn live_checks_of_this_machine() {
     let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
-    for check in zapret::checks::run_all(&folder) {
+    let checks = zapret::checks::run_all(&folder);
+    for check in &checks {
         eprintln!("{check:?}");
     }
+    // Every diagnostic of service.bat, once each.
+    let ids: Vec<&zapret::checks::CheckId> = checks.iter().map(|check| &check.id).collect();
+    assert_eq!(ids.len(), 16, "{ids:?}");
+    for (i, id) in ids.iter().enumerate() {
+        assert!(!ids[i + 1..].contains(id), "{id:?} twice");
+    }
+    // zapret works on this machine, so the filtering engine runs.
+    assert!(checks.iter().any(|c| c.id == zapret::checks::CheckId::Bfe && c.level == zapret::checks::CheckLevel::Ok));
 }
 ```
 
@@ -3958,7 +4016,7 @@ Run: `cargo test -p zapret --test checks`
 Expected: PASS, 3 теста.
 
 Run: `cargo test -p zapret --test checks -- --ignored --nocapture`
-Expected: печатает 16 проверок; на машине автора `Bfe` — `Ok`, `Proxy` — по состоянию системного прокси.
+Expected: PASS; печатает 16 проверок, каждую по разу; `Bfe` — `Ok`, `Proxy` — по состоянию системного прокси.
 
 - [ ] **Шаг 5: Коммит**
 
@@ -4081,7 +4139,7 @@ fn store_keeps_records_and_files_in_step() {
     let s = sample();
     store.save(&s).unwrap();
     zapret::custom::write_bat(&folder, &s).unwrap();
-    assert_eq!(store.list().unwrap(), [s.clone()]);
+    assert_eq!(store.list().unwrap(), std::slice::from_ref(&s));
     assert_eq!(store.get("TEST 1").unwrap(), s);
 
     let bat = zapret_dir.path().join("general (HUB Test 1).bat");
@@ -4439,6 +4497,8 @@ Expected: PASS: `winws --dry-run` принимает клон ALT11, аргум�
 
 В разделе 14 замените пункт про `winws --dry-run` на: «**`winws --dry-run`.** Проверено: `winws.exe` из Flowseal 1.10.3 знает `--dry-run` (строка есть в его справке). Запасной путь (6) остаётся для сборок без него.».
 
+В разделе 6, пункт «Модель», замените «Блок хранится как список аргументов с подстановками (`%BIN%`, `%LISTS%`, `%GameFilter…%`).» на «Блок хранится строкой аргументов с подстановками (`%BIN%`, `%LISTS%`, `%GameFilter…%`), как в `.bat`: её показывает и правит редактор, а разбирает тот же парсер (5.3).».
+
 - [ ] **Шаг 6: Коммит**
 
 ```bash
@@ -4535,10 +4595,20 @@ fn restore_files_returns_the_ipset_after_a_killed_run() {
 }
 
 #[test]
-#[ignore = "needs admin rights and E:\\Zapret"]
+#[ignore = "needs admin rights and the zapret service installed from E:\\Zapret"]
 fn live_snapshot_of_this_machine() {
     let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
-    eprintln!("{:#?}", Snapshot::take(&folder, "probe"));
+    let snap = Snapshot::take(&folder, "probe");
+    eprintln!("{snap:#?}");
+    assert_eq!(snap.operation, "probe");
+    let service = snap.service.as_ref().expect("the zapret service is installed");
+    assert!(service.image_path.to_lowercase().contains("winws.exe"), "{}", service.image_path);
+    assert!(snap.strategy.is_some(), "service.bat records the installed strategy in the registry");
+    // What a crash leaves behind reads back as it was taken.
+    let data = tempfile::tempdir().unwrap();
+    let path = pending_path(data.path());
+    snap.save(&path).unwrap();
+    assert_eq!(Snapshot::load(&path).unwrap(), Some(snap));
 }
 ```
 
@@ -4700,7 +4770,7 @@ Run: `cargo test -p zapret`
 Expected: PASS, все тесты крейта.
 
 Run (из повышенного терминала): `cargo test -p zapret --test snapshot -- --ignored --nocapture`
-Expected: печатает снимок: служба `zapret` с её `binPath`, стратегия, пустой `manual_winws`, режим ipset.
+Expected: PASS; печатает снимок: служба `zapret` с её `binPath`, стратегия, пустой `manual_winws`, режим ipset.
 
 - [ ] **Шаг 5: Коммит**
 
@@ -6112,7 +6182,7 @@ Write-Output "written $out"
 ```
 
 Run: `powershell -NoProfile -ExecutionPolicy Bypass -File tools/make-icon.ps1`
-Expected: `written ...\src-tauri\icons\icon.ico`, файл около 6–10 КБ. Без него `tauri-build` останавливает сборку («icons/icon.ico not found»).
+Expected: `written ...\src-tauri\icons\icon.ico`, файл около 4 КБ. Без него `tauri-build` останавливает сборку («icons/icon.ico not found»).
 
 - [ ] **Шаг 3: Манифест крейта, build.rs, конфигурация Tauri**
 
@@ -6734,7 +6804,7 @@ crates/
 вместе со своими подпроектами: пустой крейт ничего не проверяет, а добавить крейт позже ничего не ломает.
 ```
 
-В разделе 13 заменить обе фразы `В подпроекте 1 — пустой крейт и скрытая вкладка.` на `В подпроекте 1 крейта и вкладки нет.`
+В разделе 13 заменить обе фразы «В подпроекте 1 — пустой крейт и скрытая вкладка.» на «В подпроекте 1 крейта и вкладки нет.». Первая стоит в пункте `diag` на одной строке. Вторая, в пункте `router`, разбита переносом: строка кончается на «В подпроекте 1 —», следующая начинается с «пустой крейт и скрытая вкладка.»; после замены перенесите строки так, чтобы они не превышали ширину соседних.
 
 - [ ] **Шаг 8: Коммит**
 
@@ -6772,7 +6842,7 @@ git commit -m "feat(app): add the Tauri shell, the window and the IPC bindings"
 
 - [ ] **Шаг 1: Зависимости**
 
-В `src-tauri/Cargo.toml` секции `[dependencies]` и `[dev-dependencies]` заменить на:
+В `src-tauri/Cargo.toml` секцию `[dependencies]` заменить и добавить `[dev-dependencies]` (в задаче 13 её не было):
 
 ```toml
 [dependencies]
@@ -9390,7 +9460,8 @@ export async function change<T>(title: string, run: () => Promise<Answer<T>>): P
 
 export async function loadSettings(): Promise<void> {
   app.settings = await commands.getSettings();
-  applyTheme(app.settings.theme);
+  // `#[serde(default)]` makes every Settings field optional in the generated types.
+  applyTheme(app.settings.theme ?? "system");
 }
 
 export async function refreshOverview(): Promise<void> {
