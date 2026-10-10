@@ -1,0 +1,25 @@
+[package]
+name = "zapret"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Flowseal zapret folder model: strategies, service, flags, lists, updates, system checks."
+
+[dependencies]
+exec.workspace = true
+probe.workspace = true
+anyhow.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+specta.workspace = true
+sysinfo.workspace = true
+toml.workspace = true
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Services"] }
+windows-registry.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
