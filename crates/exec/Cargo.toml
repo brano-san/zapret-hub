@@ -1,0 +1,13 @@
+[package]
+name = "exec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Runs external programs for Zapret Hub: no console window, timeout, cancel, journal."
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_SystemInformation"] }
