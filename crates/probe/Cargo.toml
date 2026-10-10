@@ -1,0 +1,20 @@
+[package]
+name = "probe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Network checks for Zapret Hub: curl.exe requests, ICMP ping, SOCKS5."
+
+[dependencies]
+exec.workspace = true
+anyhow.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+specta.workspace = true
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper"] }
+
+[dev-dependencies]
+tempfile.workspace = true
