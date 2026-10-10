@@ -1,7 +1,7 @@
 use std::process::Command;
 use std::time::Duration;
 
-use zapret::service::{SvcState, parse_timestamps, state};
+use zapret::service::{SvcState, config, parse_timestamps, state};
 
 #[test]
 fn reads_the_rfc1323_line_in_any_language() {
@@ -17,6 +17,19 @@ fn reads_service_states_through_the_scm() {
     assert_eq!(state("BFE"), SvcState::Running);
     assert_eq!(state("zapret-hub-no-such-service"), SvcState::NotInstalled);
     assert!(!zapret::service::active_services().is_empty());
+}
+
+#[test]
+fn reads_a_service_config_from_the_registry() {
+    // BFE's ImagePath is a REG_EXPAND_SZ value, and BFE starts automatically.
+    let bfe = config("BFE").expect("BFE has an ImagePath in the registry");
+    assert!(
+        bfe.image_path.to_lowercase().contains("svchost.exe"),
+        "{}",
+        bfe.image_path
+    );
+    assert!(bfe.auto_start);
+    assert_eq!(config("zapret-hub-no-such-service"), None);
 }
 
 #[test]

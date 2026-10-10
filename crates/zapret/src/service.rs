@@ -7,9 +7,8 @@ use std::time::{Duration, Instant};
 use probe::curl::{CheckKind, CheckStatus};
 use windows::Win32::System::Services::{
     CloseServiceHandle, ENUM_SERVICE_STATUS_PROCESSW, EnumServicesStatusExW, OpenSCManagerW,
-    OpenServiceW, QUERY_SERVICE_CONFIGW, QueryServiceConfigW, QueryServiceStatusEx,
-    SC_ENUM_PROCESS_INFO, SC_HANDLE, SC_MANAGER_CONNECT, SC_MANAGER_ENUMERATE_SERVICE,
-    SC_STATUS_PROCESS_INFO, SERVICE_ACTIVE, SERVICE_AUTO_START, SERVICE_QUERY_CONFIG,
+    OpenServiceW, QueryServiceStatusEx, SC_ENUM_PROCESS_INFO, SC_HANDLE, SC_MANAGER_CONNECT,
+    SC_MANAGER_ENUMERATE_SERVICE, SC_STATUS_PROCESS_INFO, SERVICE_ACTIVE, SERVICE_AUTO_START,
     SERVICE_QUERY_STATUS, SERVICE_RUNNING, SERVICE_START_PENDING, SERVICE_STATUS_PROCESS,
     SERVICE_STOP_PENDING, SERVICE_STOPPED, SERVICE_WIN32,
 };
@@ -103,22 +102,20 @@ pub struct SvcConfig {
     pub auto_start: bool,
 }
 
+/// `ImagePath` and `Start` from the service's registry key (5.1): what `sc qc` shows. Not from
+/// `QueryServiceConfigW`: its RPC reply is capped at 8 KB, and the `ImagePath` of `zapret`
+/// carries a strategy's whole argument list, which can pass 4000 characters. `None` when the key
+/// or its `ImagePath` is missing.
 pub fn config(name: &str) -> Option<SvcConfig> {
-    let service = open(name, SERVICE_QUERY_CONFIG)?;
-    let mut needed = 0u32;
-    // SAFETY: a size query with no buffer.
-    let _ = unsafe { QueryServiceConfigW(service.0, None, 0, &mut needed) };
-    let mut buf = vec![0u64; (needed as usize).div_ceil(8).max(1)];
-    let config = buf.as_mut_ptr().cast::<QUERY_SERVICE_CONFIGW>();
-    // SAFETY: `buf` is 8-byte aligned and at least `needed` bytes long.
-    unsafe { QueryServiceConfigW(service.0, Some(config), needed, &mut needed) }.ok()?;
-    // SAFETY: filled by the call above; its strings point into `buf`, which is still alive.
-    unsafe {
-        Some(SvcConfig {
-            image_path: (*config).lpBinaryPathName.to_string().ok()?,
-            auto_start: (*config).dwStartType == SERVICE_AUTO_START,
-        })
-    }
+    let key = windows_registry::LOCAL_MACHINE
+        .open(format!(r"SYSTEM\CurrentControlSet\Services\{name}"))
+        .ok()?;
+    Some(SvcConfig {
+        image_path: key.get_string("ImagePath").ok()?,
+        auto_start: key
+            .get_u32("Start")
+            .is_ok_and(|start| start == SERVICE_AUTO_START.0),
+    })
 }
 
 /// Name and display name of every running Win32 service: what a bare `sc query` lists.
@@ -268,12 +265,19 @@ pub fn stop_and_delete(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `:service_remove`: zapret, every winws, WinDivert, WinDivert14.
+/// `:service_remove`: zapret, every winws, WinDivert, WinDivert14. Only the `zapret` service
+/// has to go. As in `service.bat` the rest is best effort: winws may end by itself, and a
+/// WinDivert driver that another program holds stays; their errors go to the journal as warnings.
 pub fn remove() -> anyhow::Result<()> {
     stop_and_delete(SERVICE)?;
-    crate::procs::kill_all("winws.exe")?;
-    stop_and_delete("WinDivert")?;
-    stop_and_delete("WinDivert14")?;
+    if let Err(err) = crate::procs::kill_all("winws.exe") {
+        log::warn!(target: "exec", "winws.exe was not ended: {err:#}");
+    }
+    for driver in ["WinDivert", "WinDivert14"] {
+        if let Err(err) = stop_and_delete(driver) {
+            log::warn!(target: "exec", "{driver} was left in place: {err:#}");
+        }
+    }
     Ok(())
 }
 
