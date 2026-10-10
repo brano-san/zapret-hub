@@ -1,0 +1,121 @@
+use tester::history;
+use tester::model::{Score, StrategyResult, Suite, TestRun};
+
+fn result(name: &str, sha: &str) -> StrategyResult {
+    StrategyResult {
+        name: name.into(),
+        args_sha256: sha.into(),
+        launch_error: None,
+        targets: Vec::new(),
+        dpi: Vec::new(),
+        score: Score::default(),
+    }
+}
+
+fn run(id: &str, suite: Suite, canceled: bool, strategies: Vec<StrategyResult>) -> TestRun {
+    TestRun {
+        id: id.into(),
+        suite,
+        flowseal_version: None,
+        canceled,
+        restore_error: None,
+        strategies,
+    }
+}
+
+#[test]
+fn runs_are_saved_listed_and_loaded() {
+    let dir = tempfile::tempdir().unwrap();
+    history::save(
+        dir.path(),
+        &run(
+            "2026-10-09_10-00-00",
+            Suite::Standard,
+            false,
+            vec![result("general (ALT)", "a")],
+        ),
+    )
+    .unwrap();
+    history::save(
+        dir.path(),
+        &run(
+            "2026-10-10_10-00-00",
+            Suite::Dpi,
+            false,
+            vec![result("general (ALT2)", "b")],
+        ),
+    )
+    .unwrap();
+    let ids: Vec<String> = history::summaries(dir.path())
+        .unwrap()
+        .into_iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(ids, ["2026-10-10_10-00-00", "2026-10-09_10-00-00"]);
+    assert_eq!(
+        history::load(dir.path(), "2026-10-09_10-00-00")
+            .unwrap()
+            .strategies[0]
+            .name,
+        "general (ALT)"
+    );
+    assert!(history::load(dir.path(), r"..\..\secret").is_err());
+}
+
+#[test]
+fn latest_result_per_strategy_and_the_latest_full_ranking() {
+    let dir = tempfile::tempdir().unwrap();
+    history::save(
+        dir.path(),
+        &run(
+            "2026-10-08_10-00-00",
+            Suite::Standard,
+            false,
+            vec![
+                result("general (ALT)", "old"),
+                result("general (ALT2)", "x"),
+            ],
+        ),
+    )
+    .unwrap();
+    history::save(
+        dir.path(),
+        &run(
+            "2026-10-09_10-00-00",
+            Suite::Standard,
+            true,
+            vec![result("general (ALT)", "new")],
+        ),
+    )
+    .unwrap();
+    history::save(
+        dir.path(),
+        &run(
+            "2026-10-10_10-00-00",
+            Suite::Dpi,
+            false,
+            vec![result("general (ALT3)", "d")],
+        ),
+    )
+    .unwrap();
+    let latest = history::latest_results(dir.path()).unwrap();
+    assert_eq!(latest["general (alt)"].result.args_sha256, "new");
+    assert_eq!(latest["general (alt2)"].run_id, "2026-10-08_10-00-00");
+    assert_eq!(latest["general (alt3)"].suite, Suite::Dpi);
+    assert_eq!(
+        history::latest_ranking(dir.path()).unwrap().unwrap().id,
+        "2026-10-08_10-00-00"
+    );
+}
+
+#[test]
+fn a_damaged_run_file_is_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("2026-10-10_00-00-00.json"), "{").unwrap();
+    history::save(
+        dir.path(),
+        &run("2026-10-09_10-00-00", Suite::Standard, false, Vec::new()),
+    )
+    .unwrap();
+    assert_eq!(history::summaries(dir.path()).unwrap().len(), 1);
+}
