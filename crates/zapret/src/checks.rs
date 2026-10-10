@@ -57,7 +57,6 @@ pub fn run_all(folder: &Folder) -> Vec<SystemCheck> {
     let find = |words: &[&str]| matching_services(&services, words).join(", ");
     let root = folder.root_dp0();
     let proxy = proxy_server();
-    let hosts = crate::hosts::read().unwrap_or_default().to_lowercase();
     let windivert = service::state("WinDivert");
     let orphan = matches!(windivert, SvcState::Running | SvcState::StopPending)
         && !crate::procs::is_running("winws.exe");
@@ -137,7 +136,7 @@ pub fn run_all(folder: &Folder) -> Vec<SystemCheck> {
         ),
         check(
             CheckId::HostsYoutube,
-            hosts.contains("youtube.com") || hosts.contains("youtu.be"),
+            youtube_in_hosts_file(),
             Warn,
             String::new(),
             None,
@@ -187,28 +186,47 @@ fn found(id: CheckId, names: String, level: CheckLevel) -> SystemCheck {
     check(id, !names.is_empty(), level, names, None)
 }
 
-/// The button next to a failed check: what `service.bat` does for it.
+/// The button next to a failed check: what `service.bat` does for it. As there, a delete that
+/// fails is reported and the ones after it are still tried.
 pub fn fix(action: CheckAction) -> anyhow::Result<()> {
     match action {
         CheckAction::EnableTcpTimestamps => service::enable_tcp_timestamps(),
-        CheckAction::RemoveWinDivert => service::stop_and_delete("WinDivert").or_else(|first| {
-            // A GoodbyeDPI service keeps WinDivert loaded: it goes, then WinDivert once more.
-            if service::state("GoodbyeDPI") == SvcState::NotInstalled {
-                return Err(first);
-            }
-            service::stop_and_delete("GoodbyeDPI")?;
-            service::stop_and_delete("WinDivert")
-        }),
-        CheckAction::RemoveConflicts => {
-            for name in CONFLICTING {
-                service::stop_and_delete(name)?;
-            }
-            // As in `service.bat`: a running winws keeps WinDivert until it stops.
-            service::request_delete("WinDivert");
-            service::request_delete("WinDivert14");
-            Ok(())
+        CheckAction::RemoveWinDivert => remove_windivert(),
+        CheckAction::RemoveConflicts => remove_conflicts(),
+    }
+}
+
+fn remove_windivert() -> anyhow::Result<()> {
+    let Err(first) = service::stop_and_delete("WinDivert") else {
+        return Ok(());
+    };
+    // A GoodbyeDPI service keeps WinDivert loaded: it goes, then WinDivert once more, whether or
+    // not GoodbyeDPI went.
+    if service::state("GoodbyeDPI") == SvcState::NotInstalled {
+        return Err(first);
+    }
+    let goodbye = service::stop_and_delete("GoodbyeDPI").err();
+    if let Some(err) = &goodbye {
+        log::warn!(target: "exec", "GoodbyeDPI was left in place: {err:#}");
+    }
+    service::stop_and_delete("WinDivert").map_err(|err| match goodbye {
+        Some(goodbye) => anyhow::anyhow!("{err:#}; GoodbyeDPI: {goodbye:#}"),
+        None => err,
+    })
+}
+
+fn remove_conflicts() -> anyhow::Result<()> {
+    let mut failed = Vec::new();
+    for name in CONFLICTING {
+        if let Err(err) = service::stop_and_delete(name) {
+            failed.push(format!("{name}: {err:#}"));
         }
     }
+    // As in `service.bat`: a running winws keeps WinDivert until it stops.
+    service::request_delete("WinDivert");
+    service::request_delete("WinDivert14");
+    anyhow::ensure!(failed.is_empty(), "{}", failed.join("; "));
+    Ok(())
 }
 
 /// Names of the services whose name or display name holds every word: `sc query | findstr`
@@ -241,6 +259,27 @@ pub fn in_onedrive(root_dp0: &str, onedrive: Option<&str>) -> bool {
                 .to_lowercase()
                 .contains(&format!("{dir}\\").to_lowercase())
     })
+}
+
+/// `findstr /I "youtube.com"` and `"youtu.be"` over the raw bytes of a hosts file: the names are
+/// ASCII, so they are found whatever encoding the rest of the file is in.
+pub fn hosts_mentions_youtube(hosts: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(hosts).to_ascii_lowercase();
+    text.contains("youtube.com") || text.contains("youtu.be")
+}
+
+/// As `service.bat`: `if exist` first, so a missing file has no entries; a file that cannot be
+/// read has none either (`findstr` fails and the check stays quiet), but the journal says why.
+fn youtube_in_hosts_file() -> bool {
+    let path = crate::hosts::path();
+    match std::fs::read(&path) {
+        Ok(bytes) => hosts_mentions_youtube(&bytes),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+        Err(err) => {
+            log::warn!("hosts file {} was not read: {err}", path.display());
+            false
+        }
+    }
 }
 
 fn has_driver(folder: &Folder) -> bool {

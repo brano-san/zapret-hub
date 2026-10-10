@@ -1,4 +1,4 @@
-use zapret::checks::{has_cyrillic, in_onedrive, matching_services};
+use zapret::checks::{has_cyrillic, hosts_mentions_youtube, in_onedrive, matching_services};
 use zapret::discord_cache::{CacheOutcome, clear_in};
 
 #[test]
@@ -43,6 +43,19 @@ fn cyrillic_and_onedrive_paths_are_spotted() {
         Some(r"C:\Users\me\OneDrive")
     ));
     assert!(!in_onedrive(r"E:\Zapret\", None));
+}
+
+#[test]
+fn youtube_is_found_in_a_hosts_file_that_is_not_utf8() {
+    // `findstr` searches raw bytes: a CP1251 comment ("Привет") must not hide an entry.
+    let comment: &[u8] = b"# \xcf\xf0\xe8\xe2\xe5\xf2\r\n";
+    assert!(String::from_utf8(comment.to_vec()).is_err());
+    let upper_case = [comment, b"127.0.0.1 YouTube.com\r\n"].concat();
+    let short_link = [comment, b"0.0.0.0 youtu.be\r\n"].concat();
+    let neither = [comment, b"127.0.0.1 localhost\r\n"].concat();
+    assert!(hosts_mentions_youtube(&upper_case));
+    assert!(hosts_mentions_youtube(&short_link));
+    assert!(!hosts_mentions_youtube(&neither));
 }
 
 #[test]
