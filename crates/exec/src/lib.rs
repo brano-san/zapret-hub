@@ -71,7 +71,8 @@ impl Output {
 }
 
 /// Runs `cmd` to the end, or kills it and everything it started after `timeout` or once `cancel`
-/// turns true.
+/// turns true. When `run` returns it has ended every process the program started, so long-lived
+/// processes must not be started through it.
 pub fn run(
     cmd: &mut Command,
     timeout: Duration,
@@ -113,16 +114,16 @@ pub fn run(
         canceled = cancel.is_some_and(|flag| flag.load(Ordering::Relaxed));
         timed_out = started.elapsed() >= timeout;
         if canceled || timed_out {
-            // A grandchild that keeps the pipes open would hold `join` below, so the tree goes first.
-            if let Some(job) = &job {
-                job.terminate();
-            }
             let _ = child.kill();
             let _ = child.wait();
             break None;
         }
         std::thread::sleep(Duration::from_millis(20));
     };
+    // Whatever the program started and left running keeps the pipes open, and `join` below waiting.
+    if let Some(job) = &job {
+        job.terminate();
+    }
     let output = Output {
         command,
         code: status.and_then(|status| status.code()),

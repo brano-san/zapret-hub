@@ -61,6 +61,26 @@ fn a_grandchild_holding_the_pipes_does_not_outlive_the_timeout() {
 }
 
 #[test]
+fn a_process_left_behind_by_a_finished_program_does_not_hold_run() {
+    // `cmd` exits at once and leaves `ping` running with the pipes open (about 4 s here): `run`
+    // ends it and returns, and the exit code is still the program's own.
+    let started = Instant::now();
+    let out = exec::run(
+        Command::new("cmd").args(["/c", "start /b ping -n 5 127.0.0.1"]),
+        Duration::from_secs(10),
+        None,
+    )
+    .unwrap();
+    assert!(!out.timed_out);
+    assert_eq!(out.code, Some(0));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
 fn a_failed_check_carries_the_whole_output() {
     let out = exec::run(
         Command::new("cmd").args(["/c", "echo out& echo err 1>&2& exit 1"]),
