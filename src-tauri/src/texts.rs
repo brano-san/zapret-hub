@@ -3,7 +3,9 @@
 
 use std::path::Path;
 
+use probe::curl::CheckStatus;
 use tester::model::{Suite, TestRun};
+use zapret::service::{QuickCheck, SvcState};
 
 pub const APP: &str = "Zapret Hub";
 
@@ -90,6 +92,62 @@ pub fn tests_done(run: &TestRun) -> String {
         ),
     };
     format!("Лучшая: {} — {tail}", best.name)
+}
+
+pub const QUICK_OK: &str = "Быстрая проверка пройдена";
+pub const QUICK_FAILED: &str = "Быстрая проверка не прошла";
+
+pub fn quick_result(check: &QuickCheck) -> String {
+    if check.service != SvcState::Running {
+        return "Служба zapret не запущена".to_owned();
+    }
+    if !check.winws_running {
+        return "Служба запущена, но winws.exe не работает".to_owned();
+    }
+    check
+        .checks
+        .iter()
+        .map(|item| match (item.status, item.time_ms) {
+            (CheckStatus::Ok, Some(ms)) => format!("{} — {ms} мс", item.name),
+            (CheckStatus::Ok, None) => format!("{} — OK", item.name),
+            (CheckStatus::Ssl, _) => format!("{} — ошибка TLS", item.name),
+            (CheckStatus::Unsup, _) => format!("{} — сброс соединения", item.name),
+            (CheckStatus::Error, _) => format!("{} — нет ответа", item.name),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub const UPDATE: &str = "Вышла новая версия Flowseal";
+
+pub fn update(version: &str) -> String {
+    format!("Версия {version}. Ссылка на релиз — на вкладке «Обзор».")
+}
+
+pub const OPEN: &str = "Открыть";
+pub const SWITCH_TO: &str = "Переключить на";
+pub const NO_RANKING: &str = "Нет результатов тестов";
+pub const RESTART: &str = "Перезапустить zapret";
+pub const QUICK_CHECK: &str = "Быстрая проверка";
+pub const QUIT: &str = "Выход";
+pub const TRAY_FAILED: &str = "Действие из трея не выполнено";
+
+pub fn strategy(name: Option<&str>) -> String {
+    format!("Стратегия: {}", name.unwrap_or("не выбрана"))
+}
+
+/// Windows cuts a tray tooltip at 127 characters: two short lines.
+pub fn tooltip(light: crate::tray::Light, strategy: Option<&str>) -> String {
+    use crate::tray::Light;
+    let status = match light {
+        Light::Green => "работает",
+        Light::Yellow => "работает, проверка не пройдена",
+        Light::Gray => "служба не запущена",
+    };
+    match strategy {
+        Some(name) if light != Light::Gray => format!("{APP}: {status}\n{name}"),
+        _ => format!("{APP}: {status}"),
+    }
 }
 
 #[cfg(test)]

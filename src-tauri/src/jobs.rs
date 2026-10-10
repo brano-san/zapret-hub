@@ -1,9 +1,12 @@
 //! Work that outlives a command: a test run, and what happens once at start.
 
+use std::time::{Duration, Instant};
+
 use tauri::AppHandle;
 use tauri_specta::Event as _;
 use tester::model::{Suite, TestRun};
 use tester::run::{Progress, Request};
+use zapret::service::SvcState;
 use zapret::snapshot::{Snapshot, pending_path};
 
 use crate::actions::{self, state};
@@ -114,10 +117,57 @@ fn finish(app: &AppHandle, outcome: anyhow::Result<TestRun>) {
     actions::changed(app);
 }
 
-/// Called once from `setup`; the rest of the app does not wait for it.
+const QUICK_EVERY: Duration = Duration::from_secs(30 * 60);
+const VERSION_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Called once from `setup`: the start, then a quick check every 30 minutes and the Flowseal
+/// version once a day (spec 5.6, 9.3).
 pub fn start(app: &AppHandle) {
     let app = app.clone();
-    std::thread::spawn(move || startup(&app));
+    std::thread::spawn(move || {
+        startup(&app);
+        let mut version_checked: Option<Instant> = None;
+        loop {
+            // First: a download that hangs (up to 30 s per attempt) must not hold back the tray's
+            // first color.
+            background_check(&app);
+            if version_checked.is_none_or(|at| at.elapsed() >= VERSION_EVERY) {
+                check_version(&app);
+                version_checked = Some(Instant::now());
+            }
+            std::thread::sleep(QUICK_EVERY);
+        }
+    });
+}
+
+/// A notification only when a running service stops passing (spec 9.3).
+fn background_check(app: &AppHandle) {
+    let before = state(app).quick();
+    // No folder yet, or a test run: nothing to check.
+    let Ok(check) = actions::quick_check(app) else {
+        return;
+    };
+    let was_passing = before.is_none_or(|before| before.ok);
+    if check.service == SvcState::Running && !check.ok && was_passing {
+        notify::show(app, texts::QUICK_FAILED, &texts::quick_result(&check));
+    }
+}
+
+/// When Flowseal's own flag asks for it; one notification per new version.
+fn check_version(app: &AppHandle) {
+    let state = state(app);
+    let Ok(folder) = state.folder() else { return };
+    if !zapret::flags::check_updates(&folder) {
+        return;
+    }
+    let known = state.update();
+    match actions::check_flowseal_update(app) {
+        Ok(Some(version)) if known.as_deref() != Some(version.as_str()) => {
+            notify::show(app, texts::UPDATE, &texts::update(&version));
+        }
+        Ok(_) => {}
+        Err(err) => log::warn!("cannot check the Flowseal version: {err:#}"),
+    }
 }
 
 /// Before anything else changes zapret, an interrupted operation is put back (spec 10).

@@ -10,9 +10,11 @@ mod notify;
 mod settings;
 mod state;
 mod texts;
+mod tray;
 mod window;
 
 use specta_typescript::Typescript;
+use tauri::Manager as _;
 use tauri_specta::{Builder, collect_commands, collect_events};
 
 use crate::dto::{Notice, NoticeLevel};
@@ -143,6 +145,8 @@ pub fn run() -> anyhow::Result<()> {
             text,
         });
     }
+    // The Task Scheduler entry passes it (autostart.rs).
+    let autostarted = std::env::args().any(|arg| arg == "--autostart");
     let builder = specta_builder();
     #[cfg(debug_assertions)]
     if let Err(err) = export_bindings() {
@@ -159,10 +163,24 @@ pub fn run() -> anyhow::Result<()> {
         .setup(move |app| {
             builder.mount_events(app);
             notify::register();
-            window::show(app.handle());
+            tray::create(app.handle())?;
+            let settings = app.state::<AppState>().settings();
+            // A logon start stays in the tray once the wizard is done (spec 9.2, 9.3).
+            if !(autostarted && settings.start_minimized && settings.wizard_done) {
+                window::show(app.handle());
+            }
             jobs::start(app.handle());
             Ok(())
         })
-        .run(tauri::generate_context!())?;
+        .build(tauri::generate_context!())?
+        .run(|_app, event| {
+            // The close button leaves the app in the tray; only «Выход» ends it (spec 4.2).
+            if let tauri::RunEvent::ExitRequested {
+                code: None, api, ..
+            } = event
+            {
+                api.prevent_exit();
+            }
+        });
     Ok(())
 }

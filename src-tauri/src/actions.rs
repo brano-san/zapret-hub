@@ -37,11 +37,12 @@ pub fn notice(app: &AppHandle, level: NoticeLevel, title: &str, text: String) {
     }
 }
 
-/// zapret or the settings changed: the page reads them again.
+/// zapret or the settings changed: the page reads them again, the tray redraws.
 pub fn changed(app: &AppHandle) {
     if let Err(err) = StateChanged.emit(app) {
         log::warn!("cannot announce a change: {err}");
     }
+    crate::tray::refresh(app);
 }
 
 /// A change that ends in a quick check: the check feeds the tray and the overview.
