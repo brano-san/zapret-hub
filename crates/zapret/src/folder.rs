@@ -98,3 +98,23 @@ pub fn root_from_image_path(image_path: &str) -> Option<PathBuf> {
     };
     Some(Path::new(exe).parent()?.parent()?.to_path_buf())
 }
+
+/// Where a Flowseal folder probably is: the `zapret` service's binary, then any running winws.
+pub fn candidates() -> Vec<PathBuf> {
+    let from_service = crate::service::config(crate::service::SERVICE)
+        .and_then(|c| root_from_image_path(&c.image_path));
+    let from_processes = crate::procs::find("winws.exe").into_iter().filter_map(|p| {
+        p.exe
+            .as_deref()
+            .and_then(Path::parent)
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+    });
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for root in from_service.into_iter().chain(from_processes) {
+        if !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    roots
+}

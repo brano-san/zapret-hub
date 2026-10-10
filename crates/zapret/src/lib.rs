@@ -6,6 +6,8 @@ pub mod flags;
 pub mod folder;
 pub mod game_filter;
 pub mod ipset;
+pub mod procs;
+pub mod service;
 pub mod strategies;
 pub mod targets;
 pub mod user_lists;
