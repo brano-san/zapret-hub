@@ -161,6 +161,24 @@ fn ipset_test_switch_puts_the_list_back() {
 }
 
 #[test]
+fn ipset_test_switch_entered_twice_keeps_the_real_list() {
+    let dir = common::fake_zapret();
+    let folder = common::folder(&dir);
+    let lists = dir.path().join("lists");
+    let list = lists.join("ipset-all.txt");
+    let aside = lists.join("ipset-all.hub-test-backup.txt");
+    fs::write(&list, "1.1.1.0/24\r\n").unwrap();
+    zapret::ipset::enter_test_any(&folder).unwrap();
+    // The first DPI run was interrupted: the next one starts with the emptied list on disk.
+    zapret::ipset::enter_test_any(&folder).unwrap();
+    assert_eq!(fs::read_to_string(&aside).unwrap(), "1.1.1.0/24\r\n");
+    assert_eq!(zapret::ipset::mode(&folder), IpsetMode::Any);
+    zapret::ipset::leave_test_any(&folder).unwrap();
+    assert_eq!(fs::read_to_string(&list).unwrap(), "1.1.1.0/24\r\n");
+    assert!(!aside.exists());
+}
+
+#[test]
 fn ipset_install_keeps_the_previous_list() {
     let dir = common::fake_zapret();
     let folder = common::folder(&dir);

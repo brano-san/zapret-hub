@@ -77,10 +77,17 @@ pub fn set_mode(folder: &Folder, target: IpsetMode) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// DPI tests need every address matched: the list is emptied and its content kept aside.
+/// DPI tests need every address matched: the list is emptied and its content kept aside. An aside
+/// copy that already exists holds the real list of an interrupted DPI run (the list on disk is the
+/// emptied one), so it is kept as it is.
 pub fn enter_test_any(folder: &Folder) -> anyhow::Result<()> {
     let (list, saved) = (list(folder), test_backup(folder));
-    if list.is_file() {
+    if saved.is_file() {
+        log::info!(
+            "ipset: kept the aside copy {} of an earlier DPI run",
+            saved.display()
+        );
+    } else if list.is_file() {
         std::fs::copy(&list, &saved)?;
     } else {
         std::fs::write(&saved, "")?;
