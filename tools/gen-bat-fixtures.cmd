@@ -21,10 +21,14 @@ set "GameFilter=1024-65535"
 set "GameFilterTCP=1024-65535"
 set "GameFilterUDP=1024-65535"
 
-:: Flowseal's strategies only: other .bat files in the folder may be the user's own scripts.
+:: Flowseal's strategies only: other .bat files in the folder may be the user's own scripts, and
+:: Zapret Hub writes its own "general (HUB name).bat" files there, which must never become fixtures.
 for %%F in ("%ROOT%general*.bat") do (
-    copy /y "%%~fF" "%OUT%" > nul
-    call :parse "%%~fF" > "%OUT%%%~nF.args"
+    set "name=%%~nF"
+    if /i not "!name:~0,13!"=="general (HUB " (
+        copy /y "%%~fF" "%OUT%" > nul
+        call :parse "%%~fF" > "%OUT%%%~nF.args"
+    )
 )
 echo Fixtures written to %OUT%
 exit /b 0

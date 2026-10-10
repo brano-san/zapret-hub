@@ -2,6 +2,7 @@
 
 pub mod batparse;
 pub mod checks;
+pub mod custom;
 pub mod discord_cache;
 pub mod fakes;
 pub mod flags;
