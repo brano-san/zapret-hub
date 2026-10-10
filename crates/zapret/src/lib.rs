@@ -5,11 +5,13 @@ pub mod fakes;
 pub mod flags;
 pub mod folder;
 pub mod game_filter;
+pub mod hosts;
 pub mod ipset;
 pub mod procs;
 pub mod service;
 pub mod strategies;
 pub mod targets;
+pub mod updates;
 pub mod user_lists;
 
 use std::path::Path;
