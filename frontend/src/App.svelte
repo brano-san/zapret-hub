@@ -4,12 +4,14 @@
   import Notices from "./components/Notices.svelte";
   import Overview from "./tabs/Overview.svelte";
   import Settings from "./tabs/Settings.svelte";
+  import Strategies from "./tabs/Strategies.svelte";
   import Wizard from "./Wizard.svelte";
   import { app, start, type Tab } from "$lib/app.svelte";
   import { S } from "$lib/strings";
 
   const TABS = [
     { id: "overview", label: S.tabs.overview, view: Overview },
+    { id: "strategies", label: S.tabs.strategies, view: Strategies },
     // Tasks 18–20 add Strategies, Tests and Zapret here, in that order.
     { id: "settings", label: S.tabs.settings, view: Settings },
   ] satisfies { id: Tab; label: string; view: unknown }[];
