@@ -276,8 +276,10 @@ export const S = {
     standardHint:
       "Цели из targets.txt: HTTP, TLS 1.2, TLS 1.3 и пинг. Сначала стратегии с меньшим числом ошибок, при равенстве — с меньшей задержкой HTTPS.",
     dpiHint: "Набор hyperion-cs: блокировка после 16–20 КБ. На время прогона ipset переключается в «любой IP».",
-    all: "Все",
-    none: "Ничего",
+    groupFlowseal: "Flowseal (zapret)",
+    groupZapret2: "zapret2",
+    all: "Выбрать все",
+    none: "Снять",
     start: "Запустить",
     estimate: (n: number, minutes: number) => `${strategies(n)}, около ${minutes} мин; zapret на это время остановится`,
     preparing: "Подготовка…",

@@ -2,7 +2,7 @@
   import { commands, type RunSummary, type Score, type StrategyRow, type Suite, type TestRun } from "$lib/ipc/bindings";
   import { call } from "$lib/api";
   import { app, change, refreshLive } from "$lib/app.svelte";
-  import { estimateMinutes, ms, runDate } from "$lib/format";
+  import { estimateMinutes, ms, runDate, zapret2Name } from "$lib/format";
   import { S } from "$lib/strings";
   import ResultsTable from "../components/ResultsTable.svelte";
 
@@ -16,6 +16,13 @@
   let picked = false;
 
   const usable = (list: StrategyRow[]) => list.filter((row) => row.error === null).map((row) => row.name);
+  const flowseal = $derived(rows.filter((row) => zapret2Name(row.name) === null));
+  const zapret2 = $derived(rows.filter((row) => zapret2Name(row.name) !== null));
+  // Ticks or clears one group; the other group's ticks stay.
+  function setGroup(list: StrategyRow[], on: boolean): void {
+    const inGroup = new Set(list.map((row) => row.name));
+    chosen = [...chosen.filter((name) => !inGroup.has(name)), ...(on ? usable(list) : [])];
+  }
   const suiteName = (value: Suite) => (value === "Standard" ? S.tests.standard : S.tests.dpi);
 
   async function openRun(id: string): Promise<void> {
@@ -94,18 +101,8 @@
       <label class="inline"><input type="radio" bind:group={suite} value="Dpi" /> {S.tests.dpi}</label>
     </div>
     <p class="muted">{suite === "Standard" ? S.tests.standardHint : S.tests.dpiHint}</p>
-    <div class="buttons">
-      <button onclick={() => (chosen = usable(rows))}>{S.tests.all}</button>
-      <button onclick={() => (chosen = [])}>{S.tests.none}</button>
-    </div>
-    <div class="choices">
-      {#each rows as row (row.name)}
-        <label class="inline">
-          <input type="checkbox" bind:group={chosen} value={row.name} disabled={row.error !== null} />
-          {row.name}
-        </label>
-      {/each}
-    </div>
+    {@render group(S.tests.groupFlowseal, flowseal)}
+    {#if zapret2.length > 0}{@render group(S.tests.groupZapret2, zapret2)}{/if}
     <div class="buttons">
       <button class="primary" disabled={app.busy || chosen.length === 0} onclick={start}>{S.tests.start}</button>
       <span class="muted">{S.tests.estimate(chosen.length, estimateMinutes(chosen.length, suite))}</span>
@@ -154,6 +151,22 @@
   </table>
 </section>
 
+{#snippet group(title: string, list: StrategyRow[])}
+  <div class="group">
+    <h3>{title}</h3>
+    <button onclick={() => setGroup(list, true)}>{S.tests.all}</button>
+    <button onclick={() => setGroup(list, false)}>{S.tests.none}</button>
+  </div>
+  <div class="choices">
+    {#each list as row (row.name)}
+      <label class="inline">
+        <input type="checkbox" bind:group={chosen} value={row.name} disabled={row.error !== null} />
+        <span>{zapret2Name(row.name) ?? row.name}</span>
+      </label>
+    {/each}
+  </div>
+{/snippet}
+
 {#snippet score(kind: Suite, value: Score)}
   {kind === "Standard"
     ? S.tests.runScore(value.total - value.ok, value.total, ms(value.median_ms))
@@ -166,8 +179,37 @@
     margin-top: 10px;
   }
 
+  .group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .group h3 {
+    margin: 0 8px 0 0;
+  }
+
+  /* Checkbox and name in columns of one width, whatever the name's length. */
   .choices {
-    columns: 3 220px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 2px 14px;
     margin-top: 8px;
+  }
+
+  .choices label.inline {
+    margin: 0;
+    min-width: 0;
+  }
+
+  .choices input {
+    flex: none;
+  }
+
+  .choices span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>
