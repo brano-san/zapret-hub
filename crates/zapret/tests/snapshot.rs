@@ -52,6 +52,16 @@ fn pending_json_round_trips() {
 }
 
 #[test]
+fn a_pending_json_that_cannot_be_written_is_an_error_naming_it() {
+    let data = tempfile::tempdir().unwrap();
+    fs::write(data.path().join("state"), "").unwrap(); // a file where its folder goes
+    let err = sample(IpsetMode::Loaded)
+        .save(&pending_path(data.path()))
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("pending.json"), "{err:#}");
+}
+
+#[test]
 fn a_damaged_pending_json_is_an_error_naming_the_file() {
     let data = tempfile::tempdir().unwrap();
     let path = pending_path(data.path());

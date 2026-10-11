@@ -95,12 +95,21 @@ impl Snapshot {
         })
     }
 
+    /// Flushed to disk: a power cut right after `begin` must still find the whole file. Written in
+    /// place: `begin` saves only after an earlier file was restored and removed, and a write torn
+    /// by a crash happens before the operation's first change.
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        std::fs::write(path, serde_json::to_string_pretty(self)?)?;
-        Ok(())
+        use std::io::Write as _;
+        let json = serde_json::to_string_pretty(self)?;
+        let write = || -> std::io::Result<()> {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            let mut file = std::fs::File::create(path)?;
+            file.write_all(json.as_bytes())?;
+            file.sync_all()
+        };
+        write().map_err(|err| anyhow::Error::new(err).context(path.display().to_string()))
     }
 
     /// `None` when no operation was left unfinished.
