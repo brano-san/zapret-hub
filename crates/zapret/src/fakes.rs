@@ -67,7 +67,9 @@ pub fn state(folder: &Folder) -> anyhow::Result<Fakes> {
     })
 }
 
-/// Copies `bin\<source>.bin` over the active fake; `source` must be one of `state().files`.
+/// Copies `bin\<source>.bin` over the active fake; `source` must be one of `state().files`. The
+/// copy is written next to it and renamed over it, so a failed copy leaves the active fake as it
+/// was; written from the bytes, it takes no read-only attribute along.
 pub fn replace(folder: &Folder, kind: FakeKind, source: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
         state(folder)?.files.iter().any(|f| f == source),
@@ -75,8 +77,15 @@ pub fn replace(folder: &Folder, kind: FakeKind, source: &str) -> anyhow::Result<
     );
     let bin = folder.bin();
     let active = bin.join(kind.file_name());
-    let _ = std::fs::remove_file(&active);
-    std::fs::copy(bin.join(format!("{source}.bin")), &active)?;
+    let tmp = active.with_extension("bin.hub-tmp");
+    let source_path = bin.join(format!("{source}.bin"));
+    let bytes = std::fs::read(&source_path)
+        .map_err(|e| anyhow::anyhow!("{}: {e}", source_path.display()))?;
+    std::fs::write(&tmp, bytes).map_err(|e| anyhow::anyhow!("{}: {e}", tmp.display()))?;
+    if let Err(e) = std::fs::rename(&tmp, &active) {
+        let _ = std::fs::remove_file(&tmp);
+        anyhow::bail!("{}: {e}", active.display());
+    }
     log::info!("{} := {source}.bin", kind.file_name());
     Ok(())
 }

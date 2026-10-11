@@ -310,6 +310,25 @@ fn finds_and_replaces_the_active_fake() {
 }
 
 #[test]
+fn a_read_only_fake_leaves_the_active_one_writable() {
+    let dir = common::fake_zapret();
+    let folder = common::folder(&dir);
+    let bin = dir.path().join("bin");
+    let (quic, active) = (bin.join("quic.bin"), bin.join("ACTIVE_DISCORD_UDP.bin"));
+    fs::write(bin.join("stun.bin"), "a").unwrap();
+    fs::write(&quic, "b").unwrap();
+    fs::write(&active, "a").unwrap();
+    let mut read_only = fs::metadata(&quic).unwrap().permissions();
+    read_only.set_readonly(true);
+    fs::set_permissions(&quic, read_only).unwrap();
+
+    zapret::fakes::replace(&folder, FakeKind::Discord, "quic").unwrap();
+    assert!(!fs::metadata(&active).unwrap().permissions().readonly());
+    zapret::fakes::replace(&folder, FakeKind::Discord, "stun").unwrap();
+    assert_eq!(fs::read(&active).unwrap(), b"a");
+}
+
+#[test]
 fn check_updates_flag_toggles() {
     let dir = common::fake_zapret();
     let folder = common::folder(&dir);
