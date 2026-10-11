@@ -28,12 +28,20 @@ fn test_backup(folder: &Folder) -> PathBuf {
     folder.lists().join("ipset-all.hub-test-backup.txt")
 }
 
-/// A missing file counts as `any`, as in `service.bat` (zero lines).
-pub fn mode(folder: &Folder) -> IpsetMode {
-    match crate::read_text(&list(folder)) {
-        Ok(content) => mode_of(&content),
-        Err(_) => IpsetMode::Any,
+/// A missing file counts as `any`, as in `service.bat` (zero lines); any other read error is an
+/// error.
+pub fn try_mode(folder: &Folder) -> anyhow::Result<IpsetMode> {
+    let path = list(folder);
+    match crate::read_text(&path) {
+        Ok(content) => Ok(mode_of(&content)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(IpsetMode::Any),
+        Err(err) => Err(anyhow::Error::new(err).context(path.display().to_string())),
     }
+}
+
+/// For display: an unreadable list reads as `any`.
+pub fn mode(folder: &Folder) -> IpsetMode {
+    try_mode(folder).unwrap_or(IpsetMode::Any)
 }
 
 /// Blank → any; the marker → none; anything else → loaded.
@@ -54,7 +62,7 @@ pub fn has_backup(folder: &Folder) -> bool {
 
 /// Switches to `target`. Leaving `loaded` moves the list to `.backup`; going back needs it.
 pub fn set_mode(folder: &Folder, target: IpsetMode) -> anyhow::Result<()> {
-    let current = mode(folder);
+    let current = try_mode(folder)?;
     if current == target {
         return Ok(());
     }

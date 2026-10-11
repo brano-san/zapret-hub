@@ -57,15 +57,22 @@ pub fn begin(folder: &Folder, operation: &str, pending: &Path) -> anyhow::Result
             "{file}: the state before the unfinished \"{was}\" is back, the file is removed"
         );
     }
-    let snapshot = Snapshot::take(folder, operation);
+    let snapshot = Snapshot::take(folder, operation)?;
     snapshot.save(pending)?;
     Ok(snapshot)
 }
 
 impl Snapshot {
-    pub fn take(folder: &Folder, operation: &str) -> Self {
+    /// Fails closed: what it cannot read would be restored as something else, so an operation
+    /// does not start on it.
+    pub fn take(folder: &Folder, operation: &str) -> anyhow::Result<Self> {
         let status = service::status(SERVICE);
-        let service = service::config(SERVICE).map(|config| ServiceSnap {
+        let config = service::config(SERVICE);
+        anyhow::ensure!(
+            status.is_none() || config.is_some(),
+            "the zapret service exists, but its ImagePath could not be read from the registry, so \"{operation}\" did not start; remove the service with service.bat or `sc delete zapret` if it is broken"
+        );
+        let service = config.map(|config| ServiceSnap {
             image_path: config.image_path,
             auto_start: config.auto_start,
             running: matches!(
@@ -74,7 +81,7 @@ impl Snapshot {
             ),
         });
         let service_pid = status.map(|(_, pid)| pid).filter(|pid| *pid != 0);
-        Self {
+        Ok(Self {
             operation: operation.to_owned(),
             service,
             strategy: service::strategy(),
@@ -82,10 +89,10 @@ impl Snapshot {
                 .into_iter()
                 .filter(|p| Some(p.pid) != service_pid)
                 .collect(),
-            ipset: ipset::mode(folder),
+            ipset: ipset::try_mode(folder)?,
             ipset_backup: ipset::has_backup(folder),
-            game_filter: game_filter::read(folder),
-        }
+            game_filter: game_filter::try_read(folder)?,
+        })
     }
 
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {

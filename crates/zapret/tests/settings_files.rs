@@ -179,6 +179,50 @@ fn ipset_test_switch_entered_twice_keeps_the_real_list() {
 }
 
 #[test]
+fn an_ipset_list_that_cannot_be_read_is_not_switched() {
+    let dir = common::fake_zapret();
+    let folder = common::folder(&dir);
+    let list = dir.path().join("lists").join("ipset-all.txt");
+    fs::write(&list, "1.1.1.0/24\r\n").unwrap();
+    let lock = common::lock_reads(&list);
+    let err = zapret::ipset::try_mode(&folder).unwrap_err();
+    assert!(format!("{err:#}").contains("ipset-all.txt"), "{err:#}");
+    let switched = zapret::ipset::set_mode(&folder, IpsetMode::None);
+    drop(lock);
+    assert!(
+        switched.is_err(),
+        "a list it could not read was overwritten"
+    );
+    assert_eq!(fs::read_to_string(&list).unwrap(), "1.1.1.0/24\r\n");
+    assert!(!zapret::ipset::has_backup(&folder));
+}
+
+#[test]
+fn a_game_filter_that_cannot_be_read_is_an_error() {
+    let dir = common::fake_zapret();
+    let folder = common::folder(&dir);
+    let file = dir.path().join("utils").join("game_filter.enabled");
+    fs::write(&file, "mode=tcp\r\ntcp=2000\r\n").unwrap();
+    let bat = dir.path().join("general.bat");
+    fs::write(
+        &bat,
+        "start \"z\" /min \"%BIN%winws.exe\" --wf-tcp=80,%GameFilterTCP%\r\n",
+    )
+    .unwrap();
+    let _lock = common::lock_reads(&file);
+    let err = zapret::game_filter::try_read(&folder).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("game_filter.enabled"),
+        "{err:#}"
+    );
+    let parsed = zapret::batparse::parse_file(&folder, &bat);
+    assert!(
+        parsed.is_err(),
+        "parsed with the game filter off: {parsed:?}"
+    );
+}
+
+#[test]
 fn ipset_install_keeps_the_previous_list() {
     let dir = common::fake_zapret();
     let folder = common::folder(&dir);

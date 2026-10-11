@@ -96,6 +96,25 @@ fn begin_does_not_start_over_a_damaged_pending_json() {
 }
 
 #[test]
+fn begin_does_not_start_without_the_whole_state() {
+    let dir = common::fake_zapret();
+    let folder = common::folder(&dir);
+    let data = tempfile::tempdir().unwrap();
+    let pending = pending_path(data.path());
+    let ipset = dir.path().join("lists").join("ipset-all.txt");
+    let filter = dir.path().join("utils").join("game_filter.enabled");
+    for (file, text) in [(&ipset, "1.1.1.0/24\r\n"), (&filter, "mode=all\r\n")] {
+        fs::write(file, text).unwrap();
+        let lock = common::lock_reads(file);
+        let began = snapshot::begin(&folder, "ipset", &pending);
+        drop(lock);
+        let err = format!("{:#}", began.unwrap_err());
+        assert!(err.contains(&file.display().to_string()), "{err}");
+        assert!(!pending.exists(), "a snapshot of a state not read whole");
+    }
+}
+
+#[test]
 fn restore_files_returns_the_ipset_after_a_killed_run() {
     let dir = common::fake_zapret();
     let folder = common::folder(&dir);
@@ -118,7 +137,7 @@ fn restore_files_returns_the_game_filter_a_failed_change_left_behind() {
     let folder = common::folder(&dir);
     let before = filter(GameFilterMode::Tcp, "2000-2100", "1024-65535");
     game_filter::write(&folder, &before).unwrap();
-    let snap = Snapshot::take(&folder, "game_filter");
+    let snap = Snapshot::take(&folder, "game_filter").unwrap();
     assert_eq!(snap.game_filter, before);
 
     // The change writes the file first and reinstalls the service after it, which failed.
@@ -134,7 +153,7 @@ fn restore_files_leaves_a_game_filter_file_that_reads_the_same() {
     let file = dir.path().join("utils").join("game_filter.enabled");
     let by_hand = "; my ports\r\nmode=all\r\ntcp=2000\r\n";
     fs::write(&file, by_hand).unwrap();
-    let snap = Snapshot::take(&folder, "tests");
+    let snap = Snapshot::take(&folder, "tests").unwrap();
 
     snap.restore_files(&folder).unwrap();
     assert_eq!(fs::read_to_string(&file).unwrap(), by_hand);
@@ -144,7 +163,7 @@ fn restore_files_leaves_a_game_filter_file_that_reads_the_same() {
 #[ignore = "needs admin rights and the zapret service installed from E:\\Zapret"]
 fn live_snapshot_of_this_machine() {
     let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
-    let snap = Snapshot::take(&folder, "probe");
+    let snap = Snapshot::take(&folder, "probe").unwrap();
     eprintln!("{snap:#?}");
     assert_eq!(snap.operation, "probe");
     let service = snap

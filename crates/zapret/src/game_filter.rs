@@ -61,10 +61,20 @@ fn path(folder: &Folder) -> std::path::PathBuf {
     folder.utils().join("game_filter.enabled")
 }
 
+/// A missing file is the default (off), as in `service.bat`; any other read error is an error.
+pub fn try_read(folder: &Folder) -> anyhow::Result<GameFilter> {
+    let path = path(folder);
+    match crate::read_text(&path) {
+        Ok(text) => Ok(parse(&text)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(GameFilter::default()),
+        Err(err) => Err(anyhow::Error::new(err).context(path.display().to_string())),
+    }
+}
+
+/// For display, and for a restore, which writes the snapshot's value when this reads differently:
+/// an unreadable file reads as the default.
 pub fn read(folder: &Folder) -> GameFilter {
-    crate::read_text(&path(folder))
-        .map(|text| parse(&text))
-        .unwrap_or_default()
+    try_read(folder).unwrap_or_default()
 }
 
 /// `for /f "usebackq tokens=1,* delims==" %%A in (file)` and the range checks after it.

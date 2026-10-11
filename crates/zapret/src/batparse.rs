@@ -226,7 +226,7 @@ pub fn parse_file(folder: &crate::folder::Folder, path: &Path) -> anyhow::Result
     parse(
         &bat,
         &folder.root_dp0(),
-        &crate::game_filter::read(folder).vars(),
+        &crate::game_filter::try_read(folder)?.vars(),
     )
     .map_err(|err| err.context(path.display().to_string()))
 }

@@ -210,7 +210,7 @@ pub fn validate(
     let parsed = crate::batparse::parse(
         &s.to_bat(),
         &folder.root_dp0(),
-        &crate::game_filter::read(folder).vars(),
+        &crate::game_filter::try_read(folder)?.vars(),
     )?;
     dry_run(folder, &parsed)?;
     Ok((s, parsed))
