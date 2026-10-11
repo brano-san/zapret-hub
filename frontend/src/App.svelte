@@ -8,7 +8,7 @@
   import Tests from "./tabs/Tests.svelte";
   import Zapret from "./tabs/Zapret.svelte";
   import Wizard from "./Wizard.svelte";
-  import { app, start, type Tab } from "$lib/app.svelte";
+  import { app, refreshOverview, start, type Tab } from "$lib/app.svelte";
   import { S } from "$lib/strings";
 
   const TABS = [
@@ -22,7 +22,15 @@
   const current = $derived(TABS.find((tab) => tab.id === app.tab) ?? TABS[0]!);
 
   onMount(() => void start());
+
+  // Files dropped into a strategies folder by hand announce nothing: coming back to the window reads everything again.
+  function onFocus(): void {
+    app.revision++;
+    void refreshOverview();
+  }
 </script>
+
+<svelte:window onfocus={onFocus} />
 
 {#if app.settings && !app.settings.wizard_done}
   <Wizard />
