@@ -220,7 +220,7 @@ fn run_one(folder: &Folder, name: &str, work: &Work, cancel: &AtomicBool) -> Str
         }
     };
     result.args_sha256 = parsed.sha256();
-    let mut winws = match Winws::start(folder, &parsed.command_tail()) {
+    let mut winws = match Winws::start(&folder.winws(), &folder.bin(), &parsed.command_tail()) {
         Ok(winws) => winws,
         Err(err) => {
             result.launch_error = Some(format!("winws did not start: {err}"));

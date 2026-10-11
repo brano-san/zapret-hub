@@ -90,7 +90,7 @@ impl Snapshot {
         Ok(Self {
             operation: operation.to_owned(),
             service,
-            strategy: service::strategy(),
+            strategy: service::strategy_of(SERVICE),
             manual_winws: procs::find("winws.exe")
                 .into_iter()
                 .filter(|p| Some(p.pid) != service_pid)
@@ -183,10 +183,10 @@ impl Snapshot {
         });
         if !same {
             service::stop_and_delete(SERVICE)?;
-            service::create(&snap.image_path, snap.auto_start)?;
+            service::create(SERVICE, &snap.image_path, snap.auto_start)?;
         }
         if let Some(name) = &self.strategy {
-            service::set_strategy(name)?;
+            service::set_strategy_of(SERVICE, name)?;
         }
         if snap.running {
             service::start(SERVICE)

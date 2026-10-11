@@ -18,7 +18,10 @@ use crate::batparse::ParsedArgs;
 use crate::folder::Folder;
 
 pub const SERVICE: &str = "zapret";
-const SERVICE_KEY: &str = r"SYSTEM\CurrentControlSet\Services\zapret";
+/// zapret2's service and process (zapret2 spec 3.1, 6): this crate knows the second engine by
+/// these two names only.
+pub const SERVICE2: &str = "zapret2";
+pub const WINWS2: &str = "winws2.exe";
 const STRATEGY_VALUE: &str = "zapret-discord-youtube";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -96,6 +99,21 @@ pub fn state(name: &str) -> SvcState {
     status(name).map_or(SvcState::NotInstalled, |(state, _)| state)
 }
 
+/// The installed engine's service and process (zapret2 spec 3.1): `zapret2` and `winws2.exe` while
+/// the `zapret2` service exists, else Flowseal's. The app installs one engine at a time; when
+/// `service.bat` puts `zapret` next to `zapret2`, the system checks name the conflict (spec 9).
+pub fn active() -> (&'static str, &'static str) {
+    if state(SERVICE2) == SvcState::NotInstalled {
+        (SERVICE, "winws.exe")
+    } else {
+        (SERVICE2, WINWS2)
+    }
+}
+
+fn key(name: &str) -> String {
+    format!(r"SYSTEM\CurrentControlSet\Services\{name}")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SvcConfig {
     pub image_path: String,
@@ -107,9 +125,7 @@ pub struct SvcConfig {
 /// carries a strategy's whole argument list, which can pass 4000 characters. `None` when the key
 /// or its `ImagePath` is missing.
 pub fn config(name: &str) -> Option<SvcConfig> {
-    let key = windows_registry::LOCAL_MACHINE
-        .open(format!(r"SYSTEM\CurrentControlSet\Services\{name}"))
-        .ok()?;
+    let key = windows_registry::LOCAL_MACHINE.open(key(name)).ok()?;
     Some(SvcConfig {
         image_path: key.get_string("ImagePath").ok()?,
         auto_start: key
@@ -175,20 +191,27 @@ pub fn active_services() -> Vec<(String, String)> {
         .collect()
 }
 
-/// The strategy name `service.bat` records next to the service.
-pub fn strategy() -> Option<String> {
+/// The strategy name recorded next to service `name`: `service.bat` writes it for `zapret`, the app
+/// writes `zapret2:<name>` for `zapret2` (zapret2 spec 6).
+pub fn strategy_of(name: &str) -> Option<String> {
     windows_registry::LOCAL_MACHINE
-        .open(SERVICE_KEY)
+        .open(key(name))
         .ok()?
         .get_string(STRATEGY_VALUE)
         .ok()
 }
 
-pub fn set_strategy(name: &str) -> anyhow::Result<()> {
+/// The active engine's strategy: a Flowseal name or `zapret2:<name>`.
+pub fn strategy() -> Option<String> {
+    strategy_of(active().0)
+}
+
+pub fn set_strategy_of(service: &str, name: &str) -> anyhow::Result<()> {
+    let key = key(service);
     windows_registry::LOCAL_MACHINE
-        .create(SERVICE_KEY)?
+        .create(&key)?
         .set_string(STRATEGY_VALUE, name)?;
-    log::info!(target: "exec", r"registry: HKLM\{SERVICE_KEY} {STRATEGY_VALUE} = {name}");
+    log::info!(target: "exec", r"registry: HKLM\{key} {STRATEGY_VALUE} = {name}");
     Ok(())
 }
 
@@ -211,38 +234,44 @@ fn wait_until(max: Duration, mut done: impl FnMut() -> bool) -> bool {
     done()
 }
 
-/// `sc create zapret binPath= ... DisplayName= "zapret" start= auto|demand` and the description.
-pub fn create(bin_path: &str, auto_start: bool) -> anyhow::Result<()> {
+/// `sc create <name> binPath= ... DisplayName= <name> start= auto|demand` and the description, as
+/// `service.bat` makes `zapret`; `zapret2` the same way (zapret2 spec 6).
+pub fn create(name: &str, bin_path: &str, auto_start: bool) -> anyhow::Result<()> {
     let start = if auto_start { "auto" } else { "demand" };
     cmd(
         "sc",
         &[
             "create",
-            SERVICE,
+            name,
             "binPath=",
             bin_path,
             "DisplayName=",
-            "zapret",
+            name,
             "start=",
             start,
         ],
     )?
     .check()?;
-    let _ = cmd(
-        "sc",
-        &["description", SERVICE, "Zapret DPI bypass software"],
-    );
+    let description = if name == SERVICE {
+        "Zapret DPI bypass software"
+    } else {
+        "zapret2 DPI bypass software"
+    };
+    let _ = cmd("sc", &["description", name, description]);
     Ok(())
 }
 
 /// `:service_install` after the menu: timestamps on, the old service gone, the new one created
-/// and started, the strategy name recorded.
+/// and started, the strategy name recorded. One engine at a time (zapret2 spec 6): zapret2 goes
+/// too, so every path that installs a Flowseal strategy takes it down.
 pub fn install(folder: &Folder, name: &str, parsed: &ParsedArgs) -> anyhow::Result<()> {
     let _ = enable_tcp_timestamps();
     stop_and_delete(SERVICE)?;
-    create(&parsed.bin_path(&folder.winws()), true)?;
+    stop_and_delete(SERVICE2)?;
+    crate::procs::kill_all(WINWS2)?;
+    create(SERVICE, &parsed.bin_path(&folder.winws()), true)?;
     cmd("sc", &["start", SERVICE])?.check()?;
-    set_strategy(name)
+    set_strategy_of(SERVICE, name)
 }
 
 /// `net stop` + `sc delete` with errors ignored, as `service.bat` does where it does not care.
@@ -265,13 +294,17 @@ pub fn stop_and_delete(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `:service_remove`: zapret, every winws, WinDivert, WinDivert14. Only the `zapret` service
-/// has to go. As in `service.bat` the rest is best effort: winws may end by itself, and a
-/// WinDivert driver that another program holds stays; their errors go to the journal as warnings.
+/// `:service_remove`: zapret and zapret2, every winws and winws2, WinDivert, WinDivert14. Only the
+/// services have to go. As in `service.bat` the rest is best effort: a process may end by itself,
+/// and a WinDivert driver that another program holds stays; their errors go to the journal as
+/// warnings.
 pub fn remove() -> anyhow::Result<()> {
     stop_and_delete(SERVICE)?;
-    if let Err(err) = crate::procs::kill_all("winws.exe") {
-        log::warn!(target: "exec", "winws.exe was not ended: {err:#}");
+    stop_and_delete(SERVICE2)?;
+    for image in ["winws.exe", WINWS2] {
+        if let Err(err) = crate::procs::kill_all(image) {
+            log::warn!(target: "exec", "{image} was not ended: {err:#}");
+        }
     }
     for driver in ["WinDivert", "WinDivert14"] {
         if let Err(err) = stop_and_delete(driver) {
@@ -323,7 +356,7 @@ pub fn reinstall_active(folder: &Folder) -> anyhow::Result<()> {
     if state(SERVICE) == SvcState::NotInstalled {
         return Ok(());
     }
-    let Some(name) = strategy() else {
+    let Some(name) = strategy_of(SERVICE) else {
         anyhow::bail!(
             "the zapret service has no strategy name in the registry, so it cannot be installed again with the new game filter: apply a strategy first"
         );
@@ -380,10 +413,11 @@ pub struct QuickCheck {
     pub checks: Vec<QuickItem>,
 }
 
-/// 5.4: winws runs and the first two URL targets answer `HTTP:OK`.
+/// 5.4: the active engine's process runs and the first two URL targets answer `HTTP:OK`.
 pub fn quick_check(folder: &Folder) -> QuickCheck {
-    let service = state(SERVICE);
-    let winws_running = crate::procs::is_running("winws.exe");
+    let (service, image) = active();
+    let service = state(service);
+    let winws_running = crate::procs::is_running(image);
     let checks: Vec<QuickItem> = crate::targets::load(folder)
         .into_iter()
         .filter_map(|target| Some((target.name, target.url?)))

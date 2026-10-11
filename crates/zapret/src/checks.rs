@@ -2,7 +2,7 @@
 //! original fixes on its own becomes an action behind a button.
 
 use crate::folder::Folder;
-use crate::service::{self, SvcState};
+use crate::service::{self, SERVICE, SERVICE2, SvcState, WINWS2};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub enum CheckLevel {
@@ -51,6 +51,22 @@ pub struct SystemCheck {
 /// Other bypasses `service.bat` offers to remove.
 pub const CONFLICTING: [&str; 4] = ["GoodbyeDPI", "discordfix_zapret", "winws1", "winws2"];
 
+/// The installed services «Удалить службы» removes: the other bypasses, and `zapret2` while `zapret`
+/// is installed too (zapret2 spec 9). `service.bat` knows nothing of zapret2 and may have put
+/// `zapret` next to it: the user's newer step outside the app wins.
+pub fn conflicts(installed: impl Fn(&str) -> bool) -> Vec<&'static str> {
+    let zapret2 = installed(SERVICE).then_some(SERVICE2);
+    CONFLICTING
+        .into_iter()
+        .chain(zapret2)
+        .filter(|name| installed(name))
+        .collect()
+}
+
+fn installed(name: &str) -> bool {
+    service::state(name) != SvcState::NotInstalled
+}
+
 pub fn run_all(folder: &Folder) -> Vec<SystemCheck> {
     use CheckLevel::{Problem, Warn};
     let services = service::active_services();
@@ -58,12 +74,11 @@ pub fn run_all(folder: &Folder) -> Vec<SystemCheck> {
     let root = folder.root_dp0();
     let proxy = proxy_server();
     let windivert = service::state("WinDivert");
+    // winws2 holds WinDivert too: removing the driver under it would break zapret2 (spec 9).
     let orphan = matches!(windivert, SvcState::Running | SvcState::StopPending)
-        && !crate::procs::is_running("winws.exe");
-    let conflicts: Vec<&str> = CONFLICTING
-        .into_iter()
-        .filter(|name| service::state(name) != SvcState::NotInstalled)
-        .collect();
+        && !crate::procs::is_running("winws.exe")
+        && !crate::procs::is_running(WINWS2);
+    let conflicts = conflicts(installed);
     let checkpoint: Vec<String> = [find(&["tracsrvwrapper"]), find(&["epwd"])]
         .into_iter()
         .filter(|names| !names.is_empty())
@@ -217,7 +232,7 @@ fn remove_windivert() -> anyhow::Result<()> {
 
 fn remove_conflicts() -> anyhow::Result<()> {
     let mut failed = Vec::new();
-    for name in CONFLICTING {
+    for name in conflicts(installed) {
         if let Err(err) = service::stop_and_delete(name) {
             failed.push(format!("{name}: {err:#}"));
         }

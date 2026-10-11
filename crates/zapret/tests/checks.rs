@@ -1,4 +1,6 @@
-use zapret::checks::{has_cyrillic, hosts_mentions_youtube, in_onedrive, matching_services};
+use zapret::checks::{
+    conflicts, has_cyrillic, hosts_mentions_youtube, in_onedrive, matching_services,
+};
 use zapret::discord_cache::{CacheOutcome, clear_in};
 
 #[test]
@@ -23,6 +25,18 @@ fn a_service_matches_when_one_line_has_every_word() {
         ["KillerNetworkService"]
     );
     assert!(matching_services(&services, &["vpn"]).is_empty());
+}
+
+#[test]
+fn zapret2_is_a_conflict_only_next_to_zapret() {
+    let installed = |names: &'static [&'static str]| move |name: &str| names.contains(&name);
+    assert!(conflicts(installed(&["zapret2"])).is_empty());
+    assert!(conflicts(installed(&["zapret"])).is_empty());
+    assert_eq!(conflicts(installed(&["zapret", "zapret2"])), ["zapret2"]);
+    assert_eq!(
+        conflicts(installed(&["zapret2", "winws2", "zapret", "GoodbyeDPI"])),
+        ["GoodbyeDPI", "winws2", "zapret2"]
+    );
 }
 
 #[test]

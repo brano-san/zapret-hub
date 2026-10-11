@@ -209,7 +209,7 @@ pub fn dry_run(folder: &Folder, parsed: &ParsedArgs) -> anyhow::Result<String> {
         let out = exec::run(&mut cmd, Duration::from_secs(15), None)?.check()?;
         return Ok(format!("{}{}", out.stdout, out.stderr));
     }
-    let mut winws = crate::procs::Winws::start(folder, &tail)?;
+    let mut winws = crate::procs::Winws::start(&folder.winws(), &folder.bin(), &tail)?;
     let ready = winws.wait_ready(Duration::from_secs(2));
     let output = winws.stop();
     ready.map_err(anyhow::Error::msg)?;

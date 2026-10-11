@@ -1,6 +1,8 @@
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
+use zapret::procs::Winws;
 use zapret::service::{SvcState, config, parse_timestamps, state};
 
 #[test]
@@ -30,6 +32,67 @@ fn reads_a_service_config_from_the_registry() {
     );
     assert!(bfe.auto_start);
     assert_eq!(config("zapret-hub-no-such-service"), None);
+}
+
+#[test]
+fn a_service_without_a_recorded_strategy_has_none() {
+    assert_eq!(
+        zapret::service::strategy_of("zapret-hub-no-such-service"),
+        None
+    );
+}
+
+fn cmd_exe() -> PathBuf {
+    PathBuf::from(std::env::var_os("ComSpec").expect("ComSpec is set"))
+}
+
+#[test]
+fn a_started_engine_is_ready_when_capture_starts() {
+    // winws2 prints `windivert initialized. capture is started.`; cmd.exe stands in for it.
+    let dir = tempfile::tempdir().unwrap();
+    let mut winws = Winws::start(
+        &cmd_exe(),
+        dir.path(),
+        r#"/c "cd&echo windivert initialized. capture is started.&ping -n 3 127.0.0.1>nul""#,
+    )
+    .unwrap();
+    winws.wait_ready(Duration::from_secs(5)).unwrap();
+    assert!(winws.exited().is_none());
+    let output = winws.stop();
+    assert!(output.contains("capture is started."), "{output}");
+    let dir_name = dir.path().file_name().unwrap().to_string_lossy();
+    assert!(
+        output.contains(&*dir_name),
+        "runs in the given folder: {output}"
+    );
+}
+
+#[test]
+fn an_engine_that_exits_is_a_launch_error_naming_its_image() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut winws = Winws::start(
+        &cmd_exe(),
+        dir.path(),
+        r#"/c "echo LUA ERROR: no such function&exit 87""#,
+    )
+    .unwrap();
+    let err = winws.wait_ready(Duration::from_secs(5)).unwrap_err();
+    assert!(err.to_lowercase().starts_with("cmd.exe exited"), "{err}");
+    assert!(err.contains("87") && err.contains("LUA ERROR"), "{err}");
+}
+
+#[test]
+#[ignore = "needs admin rights and E:\\Zapret; replaces the zapret and zapret2 services"]
+fn a_flowseal_install_takes_zapret2_down() {
+    use zapret::service::{SERVICE, SERVICE2, active, create};
+    // A stand-in zapret2: the install removes it whatever it runs.
+    create(SERVICE2, r#""C:\Windows\System32\cmd.exe" /c exit"#, false).unwrap();
+    assert_eq!(active().0, SERVICE2);
+    let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
+    let check = zapret::service::apply(&folder, "general").unwrap();
+    eprintln!("{check:?}");
+    assert_eq!(state(SERVICE2), SvcState::NotInstalled);
+    assert_eq!(active(), (SERVICE, "winws.exe"));
 }
 
 #[test]

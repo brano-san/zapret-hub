@@ -11,8 +11,6 @@ use std::time::{Duration, Instant};
 
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
-use crate::folder::Folder;
-
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Proc {
     pub pid: u32,
@@ -92,19 +90,23 @@ pub fn spawn_detached(proc: &Proc) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A `winws.exe` the tests start directly, with the arguments the service would get (7.3).
+/// A `winws.exe` or `winws2.exe` the tests start directly, with the arguments the service would
+/// get (7.3).
 pub struct Winws {
     child: Child,
     output: Arc<Mutex<Vec<u8>>>,
     readers: Vec<JoinHandle<()>>,
+    /// `winws.exe` or `winws2.exe`: the messages name it.
+    image: String,
 }
 
 impl Winws {
-    /// `"<bin>\winws.exe" <tail>`, working directory `bin`, no window.
-    pub fn start(folder: &Folder, tail: &str) -> std::io::Result<Self> {
-        let mut child = Command::new(folder.winws())
+    /// `"<exe>" <tail>` in `cwd`, no window: Flowseal's `bin\winws.exe` from `bin`, zapret2's
+    /// `winws2.exe` from its root.
+    pub fn start(exe: &Path, cwd: &Path, tail: &str) -> std::io::Result<Self> {
+        let mut child = Command::new(exe)
             .raw_arg(tail)
-            .current_dir(folder.bin())
+            .current_dir(cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -134,16 +136,22 @@ impl Winws {
                 }
             }));
         }
-        log::info!(target: "exec", "started winws (pid {}){tail}", child.id());
+        let image = exe.file_name().map_or_else(
+            || exe.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        log::info!(target: "exec", "started {image} (pid {}) {}", child.id(), tail.trim_start());
         Ok(Self {
             child,
             output,
             readers,
+            image,
         })
     }
 
-    /// Waits until winws reports capture started, exits, or `max` passes. A winws that exited
-    /// is a launch error: `Err` carries its exit status and output.
+    /// Waits until winws reports capture started (winws2: `windivert initialized. capture is
+    /// started.`), exits, or `max` passes. One that exited is a launch error: `Err` carries its exit
+    /// status and output.
     pub fn wait_ready(&mut self, max: Duration) -> Result<(), String> {
         let started = Instant::now();
         loop {
@@ -152,7 +160,11 @@ impl Winws {
                 for reader in self.readers.drain(..) {
                     let _ = reader.join();
                 }
-                return Err(format!("winws exited ({status}):\n{}", self.output_text()));
+                return Err(format!(
+                    "{} exited ({status}):\n{}",
+                    self.image,
+                    self.output_text()
+                ));
             }
             if self.output_text().contains("capture is started") || started.elapsed() >= max {
                 return Ok(());
@@ -179,7 +191,7 @@ impl Winws {
             let _ = reader.join();
         }
         let text = self.output_text();
-        log::info!(target: "exec", "stopped winws (pid {})\n{text}", self.child.id());
+        log::info!(target: "exec", "stopped {} (pid {})\n{text}", self.image, self.child.id());
         text
     }
 }
