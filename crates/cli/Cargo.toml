@@ -7,9 +7,19 @@ license.workspace = true
 publish.workspace = true
 description = "zapret-hub-cli and its protocol: agents drive the running Zapret Hub over a local pipe."
 
+[[bin]]
+name = "zapret-hub-cli"
+path = "src/main.rs"
+
 [dependencies]
+exec.workspace = true
 tester.workspace = true
 zapret.workspace = true
+anyhow.workspace = true
+clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 windows = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_Threading"] }
+
+[dev-dependencies]
+tempfile.workspace = true
