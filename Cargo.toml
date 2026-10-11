@@ -13,6 +13,7 @@ publish = false
 exec = { path = "crates/exec" }
 probe = { path = "crates/probe" }
 zapret = { path = "crates/zapret" }
+zapret2 = { path = "crates/zapret2" }
 tester = { path = "crates/tester" }
 cli = { path = "crates/cli" }
 

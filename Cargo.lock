@@ -5125,6 +5125,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "zapret2"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "exec",
+ "log",
+ "serde",
+ "specta",
+ "tempfile",
+ "zapret",
+]
+
+[[package]]
 name = "zbus"
 version = "5.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
