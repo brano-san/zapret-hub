@@ -76,12 +76,20 @@ pub fn load_or_default(path: &Path) -> (Settings, Option<String>) {
     (Settings::default(), Some(format!("{kept}\n\n{err:#}")))
 }
 
-/// What a save from zapret-hub-cli leaves of `sent` against the settings in force: everything but
-/// turning the CLI on. A save that passed the gate just before the user turned the CLI off must not
-/// turn it back on (CLI spec 7.2).
-pub fn from_pipe(current: &Settings, mut sent: Settings) -> Settings {
-    sent.cli_enabled &= current.cli_enabled;
-    sent
+/// What a save leaves of `sent` against the settings in force. The window's goes as sent. One from
+/// zapret-hub-cli (`pipe`) never turns the CLI on: a save that passed the gate just before the user
+/// turned the CLI off must not turn it back on (CLI spec 7.2). Nor does it move the zapret folder:
+/// the SYSTEM service runs that folder's winws.exe, so any program of the user could pick what
+/// SYSTEM runs (CLI spec 5).
+pub fn to_save(current: &Settings, mut sent: Settings, pipe: bool) -> anyhow::Result<Settings> {
+    if pipe {
+        anyhow::ensure!(
+            sent.zapret_dir == current.zapret_dir,
+            "the zapret folder can be changed only in the Zapret Hub window (Settings)"
+        );
+        sent.cli_enabled &= current.cli_enabled;
+    }
+    Ok(sent)
 }
 
 /// A SOCKS5 address the way local clients listen: `IP:port`. Blank means none.
@@ -155,6 +163,7 @@ mod tests {
             ..Settings::default()
         };
         let off = Settings::default();
+        let from_pipe = |current: &Settings, sent: Settings| to_save(current, sent, true).unwrap();
         assert!(
             !from_pipe(&off, on.clone()).cli_enabled,
             "the user turned it off while the save was on its way"
@@ -165,6 +174,44 @@ mod tests {
             ..on.clone()
         };
         assert_eq!(from_pipe(&on, dark.clone()), dark, "the rest goes as sent");
+        assert!(
+            to_save(&off, on, false).unwrap().cli_enabled,
+            "the window turns it on"
+        );
+    }
+
+    #[test]
+    fn only_the_window_moves_the_zapret_folder() {
+        let current = Settings {
+            zapret_dir: Some(r"E:\Zapret".into()),
+            cli_enabled: true,
+            ..Settings::default()
+        };
+        let in_dir = |dir: Option<&str>| Settings {
+            zapret_dir: dir.map(str::to_owned),
+            ..current.clone()
+        };
+        for moved in [in_dir(Some(r"C:\Users\me\winws")), in_dir(None)] {
+            let refused = to_save(&current, moved.clone(), true).map_err(|err| err.to_string());
+            assert_eq!(
+                refused,
+                Err(
+                    "the zapret folder can be changed only in the Zapret Hub window (Settings)"
+                        .into()
+                ),
+                "{moved:?} from the pipe"
+            );
+            assert_eq!(
+                to_save(&current, moved.clone(), false).unwrap(),
+                moved,
+                "the window moves it"
+            );
+        }
+        assert_eq!(
+            to_save(&current, current.clone(), true).unwrap(),
+            current,
+            "the same folder goes through"
+        );
     }
 
     #[test]
