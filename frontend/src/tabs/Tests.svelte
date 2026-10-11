@@ -4,6 +4,7 @@
   import { app, change, refreshLive } from "$lib/app.svelte";
   import { estimateMinutes, ms, runDate, zapret2Name } from "$lib/format";
   import { S } from "$lib/strings";
+  import CopyButton from "../components/CopyButton.svelte";
   import ResultsTable from "../components/ResultsTable.svelte";
 
   let rows = $state<StrategyRow[]>([]);
@@ -11,7 +12,6 @@
   let chosen = $state<string[]>([]);
   let runs = $state<RunSummary[]>([]);
   let shown = $state<TestRun | null>(null);
-  let copied = $state(false);
   // The selection is set once; later reloads keep what the user chose.
   let picked = false;
 
@@ -27,7 +27,6 @@
 
   async function openRun(id: string): Promise<void> {
     shown = (await call(S.failed.run, commands.getRun(id))) ?? null;
-    copied = false;
   }
 
   async function load(): Promise<void> {
@@ -59,13 +58,6 @@
     if ((await change(S.failed.startTests, () => commands.startTests({ suite, strategies }))) !== undefined) {
       await refreshLive();
     }
-  }
-
-  async function copy(id: string): Promise<void> {
-    const text = await call(S.failed.report, commands.runReport(id));
-    if (text === undefined) return;
-    await navigator.clipboard.writeText(text);
-    copied = true;
   }
 
   function apply(name: string): void {
@@ -122,8 +114,7 @@
         {#if first && first.launch_error === null}
           <button class="primary" disabled={app.busy} onclick={() => apply(first.name)}>{S.tests.applyBest(first.name)}</button>
         {/if}
-        <button onclick={() => copy(run.id)}>{S.common.copy}</button>
-        {#if copied}<span class="ok">{S.tests.copied}</span>{/if}
+        <CopyButton text={() => call(S.failed.report, commands.runReport(run.id))} />
       </div>
       <!-- A run opens in its ranking: another run's sort (maybe a column this suite lacks) and open row do not carry over. -->
       {#key run.id}

@@ -1,10 +1,7 @@
 <script lang="ts">
   import { notices } from "$lib/notices.svelte";
   import { S } from "$lib/strings";
-
-  async function copy(title: string, text: string): Promise<void> {
-    await navigator.clipboard.writeText(text ? `${title}\n\n${text}` : title);
-  }
+  import CopyButton from "./CopyButton.svelte";
 </script>
 
 {#if notices.current}
@@ -16,7 +13,7 @@
     </div>
     {#if notice.text}<pre>{notice.text}</pre>{/if}
     <div class="buttons">
-      <button onclick={() => copy(notice.title, notice.text)}>{S.common.copy}</button>
+      <CopyButton text={() => (notice.text ? `${notice.title}\n\n${notice.text}` : notice.title)} />
       <button class="primary" onclick={() => notices.dismiss()}>{S.common.close}</button>
     </div>
   </aside>
