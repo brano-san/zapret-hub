@@ -22,6 +22,14 @@ pub struct Request {
     pub strategies: Vec<String>,
 }
 
+impl Request {
+    /// What `run` refuses before it touches anything.
+    pub fn check(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.strategies.is_empty(), "no strategies to test");
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(tag = "kind")]
 pub enum Progress {
@@ -53,11 +61,11 @@ pub fn run(
     cancel: &AtomicBool,
     progress: &(dyn Fn(Progress) + Sync),
 ) -> anyhow::Result<TestRun> {
+    request.check()?;
     anyhow::ensure!(
         probe::curl::available(),
         "curl.exe was not found: the tests need Windows 10 1803 or newer"
     );
-    anyhow::ensure!(!request.strategies.is_empty(), "no strategies to test");
     let id = exec::LocalTime::now().stamp();
     let work = prepare(folder, data_dir, request, socks5)?;
     let pending = pending_path(data_dir);
