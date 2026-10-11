@@ -92,7 +92,7 @@ fn the_banner_gives_the_version_and_the_compat_level() {
         Some(("self-built version Oct 11 2026 12:00:00".into(), 5))
     );
     assert_eq!(parse_banner("winws2: unknown option\n"), None);
-    assert_eq!(parse_banner("lua_compat_ver six"), None);
+    assert_eq!(parse_banner("github version v1 lua_compat_ver six"), None);
 }
 
 #[test]
@@ -120,6 +120,20 @@ fn info_is_empty_without_a_folder_and_names_what_is_wrong() {
         shown.error.is_some_and(|err| err.contains("winws2.exe")),
         "the error names the missing engine"
     );
+}
+
+#[test]
+fn a_start_that_fails_names_the_exe() {
+    let dir = tempfile::tempdir().unwrap();
+    common::fake_engine(dir.path(), "", common::LIB);
+    let engine = Engine::open(dir.path()).unwrap();
+    // An empty winws2.exe is no program: Windows refuses to start it (os error 193).
+    let err = engine.version().unwrap_err().to_string();
+    let exe = engine.exe().display().to_string();
+    assert!(err.contains(&exe), "the error names the exe: {err}");
+    assert!(err.contains("(os error 193)"), "and keeps its cause: {err}");
+    let shown = info(Some(&dir.path().display().to_string()));
+    assert_eq!(shown.error, Some(err), "the same text reaches Info");
 }
 
 #[test]
