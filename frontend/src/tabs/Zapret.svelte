@@ -168,6 +168,7 @@
 
       <section class="card">
         <h2>{S.zapret.fakesTitle}</h2>
+        <p class="muted">{S.zapret.fakesHint}</p>
         {#each FAKES as kind (kind)}
           {@const current = kind === "Discord" ? f.fakes.discord : f.fakes.game}
           <div class="row">
@@ -267,6 +268,11 @@
   .ranges input {
     width: 100%;
     min-width: 0;
+  }
+
+  /* The fake lists stand apart from each other and from the text above. */
+  .row {
+    margin-top: 10px;
   }
 
   /* The longest fake name is wider than a card between the 2- and 3-column layouts: the select gives way. */

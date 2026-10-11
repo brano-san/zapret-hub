@@ -304,6 +304,8 @@ export const S = {
     hostsApply: "Записать",
     hostsUpdated: "hosts обновлён.",
     fakesTitle: "Активные фейки",
+    fakesHint:
+      "Фейки — поддельные пакеты (файлы quic_initial, tls_clienthello и т.п.), которые winws отправляет перед настоящими, чтобы сбить с толку DPI. Оставьте выбор по умолчанию, пока стратегии не нужен конкретный файл. Чтобы выбрать, прогоните тесты с каждым фейком и сравните результаты.",
     fakes: { Discord: "Discord (UDP)", Game: "Игры (UDP)" } satisfies Record<FakeKind, string>,
     fakeUnknown: "свой файл",
     listsTitle: "Свои списки",
