@@ -41,8 +41,9 @@ type Cache = Mutex<Option<(Key, Result<Version, String>)>>;
 
 impl Engine {
     /// The root is `dir` or its `zapret-winws` (zapret-win-bundle), whichever holds
-    /// `lua\zapret-lib.lua`. Fails naming every missing file, and on a path with Cyrillic letters:
-    /// Cygwin does not carry them.
+    /// `lua\zapret-lib.lua`. Fails naming every missing file, on a path with Cyrillic letters
+    /// (Cygwin does not carry them) and on a drive root (`--chdir="E:\"` ends in `\"`, which
+    /// winws2 reads as an escaped quote).
     pub fn open(dir: impl AsRef<Path>) -> anyhow::Result<Self> {
         let dir = dir.as_ref();
         let root: PathBuf = [dir.to_path_buf(), dir.join("zapret-winws")]
@@ -54,6 +55,11 @@ impl Engine {
         anyhow::ensure!(
             !zapret::checks::has_cyrillic(&root.to_string_lossy()),
             "{} has Cyrillic letters, which winws2 (a Cygwin program) cannot use: move zapret2 to a folder with a Latin path",
+            root.display()
+        );
+        anyhow::ensure!(
+            !(root.has_root() && root.parent().is_none()),
+            "{} is the root of a drive, which winws2 cannot use (its path would end in \\ right before a quote): put zapret2 in a folder",
             root.display()
         );
         let exe_dir = EXE_DIRS

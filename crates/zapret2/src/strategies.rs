@@ -47,7 +47,8 @@ pub fn dir(data_dir: &Path) -> PathBuf {
 }
 
 /// The built-in ones, then the user's in natural order. A file named like a built-in one is left
-/// out: the built-in one would hide it anyway.
+/// out: the built-in one would hide it anyway. So is a file that cannot be read (a lock, no
+/// access): logged, so that it does not stop the others from being listed, applied or deleted.
 pub fn list(data_dir: &Path) -> anyhow::Result<Vec<Strategy>> {
     let dir = dir(data_dir);
     let mut own = Vec::new();
@@ -74,7 +75,13 @@ pub fn list(data_dir: &Path) -> anyhow::Result<Vec<Strategy>> {
             );
             continue;
         }
-        let text = zapret::read_text(&path).with_context(|| path.display().to_string())?;
+        let text = match zapret::read_text(&path) {
+            Ok(text) => text,
+            Err(err) => {
+                log::warn!("{} cannot be read and is skipped: {err}", path.display());
+                continue;
+            }
+        };
         own.push(Strategy {
             name: name.to_owned(),
             text: text.trim_start_matches('\u{feff}').to_owned(),
@@ -148,9 +155,11 @@ pub fn delete(data_dir: &Path, name: &str, active: Option<&str>) -> anyhow::Resu
 }
 
 /// The text as `winws2` arguments: lines that start with `#` dropped, the rest joined by spaces. A
-/// `#` inside a line is zapret2's own (`#var`) and stays (spec 5.1).
+/// `#` inside a line is zapret2's own (`#var`) and stays (spec 5.1). A BOM before the first line
+/// goes too: `trim` keeps it, and it would hide that line's `#`.
 pub fn args(text: &str) -> String {
-    text.lines()
+    text.trim_start_matches('\u{feff}')
+        .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .collect::<Vec<_>>()
@@ -196,9 +205,13 @@ pub fn tail(engine: &Engine, folder: Option<&Folder>, text: &str) -> anyhow::Res
     Ok(format!("--chdir=\"{}\" {args}", engine.root().display()))
 }
 
-/// What `--dry-run` cannot see (spec 5.3): every `--lua-desync` function defined as
-/// `function <name>(` in `lua\*.lua`, in `--lua-init` code or in a `--lua-init=@<file>`; and no
-/// `\"`, which a placeholder right before a quote makes.
+/// A lenient first pass over what `--dry-run` cannot see (spec 5.3), not winws2's own option
+/// parsing: every `--lua-desync=<function>` must be defined as `function <name>(` in some
+/// `lua\*.lua` (one this strategy loads or not), in `--lua-init=<code>` or in a
+/// `--lua-init=@<file>`; and the line has no `\"`, which a placeholder right before a quote makes.
+/// Only the `--option=value` spelling is read, and quotes just group (`"--lua-desync=x"` and
+/// `--lua-init="@C:\My Lua\x.lua"` read as without them): single-dash, abbreviated and
+/// space-separated options are not seen. `--intercept=0` (step 3) is the real check.
 pub fn check(engine: &Engine, tail: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
         !tail.contains("\\\""),
@@ -212,23 +225,26 @@ pub fn check(engine: &Engine, tail: &str) -> anyhow::Result<()> {
             sources.push(zapret::read_text(&path).with_context(|| path.display().to_string())?);
         }
     }
-    let tokens = quoted_tokens(tail);
+    let tokens: Vec<String> = quoted_tokens(tail)
+        .into_iter()
+        .map(|token| token.replace('"', ""))
+        .collect();
     for init in tokens.iter().filter_map(|t| t.strip_prefix("--lua-init=")) {
         match init.strip_prefix('@') {
             Some(file) => {
-                let path = engine.root().join(file.trim_matches('"'));
+                let path = engine.root().join(file);
                 sources.push(
                     zapret::read_text(&path)
                         .with_context(|| format!("--lua-init file {}", path.display()))?,
                 );
             }
-            None => sources.push(init.trim_matches('"').to_owned()),
+            None => sources.push(init.to_owned()),
         }
     }
     let mut missing: Vec<&str> = tokens
         .iter()
         .filter_map(|t| t.strip_prefix("--lua-desync="))
-        .map(|call| call.trim_matches('"').split(':').next().unwrap_or_default())
+        .map(|call| call.split(':').next().unwrap_or_default())
         .filter(|function| {
             let definition = format!("function {function}(");
             !sources.iter().any(|source| source.contains(&definition))

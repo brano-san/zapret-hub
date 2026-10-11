@@ -99,6 +99,44 @@ fn comment_lines_go_and_zapret2_hashes_stay() {
 }
 
 #[test]
+fn a_byte_order_mark_does_not_turn_the_first_comment_into_arguments() {
+    // `trim` keeps U+FEFF, so a text with a BOM (the editor, the CLI) must lose it in `args`.
+    assert_eq!(args("\u{feff}# comment\n--x"), "--x");
+    assert_eq!(args("\u{feff}--x\n# comment"), "--x");
+}
+
+#[test]
+fn a_file_that_cannot_be_read_is_skipped_and_the_rest_still_works() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    let data = tempfile::tempdir().unwrap();
+    for name in ["mine", "locked"] {
+        strategies::write(data.path(), name, "--wf-tcp-out=443\n").unwrap();
+    }
+    // Held with no sharing, as an editor or a scanner may: every other open fails (os error 32).
+    let locked = strategies::dir(data.path()).join("locked.txt");
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(&locked)
+        .unwrap();
+    assert!(fs::read(&locked).is_err());
+    // The built-in ones, then these of the user's.
+    let listed = |users: &[&str]| -> Vec<(String, bool)> {
+        ["general", "general-sni"]
+            .iter()
+            .map(|name| (name.to_string(), true))
+            .chain(users.iter().map(|name| (name.to_string(), false)))
+            .collect()
+    };
+    assert_eq!(names(data.path()), listed(&["mine"]));
+    strategies::delete(data.path(), "mine", None).unwrap();
+    assert_eq!(names(data.path()), listed(&[]));
+    // Skipped, not forgotten: it is listed again once it can be read.
+    drop(held);
+    assert_eq!(names(data.path()), listed(&["locked"]));
+}
+
+#[test]
 fn the_command_line_fills_every_placeholder() {
     let dir = tempfile::tempdir().unwrap();
     // Spaces as in `C:\Program Files\…`: every path must stay one quoted argument.
@@ -165,8 +203,10 @@ fn flowseal_placeholders_need_the_flowseal_folder() {
     assert!(own.starts_with(&format!("--chdir=\"{}\" ", engine.root().display())));
 }
 
+/// A lenient first pass, not winws2's own option parsing: step 3 (`--intercept=0`) is the real
+/// check.
 #[test]
-fn the_static_check_finds_every_desync_function_where_winws2_would() {
+fn the_static_check_looks_for_each_desync_function_in_the_lua_files_and_inits() {
     let dir = tempfile::tempdir().unwrap();
     let engine = engine(dir.path());
     fs::write(
@@ -204,6 +244,43 @@ fn the_static_check_finds_every_desync_function_where_winws2_would() {
         check(&engine, "--lua-init=@missing.lua --lua-desync=fake").unwrap_err()
     );
     assert!(err.contains("missing.lua"), "{err}");
+}
+
+#[test]
+fn a_quote_before_the_at_sign_still_names_a_lua_init_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine(dir.path());
+    let spaced = dir.path().join("My Lua");
+    fs::create_dir_all(&spaced).unwrap();
+    let file = spaced.join("x.lua");
+    fs::write(&file, "function spaced(ctx, desync) end").unwrap();
+    // A file with a space, whichever side of the `@` the quote is on: not inline code.
+    for init in [
+        format!("--lua-init=\"@{}\"", file.display()),
+        format!("--lua-init=@\"{}\"", file.display()),
+    ] {
+        check(&engine, &format!("{init} --lua-desync=spaced:x=1")).unwrap();
+    }
+    let err = format!(
+        "{:#}",
+        check(&engine, "--lua-init=\"@missing.lua\"").unwrap_err()
+    );
+    assert!(err.contains("missing.lua"), "{err}");
+}
+
+#[test]
+fn a_quoted_desync_option_is_checked_like_an_unquoted_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine(dir.path());
+    let err = format!(
+        "{:#}",
+        check(
+            &engine,
+            "\"--lua-desync=fakee:blob=x\" --lua-desync=\"multisplit:pos=1\""
+        )
+        .unwrap_err()
+    );
+    assert!(err.contains("fakee, multisplit"), "{err}");
 }
 
 #[test]

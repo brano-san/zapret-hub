@@ -76,6 +76,21 @@ fn a_cyrillic_path_is_refused() {
 }
 
 #[test]
+fn a_drive_root_is_refused() {
+    // `--chdir="C:\"` ends in `\"`, which winws2 reads as an escaped quote: no strategy would pass.
+    let temp = std::env::temp_dir();
+    let Some(std::path::Component::Prefix(drive)) = temp.components().next() else {
+        panic!("{} has no drive", temp.display());
+    };
+    let root = format!(r"{}\", drive.as_os_str().to_string_lossy());
+    let err = error(Path::new(&root));
+    assert!(
+        err.contains(&root) && err.contains("put zapret2 in a folder"),
+        "{err}"
+    );
+}
+
+#[test]
 fn the_banner_gives_the_version_and_the_compat_level() {
     let github =
         "github version v1.0.5.2 (6b6c63e3385fa73f8af3be4a69171e947f5a319d) lua_compat_ver 6\n\n";
