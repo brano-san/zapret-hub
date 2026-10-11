@@ -15,7 +15,7 @@
 ## Общие ограничения
 
 - Только Windows 10/11 x64. `zapret-hub-cli.exe` — бинарь отдельного пакета `crates/cli`: без `tauri` и без манифеста `requireAdministrator`. Он запускается без прав и сам ничего в системе не меняет.
-- Канал `\\.\pipe\zapret-hub-cli`, один на машину. DACL `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;<SID пользователя из токена процесса>)`, метка `S:(ML;;NW;;;ME)`, `PIPE_REJECT_REMOTE_CLIENTS`, `FILE_FLAG_FIRST_PIPE_INSTANCE` у первого экземпляра. Имя занято — запись в журнал и уведомление «Канал CLI занят другой программой».
+- Канал `\\.\pipe\zapret-hub-cli`, один на машину. DACL `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;<SID пользователя из токена процесса>)`, метка `S:(ML;;NWNR;;;ME)`, `PIPE_REJECT_REMOTE_CLIENTS`, `FILE_FLAG_FIRST_PIPE_INSTANCE` у первого экземпляра. Имя занято — запись в журнал и уведомление «Канал CLI занят другой программой».
 - Протокол v1: одно подключение — одна строка JSON с `\n` в каждую сторону. Запрос — `{"v":1,"cmd":"…","args":{…}}`, где `cmd` и `args` — имена и аргументы IPC-команд окна из `bindings.ts`; новая команда одна — `tests_status`. Ответ — `{"ok":true,"data":…}`, `{"ok":false,"error":"…"}` или `{"ok":false,"refused":true,"error":"…"}`.
 - Отказ (`refused`, код 3) значит, что приложение ничего не выполняло: CLI выключен (`the CLI is off: enable it in Zapret Hub → Settings`), запрос длиннее 1 МиБ, не разбирается или содержит неизвестную команду, другая версия (`protocol v<N> is not supported: update zapret-hub-cli.exe and Zapret Hub together`).
 - `cli_enabled` по умолчанию `false` и проверяется на каждый запрос. Канал открыт всегда, переключение действует без перезапуска.
@@ -83,7 +83,7 @@ package.json, frontend/package.json, package-lock.json   версия 0.2.0
 - `cargo clippy --workspace --all-targets -- -D warnings` — без замечаний; `cargo fmt --all -- --check` — без изменений.
 - `cargo run -p zapret-hub --bin export-bindings` добавил в `bindings.ts` ровно две строки (поле `cli_enabled`).
 - `vitest run`: 10 тестов проходят, новый сначала падал; `svelte-check`: 0 ошибок, 0 предупреждений.
-- Настоящий DACL созданного канала, прочитанный обратно через `GetSecurityInfo`: `D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x12019f;;;S-1-5-21-…)S:AI(ML;;NW;;;ME)` — это `GA` и `GRGW` в терминах файла.
+- Настоящий DACL созданного канала, прочитанный обратно через `GetSecurityInfo`: `D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;0x12019f;;;S-1-5-21-…)S:AI(ML;;NWNR;;;ME)` — это `GA` и `GRGW` в терминах файла.
 - Бинарь без приложения: `status` → код 3 и «not running»; `version` → `{"app": null, "cli": "0.1.0", "protocol": 1}`, код 0; `service remove` → код 2; ошибки clap → JSON с кодом 2, без ANSI-последовательностей.
 - `tools/package.ps1` разобран парсером PowerShell; релизную сборку проверка не запускала.
 - Внешние API сверены с исходниками версий из `Cargo.lock`:
@@ -849,7 +849,7 @@ fn the_descriptor_names_this_user() {
     assert!(sid.starts_with("S-1-5-"), "{sid}");
     assert_eq!(
         pipe::sddl(&sid),
-        format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;{sid})S:(ML;;NW;;;ME)")
+        format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;{sid})S:(ML;;NWNR;;;ME)")
     );
 }
 
@@ -906,7 +906,7 @@ fn the_pipe_lets_in_system_administrators_and_this_user_only() {
     assert!(sddl.contains(&format!(";;;{sid})")), "{sddl}");
     assert!(sddl.contains(";;;SY)") && sddl.contains(";;;BA)"), "{sddl}");
     assert_eq!(sddl.matches("(A;").count(), 3, "nobody else: {sddl}");
-    assert!(sddl.contains("(ML;;NW;;;ME)"), "{sddl}");
+    assert!(sddl.contains("(ML;;NWNR;;;ME)"), "{sddl}");
 }
 ```
 
@@ -971,9 +971,9 @@ use crate::MAX_REQUEST;
 pub const NAME: &str = r"\\.\pipe\zapret-hub-cli";
 
 /// SYSTEM and Administrators may do anything, `user` may read and write, nobody else may open it;
-/// Medium integrity keeps sandboxed (Low) programs from writing (spec 5).
+/// Medium integrity keeps sandboxed (Low) programs from writing and reading (spec 5).
 pub fn sddl(user: &str) -> String {
-    format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;{user})S:(ML;;NW;;;ME)")
+    format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;{user})S:(ML;;NWNR;;;ME)")
 }
 
 /// `S-1-5-21-…` of the user this process runs as: from its token, so an elevated app still names
