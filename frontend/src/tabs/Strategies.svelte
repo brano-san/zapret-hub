@@ -76,6 +76,12 @@
 
 <div class="split">
   <section class="card scroll">
+    {#if app.overview && !app.overview.zapret2.dir}
+      <p class="muted">
+        {S.strategies.zapret2Off}
+        <button class="link" onclick={() => (app.tab = "settings")}>{S.overview.zapret2Connect}</button>
+      </p>
+    {/if}
     <input class="wide" placeholder={S.strategies.search} bind:value={query} aria-label={S.strategies.search} />
     <table>
       <thead>

@@ -90,16 +90,17 @@
       <div class="buttons"><button disabled={app.busy} onclick={checkUpdate}>{S.overview.checkUpdate}</button></div>
     </section>
 
-    {#if o.zapret2.dir}
-      <section class="card">
-        <h2>{S.overview.zapret2}</h2>
-        {#if o.zapret2.error}
-          <pre class="bad">{o.zapret2.error}</pre>
-        {:else}
-          <p>{S.overview.version(o.zapret2.version)}</p>
-        {/if}
-      </section>
-    {/if}
+    <section class="card">
+      <h2>{o.zapret2.dir ? S.overview.zapret2 : S.overview.zapret2Off}</h2>
+      {#if !o.zapret2.dir}
+        <p class="muted">{S.overview.zapret2OffHint}</p>
+        <div class="buttons"><button onclick={() => (app.tab = "settings")}>{S.overview.zapret2Connect}</button></div>
+      {:else if o.zapret2.error}
+        <pre class="bad">{o.zapret2.error}</pre>
+      {:else}
+        <p>{S.overview.version(o.zapret2.version)}</p>
+      {/if}
+    </section>
 
     <section class="card">
       <h2>{S.overview.proxy}</h2>
