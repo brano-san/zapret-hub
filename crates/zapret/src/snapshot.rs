@@ -7,7 +7,7 @@ use crate::folder::Folder;
 use crate::game_filter::{self, GameFilter};
 use crate::ipset::{self, IpsetMode};
 use crate::procs::{self, Proc};
-use crate::service::{self, SERVICE, SvcState};
+use crate::service::{self, SERVICE, SERVICE2, SvcState, WINWS2};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ServiceSnap {
@@ -25,6 +25,14 @@ pub struct Snapshot {
     pub strategy: Option<String>,
     /// winws started by a `.bat`, not by the service.
     pub manual_winws: Vec<Proc>,
+    /// The same three for zapret2: the `zapret2` service, its `zapret2:<name>` and winws2 started
+    /// by hand (zapret2 spec 6). A `pending.json` from before zapret2 has none of them.
+    #[serde(default)]
+    pub service2: Option<ServiceSnap>,
+    #[serde(default)]
+    pub strategy2: Option<String>,
+    #[serde(default)]
+    pub manual_winws2: Vec<Proc>,
     pub ipset: IpsetMode,
     pub ipset_backup: bool,
     /// The flag file `utils\game_filter.enabled`, which the `game_filter` operation writes
@@ -72,29 +80,16 @@ impl Snapshot {
     /// Fails closed: what it cannot read would be restored as something else, so an operation
     /// does not start on it.
     pub fn take(folder: &Folder, operation: &str) -> anyhow::Result<Self> {
-        let status = service::status(SERVICE);
-        let config = service::config(SERVICE);
-        anyhow::ensure!(
-            status.is_none() || config.is_some(),
-            "the zapret service exists, but its ImagePath could not be read from the registry, so \"{operation}\" did not start; remove the service with service.bat or `sc delete zapret` if it is broken"
-        );
-        let service = config.map(|config| ServiceSnap {
-            image_path: config.image_path,
-            auto_start: config.auto_start,
-            running: matches!(
-                status,
-                Some((SvcState::Running | SvcState::StartPending, _))
-            ),
-        });
-        let service_pid = status.map(|(_, pid)| pid).filter(|pid| *pid != 0);
+        let (service, strategy, manual_winws) = engine(SERVICE, "winws.exe", operation)?;
+        let (service2, strategy2, manual_winws2) = engine(SERVICE2, WINWS2, operation)?;
         Ok(Self {
             operation: operation.to_owned(),
             service,
-            strategy: service::strategy_of(SERVICE),
-            manual_winws: procs::find("winws.exe")
-                .into_iter()
-                .filter(|p| Some(p.pid) != service_pid)
-                .collect(),
+            strategy,
+            manual_winws,
+            service2,
+            strategy2,
+            manual_winws2,
             ipset: ipset::try_mode(folder)?,
             ipset_backup: ipset::has_backup(folder),
             game_filter: game_filter::try_read(folder)?,
@@ -159,10 +154,19 @@ impl Snapshot {
             }
         };
         note("files", self.restore_files(folder));
-        note("stop zapret", service::stop(SERVICE));
-        note("stop winws", procs::kill_all("winws.exe"));
-        note("service", self.restore_service());
-        for proc in &self.manual_winws {
+        for (name, image) in [(SERVICE, "winws.exe"), (SERVICE2, WINWS2)] {
+            note(&format!("stop {name}"), service::stop(name));
+            note(&format!("stop {image}"), procs::kill_all(image));
+        }
+        note(
+            "service",
+            restore_service(SERVICE, self.service.as_ref(), self.strategy.as_deref()),
+        );
+        note(
+            "service zapret2",
+            restore_service(SERVICE2, self.service2.as_ref(), self.strategy2.as_deref()),
+        );
+        for proc in self.manual_winws.iter().chain(&self.manual_winws2) {
             note("start winws", procs::spawn_detached(proc));
         }
         log::info!(
@@ -173,25 +177,60 @@ impl Snapshot {
         anyhow::ensure!(errors.is_empty(), "{}", errors.join("\n\n"));
         Ok(())
     }
+}
 
-    fn restore_service(&self) -> anyhow::Result<()> {
-        let Some(snap) = &self.service else {
-            return service::stop_and_delete(SERVICE);
-        };
-        let same = service::config(SERVICE).is_some_and(|config| {
-            config.image_path == snap.image_path && config.auto_start == snap.auto_start
-        });
-        if !same {
-            service::stop_and_delete(SERVICE)?;
-            service::create(SERVICE, &snap.image_path, snap.auto_start)?;
-        }
-        if let Some(name) = &self.strategy {
-            service::set_strategy_of(SERVICE, name)?;
-        }
-        if snap.running {
-            service::start(SERVICE)
-        } else {
-            service::stop(SERVICE)
-        }
+/// One engine's service, its recorded strategy and the processes of its image the service did
+/// not start. Fails closed, as `take`.
+fn engine(
+    name: &str,
+    image: &str,
+    operation: &str,
+) -> anyhow::Result<(Option<ServiceSnap>, Option<String>, Vec<Proc>)> {
+    let status = service::status(name);
+    let config = service::config(name);
+    anyhow::ensure!(
+        status.is_none() || config.is_some(),
+        "the {name} service exists, but its ImagePath could not be read from the registry, so \"{operation}\" did not start; remove the service with `sc delete {name}` if it is broken"
+    );
+    let snap = config.map(|config| ServiceSnap {
+        image_path: config.image_path,
+        auto_start: config.auto_start,
+        running: matches!(
+            status,
+            Some((SvcState::Running | SvcState::StartPending, _))
+        ),
+    });
+    let service_pid = status.map(|(_, pid)| pid).filter(|pid| *pid != 0);
+    let manual = procs::find(image)
+        .into_iter()
+        .filter(|p| Some(p.pid) != service_pid)
+        .collect();
+    Ok((snap, service::strategy_of(name), manual))
+}
+
+/// One engine's service as the snapshot holds it: gone when there was none, else its
+/// configuration, strategy name and state.
+fn restore_service(
+    name: &str,
+    snap: Option<&ServiceSnap>,
+    strategy: Option<&str>,
+) -> anyhow::Result<()> {
+    let Some(snap) = snap else {
+        return service::stop_and_delete(name);
+    };
+    let same = service::config(name).is_some_and(|config| {
+        config.image_path == snap.image_path && config.auto_start == snap.auto_start
+    });
+    if !same {
+        service::stop_and_delete(name)?;
+        service::create(name, &snap.image_path, snap.auto_start)?;
+    }
+    if let Some(strategy) = strategy {
+        service::set_strategy_of(name, strategy)?;
+    }
+    if snap.running {
+        service::start(name)
+    } else {
+        service::stop(name)
     }
 }

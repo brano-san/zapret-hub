@@ -30,6 +30,17 @@ fn sample(ipset: IpsetMode) -> Snapshot {
             exe: Some(PathBuf::from(r"E:\Zapret\bin\winws.exe")),
             args: vec!["--wf-tcp=80".into()],
         }],
+        service2: Some(ServiceSnap {
+            image_path: r#""D:\zapret2\winws2.exe" --chdir="D:\zapret2" --wf-tcp-out=443"#.into(),
+            auto_start: true,
+            running: false,
+        }),
+        strategy2: Some("zapret2:mine".into()),
+        manual_winws2: vec![Proc {
+            pid: 43,
+            exe: Some(PathBuf::from(r"D:\zapret2\winws2.exe")),
+            args: vec!["--wf-tcp-out=443".into()],
+        }],
         ipset,
         ipset_backup: false,
         game_filter: filter(GameFilterMode::Tcp, "2000-2100", "1024-65535"),
@@ -49,6 +60,39 @@ fn pending_json_round_trips() {
     Snapshot::clear(&path).unwrap();
     Snapshot::clear(&path).unwrap();
     assert_eq!(Snapshot::load(&path).unwrap(), None);
+}
+
+#[test]
+fn a_pending_json_from_before_zapret2_still_loads() {
+    let data = tempfile::tempdir().unwrap();
+    let path = pending_path(data.path());
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        r#"{
+  "operation": "apply",
+  "service": {
+    "image_path": "\"E:\\Zapret\\bin\\winws.exe\"   --wf-tcp 80",
+    "auto_start": true,
+    "running": true
+  },
+  "strategy": "general (ALT11)",
+  "manual_winws": [],
+  "ipset": "loaded",
+  "ipset_backup": false,
+  "game_filter": {
+    "mode": "tcp",
+    "tcp": "2000-2100",
+    "udp": "1024-65535"
+  }
+}"#,
+    )
+    .unwrap();
+    let snap = Snapshot::load(&path).unwrap().unwrap();
+    assert_eq!(snap.strategy.as_deref(), Some("general (ALT11)"));
+    assert_eq!(snap.service2, None);
+    assert_eq!(snap.strategy2, None);
+    assert!(snap.manual_winws2.is_empty());
 }
 
 #[test]
@@ -204,6 +248,8 @@ fn live_begin_restores_a_pending_json_first() {
         "the service came back as it was"
     );
     assert_eq!(snap.strategy, earlier.strategy);
+    assert_eq!(snap.service2, earlier.service2);
+    assert_eq!(snap.strategy2, earlier.strategy2);
     assert_eq!(snap.ipset, earlier.ipset);
     assert_eq!(Snapshot::load(&pending).unwrap(), Some(snap));
 }
