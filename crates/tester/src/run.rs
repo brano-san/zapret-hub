@@ -67,7 +67,17 @@ pub fn run(
         "curl.exe was not found: the tests need Windows 10 1803 or newer"
     );
     let id = exec::LocalTime::now().stamp();
+    // A Cancel or Exit while the DPI suite downloads: zapret is not touched at all.
+    let not_canceled = || -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !cancel.load(Ordering::Relaxed),
+            "the test run was canceled before anything changed"
+        );
+        Ok(())
+    };
+    not_canceled()?;
     let work = prepare(folder, data_dir, request, socks5)?;
+    not_canceled()?;
     let pending = pending_path(data_dir);
     // An earlier pending.json is restored first; when that fails nothing starts (spec 10).
     let snapshot = zapret::snapshot::begin(folder, "tests", &pending)?;
