@@ -1,6 +1,7 @@
 //! The check that runs winws2 and the `zapret2` service (zapret2 spec 5.3, 6). `zapret::service`
 //! does the `sc` work; this module knows what zapret2 needs from it.
 
+use anyhow::Context as _;
 use std::os::windows::process::CommandExt as _;
 use std::path::Path;
 use std::process::Command;
@@ -58,7 +59,8 @@ pub fn validate(engine: &Engine, tail: &str) -> anyhow::Result<()> {
 fn run(engine: &Engine, args: &str) -> anyhow::Result<exec::Output> {
     let mut cmd = Command::new(engine.exe());
     cmd.raw_arg(args).current_dir(engine.root());
-    Ok(exec::run(&mut cmd, Duration::from_secs(30), None)?)
+    exec::run(&mut cmd, Duration::from_secs(30), None)
+        .with_context(|| format!("starting {} {args}", engine.exe().display()))
 }
 
 /// Steps 2–5 of spec 6: Flowseal's service and winws gone, the previous `zapret2` gone, TCP
@@ -67,6 +69,7 @@ pub fn install(engine: &Engine, strategy: &Strategy, tail: &str) -> anyhow::Resu
     service::stop_and_delete(SERVICE)?;
     zapret::procs::kill_all("winws.exe")?;
     service::stop_and_delete(SERVICE2)?;
+    zapret::procs::kill_all(service::WINWS2)?;
     let _ = service::enable_tcp_timestamps();
     service::create(SERVICE2, &bin_path(engine, tail), true)?;
     service::start(SERVICE2)?;

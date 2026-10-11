@@ -83,8 +83,20 @@ fn a_bad_name_is_refused_before_any_file_is_written() {
     common::fake_engine(dir.path(), "", common::LIB);
     let engine = Engine::open(dir.path()).unwrap();
     let data = tempfile::tempdir().unwrap();
-    for name in ["..\\evil", "a/b", "general", "con"] {
-        assert!(save(&engine, None, data.path(), name, "--wf-tcp-out=443", true).is_err());
+    for (name, refusal) in [
+        ("..\\evil", "a name is 1-40"),
+        ("a/b", "a name is 1-40"),
+        ("general", "is built in"),
+        ("con", "Windows device name"),
+    ] {
+        let err = format!(
+            "{:#}",
+            save(&engine, None, data.path(), name, "--wf-tcp-out=443", true).unwrap_err()
+        );
+        assert!(
+            err.contains(refusal) && !err.contains("os error 193"),
+            "{name}: {err}"
+        );
     }
     assert!(!strategies::dir(data.path()).exists());
 }
