@@ -82,7 +82,7 @@
         <button class="link" onclick={() => (app.tab = "settings")}>{S.overview.zapret2Connect}</button>
       </p>
     {/if}
-    <input class="wide" placeholder={S.strategies.search} bind:value={query} aria-label={S.strategies.search} />
+    <input class="wide search" placeholder={S.strategies.search} bind:value={query} aria-label={S.strategies.search} />
     <table>
       <thead>
         <tr><th>{S.strategies.name}</th><th>{S.strategies.result}</th></tr>
@@ -267,6 +267,10 @@
     gap: 14px;
     min-height: 0;
     flex: 1;
+  }
+
+  .search {
+    margin-bottom: 10px;
   }
 
   .scroll {
