@@ -106,6 +106,24 @@ fn begin_does_not_start_over_a_damaged_pending_json() {
 }
 
 #[test]
+fn begin_says_how_to_get_past_a_pending_json_it_cannot_read() {
+    let dir = common::fake_zapret();
+    let folder = common::folder(&dir);
+    let data = tempfile::tempdir().unwrap();
+    let pending = pending_path(data.path());
+    fs::create_dir_all(&pending).unwrap(); // reading it fails with Access denied
+    let err = format!(
+        "{:#}",
+        snapshot::begin(&folder, "tests", &pending).unwrap_err()
+    );
+    for part in ["pending.json", "did not start", "Deleting"] {
+        assert!(err.contains(part), "{part}: {err}");
+    }
+    let err = format!("{:#}", Snapshot::clear(&pending).unwrap_err());
+    assert!(err.contains("pending.json"), "{err}");
+}
+
+#[test]
 fn begin_does_not_start_without_the_whole_state() {
     let dir = common::fake_zapret();
     let folder = common::folder(&dir);

@@ -41,8 +41,14 @@ pub fn pending_path(data_dir: &Path) -> PathBuf {
 /// first; when that fails, or the file cannot be read, nothing starts and the file stays. After a
 /// successful restore the file is removed; then the state is taken and written to `pending`.
 pub fn begin(folder: &Folder, operation: &str, pending: &Path) -> anyhow::Result<Snapshot> {
-    if let Some(earlier) = Snapshot::load(pending)? {
-        let (file, was) = (pending.display(), &earlier.operation);
+    let file = pending.display();
+    let earlier = Snapshot::load(pending).map_err(|err| {
+        anyhow::anyhow!(
+            "{file} cannot be read, so \"{operation}\" did not start. Deleting {file} lets operations go on without restoring the state it holds.\n\n{err:#}"
+        )
+    })?;
+    if let Some(earlier) = earlier {
+        let was = &earlier.operation;
         earlier.restore(folder).map_err(|err| {
             anyhow::anyhow!(
                 "{file} holds the unfinished operation \"{was}\" and its state could not be restored, so \"{operation}\" did not start. Deleting {file} lets operations go on without restoring that state.\n\n{err:#}"
@@ -120,13 +126,15 @@ impl Snapshot {
                     .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?,
             )),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(err.into()),
+            Err(err) => Err(anyhow::Error::new(err).context(path.display().to_string())),
         }
     }
 
     pub fn clear(path: &Path) -> anyhow::Result<()> {
         match std::fs::remove_file(path) {
-            Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(err.into()),
+            Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+                Err(anyhow::Error::new(err).context(path.display().to_string()))
+            }
             _ => Ok(()),
         }
     }

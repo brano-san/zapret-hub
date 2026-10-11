@@ -228,7 +228,7 @@ fn recover(app: &AppHandle) {
             let broken = pending.with_extension("json.broken");
             let moved = match std::fs::rename(&pending, &broken) {
                 Ok(()) => broken.display().to_string(),
-                Err(rename) => rename.to_string(),
+                Err(rename) => format!("{}\n\n{rename}", texts::recovery_failed(&pending)),
             };
             actions::notice(
                 app,
