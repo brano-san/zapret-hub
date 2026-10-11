@@ -96,7 +96,8 @@ pub fn enter_test_any(folder: &Folder) -> anyhow::Result<()> {
             saved.display()
         );
     } else if list.is_file() {
-        std::fs::copy(&list, &saved)?;
+        // Moved, not copied: a copy cut short would later be put back as the real list.
+        std::fs::rename(&list, &saved)?;
     } else {
         std::fs::write(&saved, "")?;
     }
