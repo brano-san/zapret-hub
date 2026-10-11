@@ -161,6 +161,11 @@
 {/snippet}
 
 <style>
+  /* The results table sits in its own component: it follows the buttons above it with the usual gap. */
+  .card :global(.buttons + table) {
+    margin-top: 10px;
+  }
+
   .choices {
     columns: 3 220px;
     margin-top: 8px;
