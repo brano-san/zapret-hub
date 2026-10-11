@@ -1,7 +1,9 @@
 mod common;
 
 use zapret2::Engine;
-use zapret2::circular::{Edit, NoteKind, Settings, Target, analyze, apply, merge, parse_variant};
+use zapret2::circular::{
+    CircularEdit, CircularSettings, CircularTarget, NoteKind, analyze, apply, merge, parse_variant,
+};
 use zapret2::strategies::{args, check};
 
 /// As the release has them, with `\n` line ends whatever Git checked out.
@@ -33,9 +35,9 @@ const MANUAL: &str = "\
 --lua-desync=multisplit:strategy=2
 ";
 
-fn edit(variants: &[&str], stop: bool) -> Edit {
-    Edit {
-        settings: Settings::default(),
+fn edit(variants: &[&str], stop: bool) -> CircularEdit {
+    CircularEdit {
+        settings: CircularSettings::default(),
         variants: variants.iter().map(|v| (*v).to_owned()).collect(),
         stop,
     }
@@ -58,7 +60,7 @@ fn a_circular_profile_is_read_as_numbered_variants() {
     assert_eq!(rotating.filter, "--filter-tcp=80,443 --filter-l7=http,tls");
     assert_eq!(
         rotating.circular,
-        Some(Settings {
+        Some(CircularSettings {
             fails: Some(4),
             retrans: Some(2),
             extra: vec!["maxseq=16384".into()],
@@ -165,9 +167,9 @@ fn the_builder_turns_a_plain_profile_into_a_circular_one_and_reads_it_back() {
     let variant1 = google.plain.clone();
     let text = apply(
         &alt11(),
-        &Target::Profile(google.index),
-        &Edit {
-            settings: Settings {
+        &CircularTarget::Profile(google.index),
+        &CircularEdit {
+            settings: CircularSettings {
                 fails: Some(2),
                 retrans: None,
                 extra: Vec::new(),
@@ -220,8 +222,8 @@ fn the_builder_turns_a_plain_profile_into_a_circular_one_and_reads_it_back() {
     // Writing what was read back changes nothing.
     let again = apply(
         &text,
-        &Target::Profile(3),
-        &Edit {
+        &CircularTarget::Profile(3),
+        &CircularEdit {
             settings: profile.circular.clone().unwrap(),
             variants: profile.variants.iter().map(|v| v.text.clone()).collect(),
             stop: true,
@@ -234,7 +236,7 @@ fn the_builder_turns_a_plain_profile_into_a_circular_one_and_reads_it_back() {
 #[test]
 fn a_new_profile_goes_after_the_chosen_one_and_brings_its_blobs() {
     let text = "--wf-tcp-out=443\n--lua-init=@\"%LUA%zapret-lib.lua\"\n--filter-tcp=80 --lua-desync=fake\n--new\n--filter-udp=443 --lua-desync=fake\n";
-    let target = Target::New {
+    let target = CircularTarget::New {
         after: 0,
         filter: "--filter-tcp=443 --filter-l7=tls --hostlist-domains=example.com".into(),
     };
@@ -265,7 +267,7 @@ fn a_new_profile_goes_after_the_chosen_one_and_brings_its_blobs() {
 "
     );
     // After the last profile: at the end.
-    let last = Target::New {
+    let last = CircularTarget::New {
         after: 1,
         filter: "--filter-tcp=443".into(),
     };
@@ -276,26 +278,29 @@ fn a_new_profile_goes_after_the_chosen_one_and_brings_its_blobs() {
 #[test]
 fn the_builder_refuses_what_it_cannot_write() {
     let text = "--filter-tcp=443 --lua-desync=fake\n";
-    let err = |target: Target, variants: &[&str]| {
+    let err = |target: CircularTarget, variants: &[&str]| {
         apply(text, &target, &edit(variants, false))
             .unwrap_err()
             .to_string()
     };
     assert_eq!(
-        err(Target::Profile(1), &["--lua-desync=x"]),
+        err(CircularTarget::Profile(1), &["--lua-desync=x"]),
         "the strategy has no profile 2"
     );
     assert_eq!(
-        err(Target::Profile(0), &["--lua-desync=x", "--filter-tcp=80"]),
+        err(
+            CircularTarget::Profile(0),
+            &["--lua-desync=x", "--filter-tcp=80"]
+        ),
         "variant 2: a variant has only --payload= and --lua-desync= options, not --filter-tcp=80"
     );
     assert_eq!(
-        err(Target::Profile(0), &["# nothing"]),
+        err(CircularTarget::Profile(0), &["# nothing"]),
         "variant 1: a variant has no --lua-desync="
     );
     assert_eq!(
         err(
-            Target::New {
+            CircularTarget::New {
                 after: 0,
                 filter: "--filter-tcp=443 --new".into()
             },
@@ -313,7 +318,7 @@ fn a_line_with_the_new_option_is_split_around_the_inserted_profile() {
     let text = "--filter-tcp=443 --lua-desync=fake --new --filter-tcp=80 --lua-desync=split\n";
     let out = apply(
         text,
-        &Target::Profile(0),
+        &CircularTarget::Profile(0),
         &edit(&["--lua-desync=x", "--lua-desync=y"], false),
     )
     .unwrap();
@@ -396,7 +401,7 @@ fn merging_rotates_shared_tcp_profiles_and_explains_the_rest() {
         "{analysis:?}"
     );
     let google = &analysis.profiles[3];
-    assert_eq!(google.circular, Some(Settings::default()));
+    assert_eq!(google.circular, Some(CircularSettings::default()));
     let variants: Vec<&str> = google.variants.iter().map(|v| v.text.as_str()).collect();
     assert_eq!(
         variants,
@@ -421,7 +426,7 @@ fn a_text_with_crlf_line_ends_keeps_them() {
     let text = "--filter-tcp=443\r\n--lua-desync=fake\r\n";
     let out = apply(
         text,
-        &Target::Profile(0),
+        &CircularTarget::Profile(0),
         &edit(&["--lua-desync=fake"], false),
     )
     .unwrap();

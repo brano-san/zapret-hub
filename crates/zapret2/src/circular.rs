@@ -37,14 +37,14 @@ pub struct Instance {
 
 /// circular's own arguments: `fails` and `retrans` (3 when not given), the rest as written.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-pub struct Settings {
+pub struct CircularSettings {
     pub fails: Option<u32>,
     pub retrans: Option<u32>,
     /// `maxseq=16384`, `reset`, ...
     pub extra: Vec<String>,
 }
 
-impl Settings {
+impl CircularSettings {
     fn parse(args: &[&str]) -> Self {
         let mut settings = Self::default();
         for arg in args {
@@ -71,7 +71,7 @@ impl Settings {
 
 /// Variant `number` of a circular profile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-pub struct Variant {
+pub struct CircularVariant {
     pub number: u32,
     /// Its instances, one `--lua-desync=` a line, `--payload=` where it changes.
     pub text: String,
@@ -82,14 +82,14 @@ pub struct Variant {
 /// A profile as the card and the builder show it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct Profile {
-    /// From 0, counting every `--new`: what `Target` names.
+    /// From 0, counting every `--new`: what `CircularTarget` names.
     pub index: u32,
     /// From 1, as the card numbers profiles; 0 for one with nothing but global options.
     pub number: u32,
     /// What the profile matches: every option but the global ones and the desync part.
     pub filter: String,
-    pub circular: Option<Settings>,
-    pub variants: Vec<Variant>,
+    pub circular: Option<CircularSettings>,
+    pub variants: Vec<CircularVariant>,
     /// The instances without `strategy=`, as a variant's text: a plain profile's whole desync.
     pub plain: String,
 }
@@ -109,7 +109,7 @@ struct Parsed {
     index: u32,
     number: u32,
     filter: Vec<String>,
-    circular: Option<Settings>,
+    circular: Option<CircularSettings>,
     circulars: u32,
     /// An `--in-range` other than `x` came before circular.
     opened: bool,
@@ -191,7 +191,7 @@ fn parse(args: &str) -> Vec<Parsed> {
                     p.circulars += 1;
                     if p.circular.is_none() {
                         let args: Vec<&str> = call.split(':').skip(1).collect();
-                        p.circular = Some(Settings::parse(&args));
+                        p.circular = Some(CircularSettings::parse(&args));
                         p.opened = in_range.as_deref().is_some_and(|range| range != "x");
                     }
                     continue;
@@ -248,7 +248,7 @@ impl Parsed {
             variants: self
                 .variants()
                 .into_iter()
-                .map(|(number, instances, is_final)| Variant {
+                .map(|(number, instances, is_final)| CircularVariant {
                     number,
                     text: lines(&instances),
                     is_final,
@@ -369,8 +369,8 @@ pub fn parse_variant(text: &str) -> anyhow::Result<Vec<Instance>> {
 
 /// What the builder writes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-pub struct Edit {
-    pub settings: Settings,
+pub struct CircularEdit {
+    pub settings: CircularSettings,
     /// Each variant's text, as `parse_variant` reads it; variant 1 first.
     pub variants: Vec<String>,
     /// The last variant is `final`: circular stops there.
@@ -379,7 +379,7 @@ pub struct Edit {
 
 /// Where the builder writes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-pub enum Target {
+pub enum CircularTarget {
     /// This profile's desync part (`Profile::index`) becomes the circular one.
     Profile(u32),
     /// A new profile with `filter` (`--filter-tcp=443 --hostlist=...`) right after profile `after`.
@@ -388,7 +388,7 @@ pub enum Target {
 
 /// The desync part of a circular profile: the ranges, circular, then each variant's instances
 /// tagged with its number.
-pub fn render(edit: &Edit) -> anyhow::Result<Vec<String>> {
+pub fn render(edit: &CircularEdit) -> anyhow::Result<Vec<String>> {
     anyhow::ensure!(
         !edit.variants.is_empty(),
         "circular needs at least one variant"
@@ -422,12 +422,12 @@ pub fn render(edit: &Edit) -> anyhow::Result<Vec<String>> {
 /// `text` with `edit` written where `target` says, plus the `--blob=` lines its presets need.
 /// Lines the change does not touch stay as written; a line it takes options out of is rebuilt
 /// from its remaining ones.
-pub fn apply(text: &str, target: &Target, edit: &Edit) -> anyhow::Result<String> {
+pub fn apply(text: &str, target: &CircularTarget, edit: &CircularEdit) -> anyhow::Result<String> {
     let text = text.trim_start_matches('\u{feff}');
     let block = render(edit)?;
     let (at, insert, rewrite) = match target {
-        Target::Profile(index) => (*index, block, true),
-        Target::New { after, filter } => {
+        CircularTarget::Profile(index) => (*index, block, true),
+        CircularTarget::New { after, filter } => {
             let tokens = quoted_tokens(filter);
             anyhow::ensure!(!tokens.is_empty(), "a new profile needs a filter");
             if let Some(token) = tokens.iter().find(|t| is_new(t) || is_desync(t)) {
@@ -491,7 +491,7 @@ pub fn apply(text: &str, target: &Target, edit: &Edit) -> anyhow::Result<String>
 }
 
 /// The `BLOBS` an edit's instances name and `out` does not define, after the last global line.
-fn add_blobs(out: &mut Vec<String>, edit: &Edit) {
+fn add_blobs(out: &mut Vec<String>, edit: &CircularEdit) {
     let defined = |name: &str| {
         let prefix = format!("--blob={name}:");
         out.iter()
@@ -650,8 +650,8 @@ pub fn merge(sources: &[(String, String)]) -> anyhow::Result<Merged> {
         let from = variants.iter().map(|(_, name)| name.clone()).collect();
         edits.push((
             p.index,
-            Edit {
-                settings: Settings::default(),
+            CircularEdit {
+                settings: CircularSettings::default(),
                 variants: variants
                     .iter()
                     .map(|(instances, _)| lines(instances))
@@ -728,7 +728,7 @@ pub fn merge(sources: &[(String, String)]) -> anyhow::Result<Merged> {
     }
     text.push_str(base);
     for (index, edit) in edits {
-        text = apply(&text, &Target::Profile(index), &edit)?;
+        text = apply(&text, &CircularTarget::Profile(index), &edit)?;
     }
     Ok(Merged { text, notes })
 }
@@ -739,8 +739,8 @@ mod tests {
 
     #[test]
     fn a_variant_starting_under_another_payload_says_its_own() {
-        let edit = Edit {
-            settings: Settings::default(),
+        let edit = CircularEdit {
+            settings: CircularSettings::default(),
             variants: vec![
                 "--payload=tls_client_hello\n--lua-desync=fake:blob=x".into(),
                 "--lua-desync=multidisorder".into(),
