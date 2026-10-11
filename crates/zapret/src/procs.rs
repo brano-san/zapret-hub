@@ -148,7 +148,10 @@ impl Winws {
         let started = Instant::now();
         loop {
             if let Ok(Some(status)) = self.child.try_wait() {
-                std::thread::sleep(Duration::from_millis(100)); // let the readers drain
+                // The pipes close with the process: once the readers end, the output is whole.
+                for reader in self.readers.drain(..) {
+                    let _ = reader.join();
+                }
                 return Err(format!("winws exited ({status}):\n{}", self.output_text()));
             }
             if self.output_text().contains("capture is started") || started.elapsed() >= max {
@@ -162,9 +165,10 @@ impl Winws {
         exec::decode(&self.output.lock().unwrap())
     }
 
-    /// A winws that exits while the checks run is a launch error too.
-    pub fn is_alive(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+    /// The exit status of a winws that ended by itself. One that exits while the checks run is a
+    /// launch error too.
+    pub fn exited(&mut self) -> Option<std::process::ExitStatus> {
+        self.child.try_wait().ok().flatten()
     }
 
     /// Kills winws and returns everything it printed.

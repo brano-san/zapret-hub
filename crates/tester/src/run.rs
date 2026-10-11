@@ -247,13 +247,14 @@ fn run_one(folder: &Folder, name: &str, work: &Work, cancel: &AtomicBool) -> Str
             result.score = crate::rank::score_dpi(&result.dpi);
         }
     }
-    if !winws.is_alive() {
+    // Read after `stop`, which waits for the readers: the output is whole.
+    let exited = winws.exited();
+    let output = winws.stop();
+    if let Some(status) = exited {
         result.launch_error = Some(format!(
-            "winws exited during the checks:\n{}",
-            winws.output_text()
+            "winws exited during the checks ({status}):\n{output}"
         ));
     }
-    winws.stop();
     result
 }
 
