@@ -49,6 +49,8 @@ pub struct StrategyDetail {
     pub record: Option<CustomStrategy>,
     /// A zapret2 strategy's text as written, for its editor; empty for Flowseal's.
     pub source: String,
+    /// A zapret2 strategy's profiles, for its circular ones; empty for Flowseal's.
+    pub circular: zapret2::circular::Analysis,
 }
 
 /// Every strategy file in `service.bat`'s order (with a Flowseal `folder`), then zapret2's (with
@@ -104,7 +106,8 @@ pub fn detail(
             anyhow::anyhow!("the zapret2 folder is not set: choose it in Settings")
         })?;
         let strategy = zapret2::strategies::find(engine.root(), name)?;
-        let (wf, blocks) = zapret2::strategies::split(&zapret2::strategies::args(&strategy.text));
+        let args = zapret2::strategies::args(&strategy.text);
+        let (wf, blocks) = zapret2::strategies::split(&args);
         let (row, tail) = zapret2_row(engine, folder, &latest, active, &strategy);
         return Ok(StrategyDetail {
             row,
@@ -114,6 +117,7 @@ pub fn detail(
             result,
             record: None,
             source: strategy.text,
+            circular: zapret2::circular::analyze(&args),
         });
     }
     let folder = folder.ok_or_else(|| anyhow::anyhow!(zapret::folder::NOT_SET))?;
@@ -134,6 +138,7 @@ pub fn detail(
             .into_iter()
             .find(|r| r.file_stem().eq_ignore_ascii_case(&file.name)),
         source: String::new(),
+        circular: Default::default(),
     })
 }
 

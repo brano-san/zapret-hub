@@ -372,7 +372,7 @@ mod tests {
     }
 
     /// Window commands the CLI leaves out (spec 6).
-    const WINDOW_ONLY: [&str; 11] = [
+    const WINDOW_ONLY: [&str; 14] = [
         "detect_folders",
         "check_folder",
         "check_zapret2_folder",
@@ -385,6 +385,10 @@ mod tests {
         "open_folder",
         "test_live",
         "take_notices",
+        // The circular builder and merge shape the editor's text (zapret2 spec 5.4).
+        "zapret2_profiles",
+        "zapret2_circular",
+        "zapret2_merge",
     ];
 
     /// `("cmd", { a, b })` → the argument names in `bindings.ts`, sorted.

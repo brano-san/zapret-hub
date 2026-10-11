@@ -50,6 +50,15 @@ export const commands = {
 } | null, string>(__TAURI_INVOKE("save_zapret2", { name, text, create })),
 	/**  `name` without the prefix: `mine` for `zapret2:mine`. */
 	deleteZapret2: (name: string) => typedError<null, string>(__TAURI_INVOKE("delete_zapret2", { name })),
+	/**
+	 *  The editor's circular builder reads the text it is given (zapret2 spec 5.4). Window only, as
+	 *  are the two below: they shape a text the CLI writes itself.
+	 */
+	zapret2Profiles: (text: string) => __TAURI_INVOKE<Analysis>("zapret2_profiles", { text }),
+	/**  `text` with the builder's circular profile written in; nothing saved. */
+	zapret2Circular: (text: string, target: CircularTarget, edit: CircularEdit) => typedError<string, string>(__TAURI_INVOKE("zapret2_circular", { text, target, edit })),
+	/**  A new strategy's text made of 2-5 zapret2 strategies (full names), for its preview. */
+	zapret2Merge: (names: string[]) => typedError<Merged, string>(__TAURI_INVOKE("zapret2_merge", { names })),
 	startTests: (request: Request) => typedError<null, string>(__TAURI_INVOKE("start_tests", { request })),
 	cancelTests: () => __TAURI_INVOKE<void>("cancel_tests"),
 	/**  Window only, like the folders themselves: the pipe has no download (cli.md). */
@@ -107,6 +116,14 @@ export const events = {
 };
 
 /* Types */
+/**  A strategy's profiles and what is wrong with its circular ones. */
+export type Analysis = {
+	profiles: Profile[],
+	/**  What winws2 would fail on, or what cannot work: the static check refuses these. */
+	errors: string[],
+	warnings: string[],
+};
+
 export type CacheDir = {
 	path: string,
 	outcome: CacheOutcome,
@@ -148,6 +165,42 @@ export type CheckResult = {
 };
 
 export type CheckStatus = "Ok" | "Ssl" | "Unsup" | "Error";
+
+/**  What the builder writes. */
+export type CircularEdit = {
+	settings: CircularSettings,
+	/**  Each variant's text, as `parse_variant` reads it; variant 1 first. */
+	variants: string[],
+	/**  The last variant is `final`: circular stops there. */
+	stop: boolean,
+};
+
+/**  circular's own arguments: `fails` and `retrans` (3 when not given), the rest as written. */
+export type CircularSettings = {
+	fails: number | null,
+	retrans: number | null,
+	/**  `maxseq=16384`, `reset`, ... */
+	extra: string[],
+};
+
+/**  Where the builder writes. */
+export type CircularTarget = 
+/**  This profile's desync part (`Profile::index`) becomes the circular one. */
+({ Profile: number }) & { New?: never } | 
+/**  A new profile with `filter` (`--filter-tcp=443 --hostlist=...`) right after profile `after`. */
+({ New: {
+	after: number,
+	filter: string,
+} }) & { Profile?: never };
+
+/**  Variant `number` of a circular profile. */
+export type CircularVariant = {
+	number: number,
+	/**  Its instances, one `--lua-desync=` a line, `--payload=` where it changes. */
+	text: string,
+	/**  Has `final`: circular stops on it. */
+	is_final: boolean,
+};
 
 export type CustomStrategy = {
 	/**  What follows `HUB ` in the file name. */
@@ -297,6 +350,40 @@ export type LiveRun = {
 	results: StrategyResult[],
 };
 
+export type MergeNote = {
+	kind: NoteKind,
+	/**  The profile's number in the first strategy (in `names[0]` for `LeftOut`); 0 for a blob. */
+	number: number,
+	/**  The profile's filter, or the blob's name. */
+	filter: string,
+	names: string[],
+	variants: number,
+};
+
+export type Merged = {
+	text: string,
+	notes: MergeNote[],
+};
+
+/**  What `merge` did with a profile, for its preview. */
+export type NoteKind = 
+/**  Now rotates between `variants` sets of instances, the first of each from `names`. */
+"Rotates" | 
+/**  The same in every strategy: kept. */
+"Same" | 
+/**  Not in `names` (no profile with the same filter): taken from the first. */
+"Missing" | 
+/**  Not TCP only: circular counts failures by TCP retransmissions. Taken from the first. */
+"NotTcp" | 
+/**  Already circular in `names`: taken from the first. */
+"Circular" | 
+/**  No desync in `names` (passes traffic as it is): taken from the first. */
+"NoDesync" | 
+/**  A profile of `names[0]` that the first strategy does not have: left out. */
+"LeftOut" | 
+/**  `names[0]` defines the blob `filter` otherwise than the first: the first's is kept. */
+"BlobConflict";
+
 /**  Something the user should see even if the window was closed when it happened. */
 export type Notice = {
 	level: NoticeLevel,
@@ -338,6 +425,20 @@ export type Pass = {
 	targets: TargetResult[],
 	dpi: DpiTargetResult[],
 	score: Score,
+};
+
+/**  A profile as the card and the builder show it. */
+export type Profile = {
+	/**  From 0, counting every `--new`: what `CircularTarget` names. */
+	index: number,
+	/**  From 1, as the card numbers profiles; 0 for one with nothing but global options. */
+	number: number,
+	/**  What the profile matches: every option but the global ones and the desync part. */
+	filter: string,
+	circular: CircularSettings | null,
+	variants: CircularVariant[],
+	/**  The instances without `strategy=`, as a variant's text: a plain profile's whole desync. */
+	plain: string,
 };
 
 export type ProfileScore = {
@@ -442,6 +543,8 @@ export type StrategyDetail = {
 	record: CustomStrategy | null,
 	/**  A zapret2 strategy's text as written, for its editor; empty for Flowseal's. */
 	source: string,
+	/**  A zapret2 strategy's profiles, for its circular ones; empty for Flowseal's. */
+	circular: Analysis,
 };
 
 export type StrategyResult = {

@@ -311,6 +311,47 @@ pub async fn delete_zapret2(handle: AppHandle, name: String) -> Answer<()> {
     .await
 }
 
+/// The editor's circular builder reads the text it is given (zapret2 spec 5.4). Window only, as
+/// are the two below: they shape a text the CLI writes itself.
+#[tauri::command]
+#[specta::specta]
+pub fn zapret2_profiles(text: String) -> zapret2::circular::Analysis {
+    zapret2::circular::analyze(&zapret2::strategies::args(&text))
+}
+
+/// `text` with the builder's circular profile written in; nothing saved.
+#[tauri::command]
+#[specta::specta]
+pub fn zapret2_circular(
+    text: String,
+    target: zapret2::circular::CircularTarget,
+    edit: zapret2::circular::CircularEdit,
+) -> Answer<String> {
+    zapret2::circular::apply(&text, &target, &edit).map_err(|err| format!("{err:#}"))
+}
+
+/// A new strategy's text made of 2-5 zapret2 strategies (full names), for its preview.
+#[tauri::command]
+#[specta::specta]
+pub async fn zapret2_merge(
+    handle: AppHandle,
+    names: Vec<String>,
+) -> Answer<zapret2::circular::Merged> {
+    blocking(move || {
+        let engine = app(&handle).engine2_required()?;
+        let sources = names
+            .iter()
+            .map(|name| {
+                let short = zapret2::strip_prefix(name).unwrap_or(name);
+                let strategy = zapret2::strategies::find(engine.root(), short)?;
+                Ok((strategy.name, strategy.text))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        zapret2::circular::merge(&sources)
+    })
+    .await
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn start_tests(handle: AppHandle, request: Request) -> Answer<()> {
