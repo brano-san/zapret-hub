@@ -5,6 +5,17 @@
 use std::path::Path;
 
 fn main() {
+    // Which build runs: the short commit of the source, `unknown` outside a git checkout.
+    let commit = std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+        .unwrap_or_else(|| "unknown".to_owned());
+    println!("cargo:rustc-env=ZH_COMMIT={commit}");
+    println!("cargo:rerun-if-changed=../.git/HEAD");
+    println!("cargo:rerun-if-changed=../.git/refs/heads");
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("common-controls.manifest");
     println!("cargo:rerun-if-changed={}", manifest.display());
     println!("cargo:rustc-link-arg=/MANIFEST:EMBED");

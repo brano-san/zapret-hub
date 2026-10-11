@@ -282,7 +282,7 @@
         <h3>{S.strategies.applyTitle}</h3>
         <p>{S.strategies.engine}: {z2 === null ? S.strategies.engineFlowseal : S.strategies.engineZapret2}</p>
         <p>
-          {S.strategies.file}: <code>{z2 === null ? `${d.row.name}.bat` : `data\zapret2\${z2}.txt`}</code>
+          {S.strategies.file}: <code>{z2 === null ? `${d.row.name}.bat` : `strategies\${z2}.txt`}</code>
           <!-- A built-in zapret2 strategy lives in the app: no file to show. -->
           {#if z2 === null || d.row.custom}
             <button class="link" onclick={() => call(S.failed.open, commands.openFolder({ Strategy: d.row.name }))}>

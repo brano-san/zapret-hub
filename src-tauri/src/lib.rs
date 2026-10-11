@@ -146,6 +146,7 @@ pub fn run() -> anyhow::Result<()> {
     );
     let (settings, damaged) = settings::load_or_default(&paths.settings());
     let state = AppState::new(paths, settings);
+    state.migrate_strategies();
     if let Some(text) = damaged {
         state.push_notice(Notice {
             level: NoticeLevel::Error,

@@ -206,7 +206,7 @@ export type FolderCheck = {
 };
 
 export type FolderKind = "Zapret" | 
-/**  `data/zapret2`: the user's zapret2 strategies; needs the zapret2 folder to be set. */
+/**  `<zapret2 folder>/strategies`: the user's zapret2 strategies; needs the zapret2 folder to be set. */
 "Zapret2" | "Logs" | 
 /**
  *  The folder of a strategy's file, by the name the list shows; the path is found here, the

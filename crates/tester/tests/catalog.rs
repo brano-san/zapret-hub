@@ -139,7 +139,7 @@ fn zapret2_rows_follow_flowseals_with_their_checks_and_results() {
     let store = Store::new(data.path().join("strategies"));
     let text = "# mine\n--wf-tcp-out=443 --lua-init=@\"%LUA%zapret-lib.lua\"\n\
                 --filter-tcp=443 --lua-desync=fake:blob=fake_default_tls\n--new\n--filter-udp=443\n";
-    zapret2::strategies::write(data.path(), "mine", text).unwrap();
+    zapret2::strategies::write(engine_dir.path(), "mine", text).unwrap();
     let tail = zapret2::strategies::tail(&engine, Some(&folder), text).unwrap();
     let run = TestRun {
         id: "2026-10-11_10-00-00".into(),
@@ -211,7 +211,12 @@ fn zapret2_rows_follow_flowseals_with_their_checks_and_results() {
     assert_eq!(detail.record, None);
     assert!(detail.result.is_some());
 
-    zapret2::strategies::write(data.path(), "mine", &text.replace("udp=443", "udp=80")).unwrap();
+    zapret2::strategies::write(
+        engine_dir.path(),
+        "mine",
+        &text.replace("udp=443", "udp=80"),
+    )
+    .unwrap();
     let rows =
         tester::catalog::rows(Some(&folder), Some(&engine), &store, data.path(), None).unwrap();
     assert!(
@@ -228,7 +233,7 @@ fn zapret2_alone_lists_its_strategies_and_names_what_needs_flowseal() {
     let store = Store::new(data.path().join("strategies"));
     let text = "--wf-tcp-out=443 --lua-init=@\"%LUA%zapret-lib.lua\"\n\
                 --filter-tcp=443 --lua-desync=fake:blob=fake_default_tls\n";
-    zapret2::strategies::write(data.path(), "mine", text).unwrap();
+    zapret2::strategies::write(engine_dir.path(), "mine", text).unwrap();
     let rows = tester::catalog::rows(None, Some(&engine), &store, data.path(), None).unwrap();
     let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
     assert_eq!(

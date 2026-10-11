@@ -110,7 +110,7 @@ pub fn run(
     // An earlier pending.json is restored first; when that fails nothing starts (spec 10).
     let snapshot = zapret::snapshot::begin(folder, "tests", &pending)?;
     let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let outcome = run_strategies(folder, engine2, data_dir, request, &work, cancel, progress);
+        let outcome = run_strategies(folder, engine2, request, &work, cancel, progress);
         let canceled = cancel.load(Ordering::Relaxed);
         progress(Progress::Restoring);
         (outcome, canceled)
@@ -228,7 +228,6 @@ fn prepare(
 fn run_strategies(
     folder: Option<&Folder>,
     engine2: Option<&Engine>,
-    data_dir: &Path,
     request: &Request,
     work: &Work,
     cancel: &AtomicBool,
@@ -270,7 +269,7 @@ fn run_strategies(
             // Nothing of either engine may filter while this one is measured: the previous
             // strategy's process has exited (`Winws::stop` waits), and this catches any other.
             stop_engines()?;
-            let result = run_one(folder, engine2, data_dir, name, work, cancel);
+            let result = run_one(folder, engine2, name, work, cancel);
             if cancel.load(Ordering::Relaxed) {
                 break 'passes; // cut short: not a result
             }
@@ -337,12 +336,7 @@ struct Launch {
 }
 
 /// The one place a test run tells the engines apart (zapret2 spec 3.1): by the name's prefix.
-fn launch(
-    folder: Option<&Folder>,
-    engine2: Option<&Engine>,
-    data_dir: &Path,
-    name: &str,
-) -> anyhow::Result<Launch> {
+fn launch(folder: Option<&Folder>, engine2: Option<&Engine>, name: &str) -> anyhow::Result<Launch> {
     let Some(name) = zapret2::strip_prefix(name) else {
         let folder = folder.ok_or_else(|| anyhow::anyhow!(zapret::folder::NOT_SET))?;
         let file = zapret::strategies::find(folder, name)?;
@@ -357,7 +351,7 @@ fn launch(
     };
     let engine = engine2
         .ok_or_else(|| anyhow::anyhow!("the zapret2 folder is not set: choose it in Settings"))?;
-    let strategy = zapret2::strategies::find(data_dir, name)?;
+    let strategy = zapret2::strategies::find(engine.root(), name)?;
     let tail = zapret2::strategies::tail(engine, folder, &strategy.text)?;
     zapret2::strategies::check(engine, &tail)?;
     Ok(Launch {
@@ -374,7 +368,6 @@ fn launch(
 fn run_one(
     folder: Option<&Folder>,
     engine2: Option<&Engine>,
-    data_dir: &Path,
     name: &str,
     work: &Work,
     cancel: &AtomicBool,
@@ -388,7 +381,7 @@ fn run_one(
         score: Score::default(),
         passes: Vec::new(),
     };
-    let launch = match launch(folder, engine2, data_dir, name) {
+    let launch = match launch(folder, engine2, name) {
         Ok(launch) => launch,
         Err(err) => {
             result.launch_error = Some(format!("{err:#}"));

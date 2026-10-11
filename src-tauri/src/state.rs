@@ -128,6 +128,20 @@ impl AppState {
         dir.map(zapret2::Engine::open).transpose()
     }
 
+    /// Moves the strategies an older version kept in `data\zapret2` into the zapret2 folder.
+    pub fn migrate_strategies(&self) {
+        if let Ok(Some(engine)) = self.engine2() {
+            let moved =
+                zapret2::strategies::migrate(&self.paths.data().join("zapret2"), engine.root());
+            if !moved.is_empty() {
+                log::info!(
+                    "zapret2 strategies moved into the zapret2 folder: {}",
+                    moved.join(", ")
+                );
+            }
+        }
+    }
+
     /// For what cannot go without zapret2: applying, checking and saving its strategies.
     pub fn engine2_required(&self) -> anyhow::Result<zapret2::Engine> {
         self.engine2()?

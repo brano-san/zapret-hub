@@ -69,8 +69,18 @@ pub fn rows(
         }
     }
     if let Some(engine) = engine2 {
-        for strategy in zapret2::strategies::list(data_dir)? {
+        for strategy in zapret2::strategies::list(engine.root())? {
             rows.push(zapret2_row(engine, folder, &latest, active, &strategy).0);
+        }
+        // A file dropped into the folder that is not a strategy shows why, not nothing.
+        for (file, problem) in zapret2::strategies::skipped(engine.root()) {
+            rows.push(StrategyRow {
+                name: format!("{}{file}", zapret2::PREFIX),
+                custom: true,
+                active: false,
+                error: Some(problem),
+                last: None,
+            });
         }
     }
     Ok(rows)
@@ -93,7 +103,7 @@ pub fn detail(
         let engine = engine2.ok_or_else(|| {
             anyhow::anyhow!("the zapret2 folder is not set: choose it in Settings")
         })?;
-        let strategy = zapret2::strategies::find(data_dir, name)?;
+        let strategy = zapret2::strategies::find(engine.root(), name)?;
         let (wf, blocks) = zapret2::strategies::split(&zapret2::strategies::args(&strategy.text));
         let (row, tail) = zapret2_row(engine, folder, &latest, active, &strategy);
         return Ok(StrategyDetail {

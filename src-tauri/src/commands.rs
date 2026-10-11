@@ -51,7 +51,7 @@ fn data_tests(handle: &AppHandle) -> std::path::PathBuf {
 #[tauri::command]
 #[specta::specta]
 pub fn app_version() -> String {
-    env!("CARGO_PKG_VERSION").to_owned()
+    format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("ZH_COMMIT"))
 }
 
 #[tauri::command]
@@ -297,8 +297,10 @@ pub async fn delete_zapret2(handle: AppHandle, name: String) -> Answer<()> {
     blocking(move || {
         let state = app(&handle);
         let active = zapret::service::strategy();
-        let deleted = state.change_any(|_| {
-            zapret2::strategies::delete(&state.paths.data(), &name, active.as_deref())
+        let deleted = state.engine2_required().and_then(|engine| {
+            state.change_any(|_| {
+                zapret2::strategies::delete(engine.root(), &name, active.as_deref())
+            })
         });
         actions::changed(&handle);
         deleted
@@ -365,7 +367,13 @@ pub async fn set_game_filter(handle: AppHandle, filter: GameFilter) -> Answer<()
         let done = state.change_safely("game_filter", |folder| {
             zapret::game_filter::write(folder, &filter)?;
             zapret::service::reinstall_active(folder)?;
-            zapret2::service::reinstall_active(engine2.as_ref(), folder, &state.paths.data())
+            zapret2::service::reinstall_active(
+                engine2.as_ref(),
+                folder,
+                engine2
+                    .as_ref()
+                    .map_or(Path::new(""), |engine| engine.root()),
+            )
         });
         actions::changed(&handle);
         done

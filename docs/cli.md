@@ -104,7 +104,7 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `custom delete <name> --yes` | удаляет свою стратегию; `<name>` — её собственное имя: `mine` для `general (HUB mine)` | `delete_custom` |
 | `zapret2 info` | папка zapret2, версия движка и совместимость Lua или ошибка | `zapret2_info` |
 | `zapret2 validate <file\|->` | проверяет текст стратегии zapret2, не сохраняя | `validate_zapret2` |
-| `zapret2 save <name> <file\|-> [--create]` | сохраняет текст как `zapret2:<name>`; `--create` — как новую стратегию | `save_zapret2` |
+| `zapret2 save <name> <file\|-> [--create]` | сохраняет текст в `<папка zapret2>\strategies\<name>.txt` как `zapret2:<name>`; `--create` — как новую стратегию | `save_zapret2` |
 | `zapret2 delete <name> --yes` | удаляет свою стратегию zapret2; `<name>` — без префикса: `mine` для `zapret2:mine` | `delete_zapret2` |
 | `tests run [--dpi] [--repeats <N>] [--wait] [--timeout <s>] [<name>…]` | запускает прогон (раздел «Тесты») | `start_tests` |
 | `tests status` | идёт ли прогон, его ход, итог последнего | `tests_status` |

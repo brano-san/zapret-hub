@@ -361,3 +361,47 @@ fn every_built_in_strategy_passes_the_static_check_and_names_files_that_exist() 
         );
     }
 }
+
+#[test]
+fn files_that_are_not_strategies_are_reported_not_hidden() {
+    let home = tempfile::tempdir().unwrap();
+    let own = strategies::dir(home.path());
+    fs::create_dir_all(&own).unwrap();
+    for file in [
+        "ok.txt",
+        "notes.md",
+        "General.txt",
+        "имя.txt",
+        "no extension",
+    ] {
+        fs::write(own.join(file), "--wf-tcp-out=443").unwrap();
+    }
+    let skipped: Vec<String> = strategies::skipped(home.path())
+        .into_iter()
+        .map(|(file, _)| file)
+        .collect();
+    assert_eq!(
+        skipped,
+        ["General.txt", "no extension", "notes.md", "имя.txt"]
+    );
+    assert_eq!(names(home.path()).len(), 3, "two built-in ones and ok");
+}
+
+#[test]
+fn old_strategies_move_into_the_zapret2_folder_without_overwriting() {
+    let old = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    fs::write(old.path().join("a.txt"), "old a").unwrap();
+    fs::write(old.path().join("b.txt"), "old b").unwrap();
+    fs::write(old.path().join("c.md"), "x").unwrap();
+    fs::create_dir_all(strategies::dir(home.path())).unwrap();
+    fs::write(strategies::dir(home.path()).join("b.txt"), "new b").unwrap();
+    assert_eq!(strategies::migrate(old.path(), home.path()), ["a.txt"]);
+    let read = |name: &str| fs::read_to_string(strategies::dir(home.path()).join(name)).unwrap();
+    assert_eq!(
+        (read("a.txt"), read("b.txt")),
+        ("old a".into(), "new b".into())
+    );
+    assert!(!old.path().join("a.txt").exists() && old.path().join("b.txt").exists());
+    assert!(strategies::migrate(&old.path().join("missing"), home.path()).is_empty());
+}

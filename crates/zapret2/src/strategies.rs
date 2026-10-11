@@ -1,4 +1,4 @@
-//! zapret2 strategies (zapret2 spec 5): the built-in texts and the user's `data/zapret2/<name>.txt`,
+//! zapret2 strategies (zapret2 spec 5): the built-in texts and the user's `<zapret2 folder>\strategies\<name>.txt`,
 //! the command line a text becomes, and the static part of the check.
 
 use std::path::{Path, PathBuf};
@@ -41,55 +41,123 @@ impl Strategy {
     }
 }
 
-/// `data/zapret2`
-pub fn dir(data_dir: &Path) -> PathBuf {
-    data_dir.join("zapret2")
+/// `<zapret2 folder>\strategies`: with the engine, so that a new app version keeps them.
+pub fn dir(home: &Path) -> PathBuf {
+    home.join("strategies")
 }
 
-/// The built-in ones, then the user's in natural order. A file named like a built-in one is left
-/// out: the built-in one would hide it anyway. So is a file that cannot be read (a lock, no
-/// access): logged, so that it does not stop the others from being listed, applied or deleted.
-pub fn list(data_dir: &Path) -> anyhow::Result<Vec<Strategy>> {
-    let dir = dir(data_dir);
+/// Moves `*.txt` of an older `data\zapret2` into the strategies folder; a name already there
+/// stays as it is and its old file is left where it was. Returns the names moved.
+pub fn migrate(old: &Path, home: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(old) else {
+        return Vec::new();
+    };
+    let dir = dir(home);
+    let mut moved = Vec::new();
+    for path in entries.flatten().map(|entry| entry.path()) {
+        let Some(file) = path.file_name().map(|file| file.to_owned()) else {
+            continue;
+        };
+        let txt = path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("txt"));
+        let target = dir.join(&file);
+        if !txt || !path.is_file() || target.exists() {
+            continue;
+        }
+        let done = std::fs::create_dir_all(&dir).and_then(|()| {
+            std::fs::rename(&path, &target).or_else(|_| {
+                // Another drive: copy, then remove.
+                std::fs::copy(&path, &target).and_then(|_| std::fs::remove_file(&path))
+            })
+        });
+        match done {
+            Ok(()) => {
+                log::info!("{} moved to {}", path.display(), target.display());
+                moved.push(file.to_string_lossy().into_owned());
+            }
+            Err(err) => log::warn!(
+                "{} not moved to {}: {err}",
+                path.display(),
+                target.display()
+            ),
+        }
+    }
+    moved
+}
+
+/// The files of the folder that are not strategies, with the reason: not `.txt`, named like a
+/// built-in one, a name `save` would refuse, or unreadable.
+pub fn skipped(home: &Path) -> Vec<(String, String)> {
+    scan(home).map_or_else(|_| Vec::new(), |(_, skipped)| skipped)
+}
+
+/// The built-in ones, then the user's in natural order. A file that is not a strategy (see
+/// `skipped`) is left out: logged, so that it does not stop the others from being listed, applied
+/// or deleted.
+pub fn list(home: &Path) -> anyhow::Result<Vec<Strategy>> {
+    Ok(builtin().chain(scan(home)?.0).collect())
+}
+
+type Scan = (Vec<Strategy>, Vec<(String, String)>);
+
+fn scan(home: &Path) -> anyhow::Result<Scan> {
+    let dir = dir(home);
     let mut own = Vec::new();
+    let mut skipped = Vec::new();
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(builtin().collect()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok((own, skipped)),
         Err(err) => return Err(anyhow::Error::new(err).context(dir.display().to_string())),
     };
     for entry in entries {
         let path = entry?.path();
+        if !path.is_file() {
+            continue;
+        }
+        let file = path
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let txt = path
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("txt"));
-        let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default();
+        let problem = if !txt {
+            Some("only .txt files are strategies".to_owned())
+        } else if is_builtin(stem) {
+            Some("named like a built-in strategy".to_owned())
+        } else if let Err(err) = zapret::custom::validate_name(stem) {
+            Some(format!("{err:#}"))
+        } else {
+            None
         };
-        if !txt || !path.is_file() {
-            continue;
-        }
-        if is_builtin(name) {
+        if let Some(problem) = problem {
             log::warn!(
-                "{} is named like a built-in strategy: skipped",
+                "{} is not a strategy and is skipped: {problem}",
                 path.display()
             );
+            skipped.push((file, problem));
             continue;
         }
-        let text = match zapret::read_text(&path) {
-            Ok(text) => text,
+        match zapret::read_text(&path) {
+            Ok(text) => own.push(Strategy {
+                name: stem.to_owned(),
+                text: text.trim_start_matches('\u{feff}').to_owned(),
+                builtin: false,
+            }),
             Err(err) => {
                 log::warn!("{} cannot be read and is skipped: {err}", path.display());
-                continue;
+                skipped.push((file, format!("cannot be read: {err}")));
             }
-        };
-        own.push(Strategy {
-            name: name.to_owned(),
-            text: text.trim_start_matches('\u{feff}').to_owned(),
-            builtin: false,
-        });
+        }
     }
     own.sort_by_cached_key(|s| zapret::strategies::natural_key(&s.name));
-    Ok(builtin().chain(own).collect())
+    skipped.sort();
+    Ok((own, skipped))
 }
 
 fn builtin() -> impl Iterator<Item = Strategy> {
@@ -107,8 +175,8 @@ fn is_builtin(name: &str) -> bool {
 }
 
 /// `name` without the prefix.
-pub fn find(data_dir: &Path, name: &str) -> anyhow::Result<Strategy> {
-    list(data_dir)?
+pub fn find(home: &Path, name: &str) -> anyhow::Result<Strategy> {
+    list(home)?
         .into_iter()
         .find(|s| s.name.eq_ignore_ascii_case(name))
         .ok_or_else(|| anyhow::anyhow!("no zapret2 strategy named {name}"))
@@ -116,13 +184,13 @@ pub fn find(data_dir: &Path, name: &str) -> anyhow::Result<Strategy> {
 
 /// The name a save writes under (spec 5.2): a valid one, not a built-in one; new for `create`,
 /// one of the user's otherwise.
-pub fn claim(data_dir: &Path, name: &str, create: bool) -> anyhow::Result<String> {
+pub fn claim(home: &Path, name: &str, create: bool) -> anyhow::Result<String> {
     let name = zapret::custom::validate_name(name)?;
     anyhow::ensure!(
         !is_builtin(&name),
         "{PREFIX}{name} is built in: save a copy under another name"
     );
-    let exists = list(data_dir)?
+    let exists = list(home)?
         .iter()
         .any(|s| s.name.eq_ignore_ascii_case(&name));
     if create {
@@ -133,24 +201,24 @@ pub fn claim(data_dir: &Path, name: &str, create: bool) -> anyhow::Result<String
     Ok(name)
 }
 
-/// `data/zapret2/<name>.txt`, the text as it came.
-pub fn write(data_dir: &Path, name: &str, text: &str) -> anyhow::Result<()> {
-    let dir = dir(data_dir);
+/// `<zapret2 folder>\strategies\<name>.txt`, the text as it came.
+pub fn write(home: &Path, name: &str, text: &str) -> anyhow::Result<()> {
+    let dir = dir(home);
     std::fs::create_dir_all(&dir).with_context(|| dir.display().to_string())?;
     let path = dir.join(format!("{name}.txt"));
     std::fs::write(&path, text).with_context(|| path.display().to_string())
 }
 
 /// The user's own, and not `active` (the registry's strategy name).
-pub fn delete(data_dir: &Path, name: &str, active: Option<&str>) -> anyhow::Result<()> {
-    let strategy = find(data_dir, name)?;
+pub fn delete(home: &Path, name: &str, active: Option<&str>) -> anyhow::Result<()> {
+    let strategy = find(home, name)?;
     let full = strategy.full_name();
     anyhow::ensure!(!strategy.builtin, "{full} is built in: it stays");
     anyhow::ensure!(
         !active.is_some_and(|active| active.eq_ignore_ascii_case(&full)),
         "{full} is the active strategy: apply another one first"
     );
-    let path = dir(data_dir).join(format!("{}.txt", strategy.name));
+    let path = dir(home).join(format!("{}.txt", strategy.name));
     std::fs::remove_file(&path).with_context(|| path.display().to_string())
 }
 

@@ -80,10 +80,10 @@ pub fn install(engine: &Engine, strategy: &Strategy, tail: &str) -> anyhow::Resu
 pub fn prepare(
     engine: &Engine,
     folder: Option<&Folder>,
-    data_dir: &Path,
+    home: &Path,
     name: &str,
 ) -> anyhow::Result<(Strategy, String)> {
-    let strategy = strategies::find(data_dir, name)?;
+    let strategy = strategies::find(home, name)?;
     let tail = strategies::tail(engine, folder, &strategy.text)?;
     validate(engine, &tail)?;
     Ok((strategy, tail))
@@ -105,10 +105,10 @@ pub fn install_checked(
 pub fn apply(
     engine: &Engine,
     folder: Option<&Folder>,
-    data_dir: &Path,
+    home: &Path,
     name: &str,
 ) -> anyhow::Result<QuickCheck> {
-    let (strategy, tail) = prepare(engine, folder, data_dir, name)?;
+    let (strategy, tail) = prepare(engine, folder, home, name)?;
     install_checked(engine, folder, &strategy, &tail)
 }
 
@@ -117,7 +117,7 @@ pub fn apply(
 pub fn reinstall_active(
     engine: Option<&Engine>,
     folder: &Folder,
-    data_dir: &Path,
+    home: &Path,
 ) -> anyhow::Result<()> {
     if service::state(SERVICE2) == SvcState::NotInstalled {
         return Ok(());
@@ -134,7 +134,7 @@ pub fn reinstall_active(
                 "the zapret2 service has no zapret2 strategy name in the registry, so it cannot be installed again with the new game filter: apply a strategy first"
             )
         })?;
-    let strategy = strategies::find(data_dir, &name)?;
+    let strategy = strategies::find(home, &name)?;
     let tail = strategies::tail(engine, Some(folder), &strategy.text)?;
     validate(engine, &tail)?;
     install(engine, &strategy, &tail)
@@ -145,12 +145,12 @@ pub fn reinstall_active(
 pub fn check_save(
     engine: &Engine,
     folder: Option<&Folder>,
-    data_dir: &Path,
+    home: &Path,
     name: &str,
     text: &str,
     create: bool,
 ) -> anyhow::Result<(String, String)> {
-    let name = strategies::claim(data_dir, name, create)?;
+    let name = strategies::claim(home, name, create)?;
     let tail = strategies::tail(engine, folder, text)?;
     validate(engine, &tail)?;
     Ok((name, tail))
@@ -161,13 +161,13 @@ pub fn check_save(
 pub fn save(
     engine: &Engine,
     folder: Option<&Folder>,
-    data_dir: &Path,
+    home: &Path,
     name: &str,
     text: &str,
     create: bool,
 ) -> anyhow::Result<(Strategy, String)> {
-    let (name, tail) = check_save(engine, folder, data_dir, name, text, create)?;
-    strategies::write(data_dir, &name, text)?;
+    let (name, tail) = check_save(engine, folder, home, name, text, create)?;
+    strategies::write(home, &name, text)?;
     let saved = Strategy {
         name,
         text: text.to_owned(),

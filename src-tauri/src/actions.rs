@@ -62,10 +62,10 @@ pub fn apply(app: &AppHandle, name: &str) -> anyhow::Result<QuickCheck> {
     let state = state(app);
     let result = match zapret2::strip_prefix(name) {
         Some(name) => state.engine2_required().and_then(|engine| {
-            let data = state.paths.data();
             // The check runs first: a failure changes nothing, no snapshot, no restart (spec 6).
-            let (strategy, tail) = state
-                .change_any(|folder| zapret2::service::prepare(&engine, folder, &data, name))?;
+            let (strategy, tail) = state.change_any(|folder| {
+                zapret2::service::prepare(&engine, folder, engine.root(), name)
+            })?;
             state.change_any_safely("apply", |folder| {
                 zapret2::service::install_checked(&engine, folder, &strategy, &tail)
             })
@@ -144,6 +144,9 @@ pub fn save_settings(app: &AppHandle, settings: Settings, pipe: bool) -> anyhow:
     }
     crate::settings::save(&state.paths.settings(), &settings)?;
     state.set_settings(settings);
+    if engine_changed {
+        state.migrate_strategies();
+    }
     if folder_changed {
         prepare_folder(app);
     }
@@ -182,7 +185,7 @@ pub fn save_zapret2(
 ) -> anyhow::Result<Option<QuickCheck>> {
     let state = state(app);
     let engine = state.engine2_required()?;
-    let data = state.paths.data();
+    let data = engine.root().to_path_buf();
     let full = format!("{}{}", zapret2::PREFIX, name.trim());
     let active = zapret::service::strategy();
     if !create && active.is_some_and(|active| active.eq_ignore_ascii_case(&full)) {
@@ -351,24 +354,31 @@ pub fn open_url(url: &str) -> anyhow::Result<()> {
 }
 
 /// The folder of the user's zapret2 strategies, created when missing.
-fn strategies_folder(data: &Path) -> anyhow::Result<PathBuf> {
-    let dir = zapret2::strategies::dir(data);
+fn strategies_folder(home: &Path) -> anyhow::Result<PathBuf> {
+    let dir = zapret2::strategies::dir(home);
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
 
 /// The folder of a strategy's file: Flowseal's `.bat` (its own and the custom ones) in the
-/// Flowseal folder, a zapret2 strategy of the user's in `data\zapret2`. Only names that are in
+/// Flowseal folder, a zapret2 strategy of the user's in the zapret2 folder's `strategies`. Only names that are in
 /// the lists resolve, so the page cannot point anywhere else.
-fn strategy_folder(folder: Option<&Folder>, data: &Path, name: &str) -> anyhow::Result<PathBuf> {
+fn strategy_folder(
+    folder: Option<&Folder>,
+    home: Option<&Path>,
+    name: &str,
+) -> anyhow::Result<PathBuf> {
     if let Some(name) = zapret2::strip_prefix(name) {
-        let strategy = zapret2::strategies::find(data, name)?;
+        let home = home.ok_or_else(|| {
+            anyhow::anyhow!("the zapret2 folder is not set: choose it in Settings")
+        })?;
+        let strategy = zapret2::strategies::find(home, name)?;
         anyhow::ensure!(
             !strategy.builtin,
             "{} is built into Zapret Hub: it has no file",
             strategy.full_name()
         );
-        return Ok(zapret2::strategies::dir(data));
+        return Ok(zapret2::strategies::dir(home));
     }
     let folder = folder.ok_or_else(|| anyhow::anyhow!(zapret::folder::NOT_SET))?;
     let file = zapret::strategies::find(folder, name)?;
@@ -379,17 +389,21 @@ pub fn open_folder(app: &AppHandle, kind: FolderKind) -> anyhow::Result<()> {
     let state = state(app);
     let path = match kind {
         FolderKind::Zapret => state.folder()?.root().to_path_buf(),
-        FolderKind::Zapret2 => {
-            state.engine2_required()?;
-            strategies_folder(&state.paths.data())?
-        }
+        FolderKind::Zapret2 => strategies_folder(state.engine2_required()?.root())?,
         FolderKind::Logs => {
             let logs = state.paths.logs();
             std::fs::create_dir_all(&logs)?;
             logs
         }
         FolderKind::Strategy(name) => {
-            strategy_folder(state.folder_if_set()?.as_ref(), &state.paths.data(), &name)?
+            // A zapret2 name needs its engine; a Flowseal one does not.
+            let home = match state.engine2() {
+                Ok(Some(engine)) => Some(engine.root().to_path_buf()),
+                Ok(None) => None,
+                Err(err) if zapret2::strip_prefix(&name).is_some() => return Err(err),
+                Err(_) => None,
+            };
+            strategy_folder(state.folder_if_set()?.as_ref(), home.as_deref(), &name)?
         }
     };
     crate::shell::open(path.as_os_str())
@@ -433,7 +447,7 @@ mod tests {
         zapret2::strategies::write(data.path(), "mine", "--wf-tcp-out=443").unwrap();
 
         let open = |folder: Option<&Folder>, name: &str| {
-            strategy_folder(folder, data.path(), name).map_err(|err| format!("{err:#}"))
+            strategy_folder(folder, Some(data.path()), name).map_err(|err| format!("{err:#}"))
         };
         assert_eq!(
             open(Some(&folder), "GENERAL (alt11)"),
@@ -441,7 +455,7 @@ mod tests {
         );
         assert_eq!(
             open(None, "zapret2:mine"),
-            Ok(data.path().join("zapret2")),
+            Ok(data.path().join("strategies")),
             "zapret2 needs no Flowseal folder"
         );
         assert!(
@@ -462,10 +476,10 @@ mod tests {
     }
 
     #[test]
-    fn the_zapret2_folder_is_data_zapret2_and_is_created() {
+    fn the_strategies_folder_is_in_the_zapret2_folder_and_is_created() {
         let data = tempfile::tempdir().unwrap();
         let dir = strategies_folder(data.path()).unwrap();
-        assert_eq!(dir, data.path().join("zapret2"));
+        assert_eq!(dir, data.path().join("strategies"));
         assert!(dir.is_dir());
     }
 }
