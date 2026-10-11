@@ -3,7 +3,7 @@
   import { call } from "$lib/api";
   import { app, change } from "$lib/app.svelte";
   import { confirmation } from "$lib/confirm.svelte";
-  import { ZAPRET2_TEMPLATE, blockSummary, hubStem, ms, runDate, zapret2Name } from "$lib/format";
+  import { ZAPRET2_TEMPLATE, blockSummary, hubStem, ms, nameError, ownName, runDate, uniqueName, zapret2Name } from "$lib/format";
   import { S } from "$lib/strings";
   import TargetChecks from "../components/TargetChecks.svelte";
   import StrategyEditor from "./StrategyEditor.svelte";
@@ -23,8 +23,13 @@
 
   const visible = $derived(rows.filter((row) => row.name.toLowerCase().includes(query.trim().toLowerCase())));
   const locked = $derived(app.busy || (app.overview?.testing ?? false));
+  /** Names a new one must not take: the user's own in either engine (and Flowseal's, harmlessly). */
+  const taken = $derived(rows.map((row) => ownName(row.name)));
+  const cloneError = $derived(nameError(cloneName));
 
   async function open(name: string): Promise<void> {
+    // Another strategy: its copy gets a fresh name; a reload of the same one keeps what was typed.
+    if (detail?.row.name !== name) cloneName = uniqueName(`${zapret2Name(name) ?? name} copy`, taken);
     detail = (await call(S.failed.strategy, commands.getStrategy(name))) ?? null;
   }
 
@@ -59,7 +64,8 @@
   async function create(): Promise<void> {
     if (!creating) return;
     const name = creating.name.trim();
-    createError = "";
+    createError = nameError(name) ?? "";
+    if (createError) return;
     if (creating.engine === "zapret2") {
       creating = null;
       editing2 = { name, from: "", create: true, initial: ZAPRET2_TEMPLATE };
@@ -116,7 +122,7 @@
           editing = null;
           editing2 = null;
           createError = "";
-          creating = { engine: app.settings?.zapret_dir ? "flowseal" : "zapret2", name: "" };
+          creating = { engine: app.settings?.zapret_dir ? "flowseal" : "zapret2", name: uniqueName("my strategy", taken) };
         }}>{S.strategies.newStrategy}</button
       >
     </div>
@@ -189,10 +195,10 @@
       <p class="muted">{creating.engine === "flowseal" ? S.strategies.newFlowsealNote : S.strategies.newZapret2Note}</p>
       <div class="buttons">
         <input placeholder={S.strategies.newName} bind:value={creating.name} aria-label={S.strategies.newName} />
-        <button class="primary" disabled={locked || !creating.name.trim()} onclick={create}>{S.strategies.newCreate}</button>
+        <button class="primary" disabled={locked || nameError(creating.name) !== null} onclick={create}>{S.strategies.newCreate}</button>
         <button onclick={() => (creating = null)}>{S.common.cancel}</button>
       </div>
-      {#if createError}<p class="bad">{createError}</p>{/if}
+      {#if nameError(creating.name)}<p class="bad">{nameError(creating.name)}</p>{:else if createError}<p class="bad">{createError}</p>{/if}
     {:else if detail}
       {@const d = detail}
       {@const z2 = zapret2Name(d.row.name)}
@@ -241,12 +247,13 @@
           <input placeholder={S.strategies.cloneName} bind:value={cloneName} aria-label={S.strategies.cloneName} />
           <!-- A zapret2 copy starts from the text: a static check error is a reason to copy it. -->
           <button
-            disabled={locked || !cloneName.trim() || (z2 === null && d.row.error !== null)}
+            disabled={locked || cloneError !== null || (z2 === null && d.row.error !== null)}
             onclick={() => clone(d.row.name)}
           >
             {S.strategies.clone}
           </button>
         </div>
+        {#if cloneError}<p class="bad">{cloneError}</p>{/if}
       </section>
       <section class="part">
         <h3>{S.strategies.applyTitle}</h3>

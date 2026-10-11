@@ -1,3 +1,4 @@
+import { localizeError } from "./format";
 import { notices } from "./notices.svelte";
 
 /** What tauri-specta makes of a command that returns `Result<T, String>`. */
@@ -8,7 +9,7 @@ export async function call<T>(title: string, answer: Promise<Answer<T>>): Promis
   try {
     const result = await answer;
     if (result.status === "ok") return result.data;
-    notices.push({ level: "Error", title, text: result.error });
+    notices.push({ level: "Error", title, text: localizeError(result.error) });
   } catch (err) {
     notices.push({ level: "Error", title, text: String(err) });
   }

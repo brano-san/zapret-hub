@@ -96,3 +96,42 @@ export function foldersReady(flowseal: FolderCheck | null, zapret2: Info | null)
   const zapret2Bad = zapret2?.dir != null && !zapret2Ok;
   return (flowsealOk || zapret2Ok) && !flowsealBad && !zapret2Bad;
 }
+
+const DEVICE = /^(CON|PRN|AUX|NUL|COM\d|LPT\d)$/i;
+
+/** `zapret::custom::validate_name` for the page, in Russian: `null` for a name it accepts. */
+export function nameError(name: string): string | null {
+  const trimmed = name.trim();
+  if (trimmed.length === 0) return S.names.empty;
+  if (trimmed.length > 40 || !/^[A-Za-z0-9][A-Za-z0-9 ._-]*$/.test(trimmed)) return S.names.invalid;
+  if (DEVICE.test((trimmed.split(".")[0] ?? "").trimEnd())) return S.names.device;
+  return null;
+}
+
+/** A name `nameError` accepts, made of `text` (`general (ALT11) copy` → `general ALT11 copy`) and not in `taken` (any case). */
+export function uniqueName(text: string, taken: string[]): string {
+  const base =
+    text
+      .replace(/[^A-Za-z0-9 ._-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/^[^A-Za-z0-9]+/, "") || "strategy";
+  const used = new Set(taken.map((name) => name.toLowerCase()));
+  for (let n = 1; ; n++) {
+    const suffix = n === 1 ? "" : ` ${n}`;
+    const name = base.slice(0, 40 - suffix.length).trimEnd() + suffix;
+    if (!used.has(name.toLowerCase()) && nameError(name) === null) return name;
+  }
+}
+
+/** The name inside a strategy's own name, for `uniqueName`: `mine` for `zapret2:mine` and `general (HUB mine)`. */
+export function ownName(name: string): string {
+  return zapret2Name(name) ?? /\(HUB (.+)\)$/.exec(name)?.[1] ?? name;
+}
+
+/** A known error of the app, said in Russian above the original; the rest as written. */
+export function localizeError(text: string): string {
+  if (text.includes("a name is 1-40")) return `${S.names.invalid}\n\n${text}`;
+  if (text.includes("is a Windows device name")) return `${S.names.device}\n\n${text}`;
+  return text;
+}
