@@ -50,8 +50,8 @@ const POLL: Duration = Duration::from_secs(2);
                   4 --timeout reached."
 )]
 struct Cli {
-    /// Confirm what the window asks to confirm: custom delete, hosts apply, checks fix
-    /// remove-windivert|remove-conflicts, discord clear-cache, service remove.
+    /// Confirm what the window asks to confirm: custom delete, zapret2 delete, hosts apply, checks
+    /// fix remove-windivert|remove-conflicts, discord clear-cache, service remove.
     #[arg(long, global = true)]
     yes: bool,
     #[command(subcommand)]
@@ -74,20 +74,23 @@ enum Command {
     Proxy(ProxyCommand),
     /// Zapret folders and SOCKS5 proxies found on this computer.
     Candidates,
-    /// The strategies of the zapret folder.
+    /// Flowseal's strategies, then zapret2's.
     #[command(subcommand)]
     Strategies(StrategiesCommand),
-    /// Install a strategy as the zapret service, then run a quick check.
+    /// Install a strategy as its engine's service (zapret or zapret2), then run a quick check.
     Apply { name: String },
     /// Apply the best strategy of the newest standard test run.
     ApplyBest,
-    /// Restart the zapret service, then run a quick check.
+    /// Restart the active service (zapret or zapret2), then run a quick check.
     Restart,
     /// Check that zapret works now.
     QuickCheck,
     /// Custom strategies.
     #[command(subcommand)]
     Custom(CustomCommand),
+    /// zapret2: its folder and your own strategies (zapret2:<name>).
+    #[command(subcommand)]
+    Zapret2(Zapret2Command),
     /// Strategy test runs.
     #[command(subcommand)]
     Tests(TestsCommand),
@@ -136,8 +139,8 @@ enum Command {
 enum SettingsCommand {
     /// All settings.
     Get,
-    /// Change one setting; an empty value clears socks5. The zapret folder is changed only in the
-    /// Zapret Hub window.
+    /// Change one setting; an empty value clears socks5. The zapret and zapret2 folders are
+    /// changed only in the Zapret Hub window.
     Set { key: Key, value: String },
 }
 
@@ -169,6 +172,24 @@ enum CustomCommand {
         create: bool,
     },
     /// Delete a custom strategy by its own name: mine for "general (HUB mine)" (needs --yes).
+    Delete { name: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum Zapret2Command {
+    /// The zapret2 folder, its version and Lua compatibility, or why it cannot be used.
+    Info,
+    /// Check a strategy's text (a file, or - for stdin) with winws2, without saving it.
+    Validate { file: PathBuf },
+    /// Save a strategy's text (a file, or - for stdin) as zapret2:<name>.
+    Save {
+        name: String,
+        file: PathBuf,
+        /// A new strategy rather than a change to one.
+        #[arg(long)]
+        create: bool,
+    },
+    /// Delete one of your zapret2 strategies by its own name: mine for zapret2:mine (needs --yes).
     Delete { name: String },
 }
 
@@ -252,12 +273,13 @@ enum DiscordCommand {
 
 #[derive(Debug, Subcommand)]
 enum ServiceCommand {
-    /// Remove the zapret service and WinDivert (needs --yes).
+    /// Remove the zapret or zapret2 service and WinDivert (needs --yes).
     Remove,
 }
 
-/// The keys of zapret-hub.toml the CLI may change (spec 7.2). Not `zapret_dir`: the SYSTEM service
-/// runs that folder's winws.exe, so the app takes a new one only from its window (spec 5).
+/// The keys of zapret-hub.toml the CLI may change (spec 7.2). Not `zapret_dir` or `zapret2_dir`:
+/// the SYSTEM service runs that folder's winws.exe or winws2.exe, so the app takes a new one only
+/// from its window (spec 5; zapret2 spec 10).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "snake_case")]
 enum Key {
@@ -469,6 +491,7 @@ fn needs_yes(command: &Command) -> bool {
     matches!(
         command,
         Command::Custom(CustomCommand::Delete { .. })
+            | Command::Zapret2(Zapret2Command::Delete { .. })
             | Command::Hosts(HostsCommand::Apply)
             | Command::Checks {
                 command: Some(ChecksCommand::Fix {
@@ -542,6 +565,14 @@ fn run(args: Cli, call: Call) -> Result<Done, Fail> {
             strategy: read_strategy(&file)?,
             create,
         },
+        Command::Zapret2(Zapret2Command::Validate { file }) => Request::ValidateZapret2 {
+            text: read_text(&file)?,
+        },
+        Command::Zapret2(Zapret2Command::Save { name, file, create }) => Request::SaveZapret2 {
+            name,
+            text: read_text(&file)?,
+            create,
+        },
         Command::Tests(TestsCommand::Run {
             dpi,
             wait,
@@ -587,6 +618,8 @@ fn run(args: Cli, call: Call) -> Result<Done, Fail> {
             Request::CloneStrategy { source, name }
         }
         Command::Custom(CustomCommand::Delete { name }) => Request::DeleteCustom { name },
+        Command::Zapret2(Zapret2Command::Info) => Request::Zapret2Info,
+        Command::Zapret2(Zapret2Command::Delete { name }) => Request::DeleteZapret2 { name },
         Command::Tests(TestsCommand::Status) => Request::TestsStatus,
         Command::Tests(TestsCommand::Cancel) => Request::CancelTests,
         Command::Tests(TestsCommand::List) => Request::ListRuns,
@@ -652,17 +685,36 @@ fn setting(key: Key, value: &str) -> Result<Value, Fail> {
     }
 }
 
+/// A file, or stdin for `-` (spec 7.3). PowerShell 5.1 and Notepad start the file with a BOM: a
+/// UTF-8 one is dropped, and a UTF-16LE one (`>`, `Out-File`) is decoded.
+fn read_text(file: &Path) -> Result<String, Fail> {
+    let fail = |err: &dyn std::fmt::Display| {
+        Fail::new(USAGE, format!("cannot read {}: {err}", file.display()))
+    };
+    let mut bytes = Vec::new();
+    if file == Path::new("-") {
+        io::Read::read_to_end(&mut io::stdin(), &mut bytes).map_err(|err| fail(&err))?;
+    } else {
+        bytes = std::fs::read(file).map_err(|err| fail(&err))?;
+    }
+    let text = if let Some(utf16) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        let units = utf16
+            .chunks(2)
+            .map(|pair| match pair {
+                [lo, hi] => Ok(u16::from_le_bytes([*lo, *hi])),
+                _ => Err(fail(&"truncated UTF-16 text")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        String::from_utf16(&units).map_err(|err| fail(&err))?
+    } else {
+        String::from_utf8(bytes).map_err(|err| fail(&err))?
+    };
+    Ok(text.trim_start_matches('\u{feff}').to_owned())
+}
+
 /// A `CustomStrategy` JSON from a file, or from stdin for `-` (spec 7.3).
 fn read_strategy(file: &Path) -> Result<CustomStrategy, Fail> {
-    let text = if file == Path::new("-") {
-        io::read_to_string(io::stdin())
-    } else {
-        std::fs::read_to_string(file)
-    }
-    .map_err(|err| Fail::new(USAGE, format!("cannot read {}: {err}", file.display())))?;
-    // PowerShell 5.1 (`Set-Content -Encoding UTF8`) and Notepad start the file with a BOM.
-    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-    serde_json::from_str(text).map_err(|err| {
+    serde_json::from_str(&read_text(file)?).map_err(|err| {
         Fail::new(
             USAGE,
             format!(
@@ -890,6 +942,13 @@ mod tests {
                     name: "mine".into(),
                 },
             ),
+            (&["zapret2", "info"], Request::Zapret2Info),
+            (
+                &["zapret2", "delete", "mine", "--yes"],
+                Request::DeleteZapret2 {
+                    name: "mine".into(),
+                },
+            ),
             (&["tests", "status"], Request::TestsStatus),
             (&["tests", "cancel"], Request::CancelTests),
             (&["tests", "list"], Request::ListRuns),
@@ -993,6 +1052,7 @@ mod tests {
     fn what_the_window_confirms_needs_yes() {
         for args in [
             &["custom", "delete", "mine"][..],
+            &["zapret2", "delete", "mine"],
             &["hosts", "apply"],
             &["checks", "fix", "remove-windivert"],
             &["checks", "fix", "remove-conflicts"],
@@ -1055,8 +1115,9 @@ mod tests {
     fn bad_arguments_are_refused_by_clap() {
         for args in [
             &["settings", "set", "colour", "red"][..],
-            // Only the window moves the folder whose winws.exe the SYSTEM service runs.
+            // Only the window moves the folders whose winws.exe and winws2.exe SYSTEM runs.
             &["settings", "set", "zapret_dir", r"C:\Users\me\winws"],
+            &["settings", "set", "zapret2_dir", r"D:\zapret2"],
             &["lists", "add", "everything", "x"],
             &["tests", "run", "--timeout", "5"],
             &["frobnicate"],
@@ -1073,6 +1134,7 @@ mod tests {
             err.contains("socks5")
                 && err.contains("cli_enabled")
                 && !err.contains("zapret_dir")
+                && !err.contains("zapret2_dir")
                 && !err.contains('\u{1b}'),
             "{err}"
         );
@@ -1081,6 +1143,7 @@ mod tests {
     fn settings() -> Value {
         json!({
             "zapret_dir": "E:\\Zapret",
+            "zapret2_dir": "D:\\zapret2",
             "socks5": "127.0.0.1:2080",
             "autostart": false,
             "start_minimized": true,
@@ -1188,6 +1251,41 @@ mod tests {
         );
         std::fs::write(&file, "{\"name\": 1}").unwrap();
         let (outcome, asked) = drive(&["custom", "validate", path], Vec::new());
+        assert_eq!(code(outcome), USAGE);
+        assert!(asked.is_empty());
+    }
+
+    #[test]
+    fn zapret2_save_and_validate_send_the_text_of_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("mine.txt");
+        let text = "# mine\n--wf-tcp-out=443\n--lua-desync=fake:blob=fake_default_tls\n";
+        std::fs::write(&file, format!("\u{feff}{text}")).unwrap();
+        let path = file.to_str().unwrap();
+        let (_, asked) = drive(&["zapret2", "save", "mine", path, "--create"], Vec::new());
+        assert_eq!(
+            asked,
+            [Request::SaveZapret2 {
+                name: "mine".into(),
+                text: text.into(),
+                create: true
+            }]
+        );
+        let (_, asked) = drive(&["zapret2", "validate", path], Vec::new());
+        assert_eq!(asked, [Request::ValidateZapret2 { text: text.into() }]);
+        // PowerShell 5.1 `>` / `Out-File`: UTF-16LE with an FF FE BOM.
+        let utf16: Vec<u8> = [0xFF, 0xFE]
+            .into_iter()
+            .chain(text.encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        std::fs::write(&file, utf16).unwrap();
+        let (_, asked) = drive(&["zapret2", "validate", path], Vec::new());
+        assert_eq!(asked, [Request::ValidateZapret2 { text: text.into() }]);
+        let missing = dir.path().join("none.txt");
+        let (outcome, asked) = drive(
+            &["zapret2", "validate", missing.to_str().unwrap()],
+            Vec::new(),
+        );
         assert_eq!(code(outcome), USAGE);
         assert!(asked.is_empty());
     }

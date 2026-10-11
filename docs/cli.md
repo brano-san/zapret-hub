@@ -35,8 +35,11 @@ CLI прав администратора не просит и сам в сис�
 Включённый CLI даёт любой программе, запущенной от вашего имени, те же действия, что окно: удаление службы,
 правку `hosts`, свои стратегии. Аргументы своей стратегии получает `winws.exe`, а служба zapret запускает его от
 SYSTEM, поэтому параметры winws, которые пишут файлы, пишут их от SYSTEM. Это не больше, чем может любая
-программа, которая пишет в папку Flowseal: она меняет сами `.bat` и `winws.exe`. Папку zapret, а с ней и то,
-какой `winws.exe` запускает служба, CLI не меняет: её меняют только в окне.
+программа, которая пишет в папку Flowseal: она меняет сами `.bat` и `winws.exe`.
+Так же и со своими стратегиями zapret2: их текст получает `winws2.exe` от SYSTEM (служба zapret2) или от
+администратора (проверка), а программа, которая пишет в папку zapret2, меняет сам `winws2.exe` и его Lua. Папки
+zapret и zapret2, а с ними и то, какие `winws.exe` и `winws2.exe` запускают службы, CLI не меняет: их меняют
+только в окне.
 
 ## Вывод и коды выхода
 
@@ -73,7 +76,8 @@ PowerShell читает вывод программ в кодировке `[Cons
 ## Команды
 
 Значения перечислений пишутся через дефис (`ipset-exclude`, `remove-windivert`), ключи настроек — как в
-`zapret-hub.toml` (`start_minimized`). Имя стратегии — имя её файла без `.bat`, например `"general (ALT11)"`.
+`zapret-hub.toml` (`start_minimized`). Имя стратегии — имя её файла без `.bat`, например `"general (ALT11)"`;
+стратегии zapret2 называются `zapret2:<имя>`, например `zapret2:general` (раздел «Стратегии zapret2»).
 
 | Команда | Что делает | Команда приложения |
 |---|---|---|
@@ -94,6 +98,10 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `custom validate <file\|->` | проверяет запись (`winws --dry-run`), не сохраняя | `validate_custom` |
 | `custom save <file\|-> [--create]` | сохраняет запись; `--create` — как новую стратегию | `save_custom` |
 | `custom delete <name> --yes` | удаляет свою стратегию; `<name>` — её собственное имя: `mine` для `general (HUB mine)` | `delete_custom` |
+| `zapret2 info` | папка zapret2, версия движка и совместимость Lua или ошибка | `zapret2_info` |
+| `zapret2 validate <file\|->` | проверяет текст стратегии zapret2, не сохраняя | `validate_zapret2` |
+| `zapret2 save <name> <file\|-> [--create]` | сохраняет текст как `zapret2:<name>`; `--create` — как новую стратегию | `save_zapret2` |
+| `zapret2 delete <name> --yes` | удаляет свою стратегию zapret2; `<name>` — без префикса: `mine` для `zapret2:mine` | `delete_zapret2` |
 | `tests run [--dpi] [--wait] [--timeout <s>] [<name>…]` | запускает прогон (раздел «Тесты») | `start_tests` |
 | `tests status` | идёт ли прогон, его ход, итог последнего | `tests_status` |
 | `tests wait [--timeout <s>]` | ждёт конца прогона и печатает рейтинг | `tests_status` |
@@ -114,7 +122,7 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `checks` | диагностика `service.bat` | `system_checks` |
 | `checks fix <action>` | исправление: `enable-tcp-timestamps`; `remove-windivert` и `remove-conflicts` — с `--yes` | `fix_check` |
 | `discord clear-cache --yes` | закрывает Discord и чистит его кэш | `clear_discord_cache` |
-| `service remove --yes` | удаляет службу zapret и WinDivert | `remove_service` |
+| `service remove --yes` | удаляет службу zapret или zapret2 и WinDivert | `remove_service` |
 
 `--yes` повторяет подтверждения окна и ставится в любом месте команды. Без него эти команды не отправляются:
 код 2.
@@ -140,14 +148,16 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `theme` | `system`, `light` или `dark` |
 | `cli_enabled` | `false` выключает CLI; включить его из CLI нельзя |
 
-Папку zapret (`zapret_dir`) CLI не меняет: служба zapret запускает `winws.exe` из неё от SYSTEM, поэтому папку
-меняют только в окне («Настройки» → «Папка zapret» → «Сохранить»). `settings get` её показывает, а
-`settings set zapret_dir …` — неизвестный ключ, код 2.
+Папки zapret и zapret2 (`zapret_dir`, `zapret2_dir`) CLI не меняет: службы zapret и zapret2 запускают из них
+`winws.exe` и `winws2.exe` от SYSTEM, поэтому папки меняют только в окне («Настройки» → «Папка zapret» или
+«Папка zapret2» → «Сохранить»). `settings get` их показывает, а `settings set zapret_dir …` и
+`settings set zapret2_dir …` — неизвестный ключ, код 2.
 
 Сохранение через CLI не может включить `cli_enabled`: если вы выключили его в окне, пока команда читала и
-сохраняла настройки, он остаётся выключенным. Если за это время вы сменили в окне папку zapret, приложение
-отклонит сохранение CLI ошибкой `the zapret folder can be changed only in the Zapret Hub window (Settings)`
-(код 1): повторите команду.
+сохраняла настройки, он остаётся выключенным. Если за это время вы сменили в окне папку zapret или zapret2,
+приложение отклонит сохранение CLI ошибкой
+`the zapret folder can be changed only in the Zapret Hub window (Settings)` или
+`the zapret2 folder can be changed only in the Zapret Hub window (Settings)` (код 1): повторите команду.
 
 Неизвестный ключ, не `true`/`false` у флажка или тема не из списка — код 2 со списком допустимых, до обращения
 к приложению. Адрес `socks5` проверяет приложение: неверный — код 1 с его ошибкой
@@ -263,6 +273,36 @@ zapret-hub-cli custom save mine.json
 
 Удалить: `zapret-hub-cli custom delete mine --yes`.
 
+## Стратегии zapret2
+
+Если в окне задана папка zapret2 («Настройки» → «Папка zapret2»; CLI её не меняет), `strategies list` после стратегий
+Flowseal показывает стратегии zapret2: сначала встроенные (`zapret2:general`, `zapret2:general-sni`), потом
+свои. `apply`, `strategies show` и `tests run` принимают эти имена как есть, прогон может смешивать оба движка.
+Применение стратегии zapret2 ставит службу `zapret2` и удаляет службу `zapret`, применение стратегии Flowseal —
+наоборот.
+
+`zapret2 info` печатает папку, версию движка и совместимость Lua (`compat`) или ошибку (`error`).
+
+Своя стратегия — текст аргументов `winws2` в файле: глобальная часть (`--wf-*`, `--lua-init`, `--blob`), затем
+профили через `--new`. Строки, которые начинаются с `#`, — комментарии. `%LUA%`, `%FILES%`, `%LISTS%`, `%BIN%` и
+`%GameFilter%` подставляются при проверке и установке. Текст встроенной стратегии — поле `source` в выводе
+`strategies show zapret2:general`: с него удобно начать.
+
+```
+zapret-hub-cli zapret2 validate mine.txt
+zapret-hub-cli zapret2 save mine mine.txt --create
+zapret-hub-cli apply zapret2:mine
+```
+
+- `validate` и `save` проводят полную проверку: статическую (функции `--lua-desync`, кавычки), `winws2 --dry-run`
+  и `winws2 --intercept=0`. Ошибка — код 1 с полным выводом `winws2`.
+- `save` без `--create` меняет существующую стратегию. Если она активна, служба ставится заново и печатается
+  итог быстрой проверки, иначе — `null`.
+- `-` вместо файла читает текст из stdin; допускается BOM UTF-8 и UTF-16LE (его пишут `>` и `Out-File`
+  в PowerShell 5.1).
+
+Удалить: `zapret-hub-cli zapret2 delete mine --yes`. Встроенные стратегии и активную удалить нельзя.
+
 ## Если приложение не запущено
 
 Команды, которым нужно приложение, отвечают кодом 3:
@@ -324,3 +364,10 @@ zapret-hub-cli custom save mine.json
     `$p = [System.IO.Pipes.NamedPipeServerStream]::new('zapret-hub-cli')`, запустить приложение → уведомление
     «Канал CLI занят другой программой», в журнале `cli: \\.\pipe\zapret-hub-cli is not open: …`. Затем
     `$p.Dispose()`, перезапуск приложения → `status` снова отвечает.
+12. zapret2, с распакованным релизом zapret2: `settings set zapret2_dir <папка релиза>` → код 2, настройки не
+    меняются; в окне «Настройки» → «Папка zapret2» выбрать папку релиза и сохранить; `settings get` →
+    `zapret2_dir` с ней; `zapret2 info` →
+    версия и `compat`. Текст `strategies show zapret2:general` (поле `source`) в файл → `zapret2 validate` →
+    код 0; `zapret2 save mine <файл> --create` → `null`; `apply zapret2:mine` → `sc query zapret2` — RUNNING,
+    `sc query zapret` службу не находит; `apply general` → наоборот. `zapret2 delete mine` → код 2, с `--yes` →
+    код 0.

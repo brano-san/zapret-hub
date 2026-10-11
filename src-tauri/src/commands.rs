@@ -229,6 +229,60 @@ pub async fn delete_custom(handle: AppHandle, name: String) -> Answer<()> {
     .await
 }
 
+/// The zapret2 folder, its version and Lua compatibility, or why it cannot be used.
+#[tauri::command]
+#[specta::specta]
+pub async fn zapret2_info(handle: AppHandle) -> Answer<zapret2::Info> {
+    blocking(move || {
+        Ok(zapret2::info(
+            app(&handle).settings().zapret2_dir.as_deref(),
+        ))
+    })
+    .await
+}
+
+/// The zapret2 editor's «Проверить»: the whole check of zapret2 spec 5.3, nothing saved.
+#[tauri::command]
+#[specta::specta]
+pub async fn validate_zapret2(handle: AppHandle, text: String) -> Answer<()> {
+    blocking(move || {
+        let state = app(&handle);
+        let engine = state.engine2_required()?;
+        state.change(|folder| {
+            let tail = zapret2::strategies::tail(&engine, Some(folder), &text)?;
+            zapret2::service::validate(&engine, &tail)
+        })
+    })
+    .await
+}
+
+/// `name` without the prefix: `mine` for `zapret2:mine`.
+#[tauri::command]
+#[specta::specta]
+pub async fn save_zapret2(
+    handle: AppHandle,
+    name: String,
+    text: String,
+    create: bool,
+) -> Answer<Option<QuickCheck>> {
+    blocking(move || actions::save_zapret2(&handle, &name, &text, create)).await
+}
+
+/// `name` without the prefix: `mine` for `zapret2:mine`.
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_zapret2(handle: AppHandle, name: String) -> Answer<()> {
+    blocking(move || {
+        let state = app(&handle);
+        let active = zapret::service::strategy();
+        let deleted = state
+            .change(|_| zapret2::strategies::delete(&state.paths.data(), &name, active.as_deref()));
+        actions::changed(&handle);
+        deleted
+    })
+    .await
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn start_tests(handle: AppHandle, request: Request) -> Answer<()> {

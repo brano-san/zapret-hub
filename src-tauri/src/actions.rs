@@ -169,6 +169,36 @@ pub fn save_custom(
     result.map(|_| None)
 }
 
+/// `save_zapret2` (zapret2 spec 5.2). The active strategy's command line is baked into the
+/// service: saving it installs it again, under a snapshot.
+pub fn save_zapret2(
+    app: &AppHandle,
+    name: &str,
+    text: &str,
+    create: bool,
+) -> anyhow::Result<Option<QuickCheck>> {
+    let state = state(app);
+    let engine = state.engine2_required()?;
+    let data = state.paths.data();
+    let full = format!("{}{}", zapret2::PREFIX, name.trim());
+    let active = zapret::service::strategy();
+    if !create && active.is_some_and(|active| active.eq_ignore_ascii_case(&full)) {
+        let result = state.change_safely("custom", |folder| {
+            let (saved, tail) =
+                zapret2::service::save(&engine, Some(folder), &data, name, text, false)?;
+            zapret2::service::install(&engine, &saved, &tail)?;
+            // winws2 needs a moment before it intercepts anything (spec 5.4).
+            std::thread::sleep(Duration::from_secs(2));
+            Ok(zapret::service::quick_check(folder))
+        });
+        return finish_with_check(app, result).map(Some);
+    }
+    let result = state
+        .change(|folder| zapret2::service::save(&engine, Some(folder), &data, name, text, create));
+    changed(app);
+    result.map(|_| None)
+}
+
 /// A folder found at start or chosen in Settings: the user lists exist, and the custom strategies'
 /// files are back after a Flowseal update (spec 5.5, 6).
 pub fn prepare_folder(app: &AppHandle) {

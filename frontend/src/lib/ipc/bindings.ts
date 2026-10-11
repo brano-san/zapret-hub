@@ -31,6 +31,19 @@ export const commands = {
 } | null, string>(__TAURI_INVOKE("save_custom", { strategy, create })),
 	/**  `name` is the record's name, not the file's. */
 	deleteCustom: (name: string) => typedError<null, string>(__TAURI_INVOKE("delete_custom", { name })),
+	/**  The zapret2 folder, its version and Lua compatibility, or why it cannot be used. */
+	zapret2Info: () => typedError<Info, string>(__TAURI_INVOKE("zapret2_info")),
+	/**  The zapret2 editor's «Проверить»: the whole check of zapret2 spec 5.3, nothing saved. */
+	validateZapret2: (text: string) => typedError<null, string>(__TAURI_INVOKE("validate_zapret2", { text })),
+	/**  `name` without the prefix: `mine` for `zapret2:mine`. */
+	saveZapret2: (name: string, text: string, create: boolean) => typedError<{
+	ok: boolean,
+	service: SvcState,
+	winws_running: boolean,
+	checks: QuickItem[],
+} | null, string>(__TAURI_INVOKE("save_zapret2", { name, text, create })),
+	/**  `name` without the prefix: `mine` for `zapret2:mine`. */
+	deleteZapret2: (name: string) => typedError<null, string>(__TAURI_INVOKE("delete_zapret2", { name })),
 	startTests: (request: Request) => typedError<null, string>(__TAURI_INVOKE("start_tests", { request })),
 	cancelTests: () => __TAURI_INVOKE<void>("cancel_tests"),
 	testLive: () => __TAURI_INVOKE<{

@@ -65,6 +65,19 @@ pub enum Request {
     DeleteCustom {
         name: String,
     },
+    Zapret2Info,
+    ValidateZapret2 {
+        text: String,
+    },
+    /// `name` without the prefix: `mine` for `zapret2:mine`.
+    SaveZapret2 {
+        name: String,
+        text: String,
+        create: bool,
+    },
+    DeleteZapret2 {
+        name: String,
+    },
     StartTests {
         request: TestRequest,
     },
@@ -287,6 +300,18 @@ mod tests {
                 create: true,
             },
             Request::DeleteCustom {
+                name: "mine".into(),
+            },
+            Request::Zapret2Info,
+            Request::ValidateZapret2 {
+                text: "--wf-tcp-out=443".into(),
+            },
+            Request::SaveZapret2 {
+                name: "mine".into(),
+                text: "--wf-tcp-out=443".into(),
+                create: true,
+            },
+            Request::DeleteZapret2 {
                 name: "mine".into(),
             },
             Request::StartTests {

@@ -110,6 +110,14 @@ fn dispatch(app: &AppHandle, request: Request) -> Result<Value, String> {
             json(block_on(commands::save_custom(handle, strategy, create))?)
         }
         Request::DeleteCustom { name } => json(block_on(commands::delete_custom(handle, name))?),
+        Request::Zapret2Info => json(block_on(commands::zapret2_info(handle))?),
+        Request::ValidateZapret2 { text } => {
+            json(block_on(commands::validate_zapret2(handle, text))?)
+        }
+        Request::SaveZapret2 { name, text, create } => json(block_on(commands::save_zapret2(
+            handle, name, text, create,
+        ))?),
+        Request::DeleteZapret2 { name } => json(block_on(commands::delete_zapret2(handle, name))?),
         Request::StartTests { request } => json(block_on(commands::start_tests(handle, request))?),
         Request::TestsStatus => Ok(tests_status(&state)),
         Request::CancelTests => {
