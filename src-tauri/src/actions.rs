@@ -354,6 +354,24 @@ fn strategies_folder(data: &Path) -> anyhow::Result<PathBuf> {
     Ok(dir)
 }
 
+/// The folder of a strategy's file: Flowseal's `.bat` (its own and the custom ones) in the
+/// Flowseal folder, a zapret2 strategy of the user's in `data\zapret2`. Only names that are in
+/// the lists resolve, so the page cannot point anywhere else.
+fn strategy_folder(folder: Option<&Folder>, data: &Path, name: &str) -> anyhow::Result<PathBuf> {
+    if let Some(name) = zapret2::strip_prefix(name) {
+        let strategy = zapret2::strategies::find(data, name)?;
+        anyhow::ensure!(
+            !strategy.builtin,
+            "{} is built into Zapret Hub: it has no file",
+            strategy.full_name()
+        );
+        return Ok(zapret2::strategies::dir(data));
+    }
+    let folder = folder.ok_or_else(|| anyhow::anyhow!(zapret::folder::NOT_SET))?;
+    let file = zapret::strategies::find(folder, name)?;
+    Ok(file.path.parent().unwrap_or(folder.root()).to_path_buf())
+}
+
 pub fn open_folder(app: &AppHandle, kind: FolderKind) -> anyhow::Result<()> {
     let state = state(app);
     let path = match kind {
@@ -366,6 +384,9 @@ pub fn open_folder(app: &AppHandle, kind: FolderKind) -> anyhow::Result<()> {
             let logs = state.paths.logs();
             std::fs::create_dir_all(&logs)?;
             logs
+        }
+        FolderKind::Strategy(name) => {
+            strategy_folder(state.folder_if_set()?.as_ref(), &state.paths.data(), &name)?
         }
     };
     explorer(path.as_os_str())
@@ -387,6 +408,53 @@ mod tests {
             folder_error(&broken, true)
                 .unwrap()
                 .contains("not a zapret folder")
+        );
+    }
+
+    #[test]
+    fn a_strategy_opens_the_folder_of_its_file() {
+        let zapret = tempfile::tempdir().unwrap();
+        let root = zapret.path();
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::create_dir_all(root.join("lists")).unwrap();
+        for file in [
+            "service.bat",
+            "general (ALT11).bat",
+            r"bin\winws.exe",
+            r"bin\WinDivert64.sys",
+        ] {
+            std::fs::write(root.join(file), "").unwrap();
+        }
+        let folder = Folder::open(root).unwrap();
+        let data = tempfile::tempdir().unwrap();
+        zapret2::strategies::write(data.path(), "mine", "--wf-tcp-out=443").unwrap();
+
+        let open = |folder: Option<&Folder>, name: &str| {
+            strategy_folder(folder, data.path(), name).map_err(|err| format!("{err:#}"))
+        };
+        assert_eq!(
+            open(Some(&folder), "GENERAL (alt11)"),
+            Ok(root.to_path_buf())
+        );
+        assert_eq!(
+            open(None, "zapret2:mine"),
+            Ok(data.path().join("zapret2")),
+            "zapret2 needs no Flowseal folder"
+        );
+        assert!(
+            open(Some(&folder), "zapret2:general")
+                .unwrap_err()
+                .contains("no file")
+        );
+        assert!(open(Some(&folder), "zapret2:other").is_err());
+        assert!(
+            open(Some(&folder), r"..\..\Windows").is_err(),
+            "a path is not a name"
+        );
+        assert!(
+            open(None, "general (ALT11)")
+                .unwrap_err()
+                .contains("zapret folder is not set")
         );
     }
 

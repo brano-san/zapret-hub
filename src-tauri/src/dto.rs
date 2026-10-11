@@ -90,12 +90,15 @@ pub struct LiveRun {
     pub results: Vec<StrategyResult>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub enum FolderKind {
     Zapret,
     /// `data/zapret2`: the user's zapret2 strategies; needs the zapret2 folder to be set.
     Zapret2,
     Logs,
+    /// The folder of a strategy's file, by the name the list shows; the path is found here, the
+    /// page never sends one. A built-in zapret2 strategy has no file.
+    Strategy(String),
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type, tauri_specta::Event)]
