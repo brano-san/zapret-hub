@@ -108,7 +108,8 @@ fn one_line(text: &str) -> anyhow::Result<String> {
         .join(" "))
 }
 
-/// 1-40 characters: Latin letters, digits, space, `-`, `_`, `.`; a letter or digit first.
+/// 1-40 characters: Latin letters, digits, space, `-`, `_`, `.`; a letter or digit first; not a
+/// Windows device name (the record is `<name>.toml`).
 pub fn validate_name(name: &str) -> anyhow::Result<String> {
     let name = name.trim();
     let ok = (1..=40).contains(&name.len())
@@ -119,6 +120,20 @@ pub fn validate_name(name: &str) -> anyhow::Result<String> {
     anyhow::ensure!(
         ok,
         "a name is 1-40 Latin letters, digits, spaces, '-', '_' or '.', starting with a letter or digit: {name}"
+    );
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end()
+        .to_ascii_uppercase();
+    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.as_bytes()[3].is_ascii_digit());
+    anyhow::ensure!(
+        !device,
+        "{name} is a Windows device name: choose another name"
     );
     Ok(name.to_owned())
 }
@@ -226,7 +241,9 @@ impl Store {
         Self { dir: dir.into() }
     }
 
-    /// Every record by name. A record that does not parse is an error naming its file.
+    /// Every record by name. A record that does not parse, or whose name is not one `validate_name`
+    /// gives, is an error naming its file: the name becomes file names in the Flowseal folder and
+    /// here, so a record written by hand must not reach outside them.
     pub fn list(&self) -> anyhow::Result<Vec<CustomStrategy>> {
         let entries = match std::fs::read_dir(&self.dir) {
             Ok(entries) => entries,
@@ -242,11 +259,17 @@ impl Store {
             {
                 continue;
             }
-            let text = std::fs::read_to_string(&path)?;
-            records.push(
-                toml::from_str::<CustomStrategy>(&text)
-                    .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?,
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+            let record: CustomStrategy =
+                toml::from_str(&text).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+            anyhow::ensure!(
+                validate_name(&record.name).is_ok_and(|name| name == record.name),
+                "{}: {:?} is not a valid strategy name",
+                path.display(),
+                record.name
             );
+            records.push(record);
         }
         records.sort_by_key(|s| s.name.to_lowercase());
         Ok(records)

@@ -112,6 +112,29 @@ fn names_are_checked() {
     for bad in ["", " ", "-x", "a/b", "привет", "a\"b", long.as_str()] {
         assert!(validate_name(bad).is_err(), "{bad}");
     }
+    // Windows device names: `data\strategies\NUL.toml` would vanish into the device.
+    for device in ["CON", "nul", "Nul.x", "CON .x", "COM1", "lpt9"] {
+        assert!(validate_name(device).is_err(), "{device}");
+    }
+    for fine in ["CONx", "Console", "COM10"] {
+        assert_eq!(validate_name(fine).unwrap(), fine);
+    }
+}
+
+#[test]
+fn a_record_whose_name_is_not_a_valid_name_names_its_file() {
+    let data = tempfile::tempdir().unwrap();
+    std::fs::write(
+        data.path().join("evil.toml"),
+        r#"name = 'x)\..\evil'
+cloned_from = 'general'
+wf = '--wf-tcp=80'
+blocks = ['--filter-tcp=80']
+"#,
+    )
+    .unwrap();
+    let err = Store::new(data.path()).list().unwrap_err().to_string();
+    assert!(err.contains("evil.toml"), "{err}");
 }
 
 #[test]
