@@ -136,8 +136,8 @@ enum Command {
 enum SettingsCommand {
     /// All settings.
     Get,
-    /// Change one setting; an empty value clears zapret_dir and socks5, and a relative zapret_dir
-    /// is made absolute from the current directory.
+    /// Change one setting; an empty value clears socks5. The zapret folder is changed only in the
+    /// Zapret Hub window.
     Set { key: Key, value: String },
 }
 
@@ -256,11 +256,11 @@ enum ServiceCommand {
     Remove,
 }
 
-/// The keys of zapret-hub.toml the CLI may change (spec 7.2).
+/// The keys of zapret-hub.toml the CLI may change (spec 7.2). Not `zapret_dir`: the SYSTEM service
+/// runs that folder's winws.exe, so the app takes a new one only from its window (spec 5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "snake_case")]
 enum Key {
-    ZapretDir,
     Socks5,
     Autostart,
     StartMinimized,
@@ -639,12 +639,7 @@ fn setting(key: Key, value: &str) -> Result<Value, Fail> {
         )
     };
     match key {
-        Key::ZapretDir | Key::Socks5 if value.trim().is_empty() => Ok(Value::Null),
-        // The app resolves a relative path against its own directory, not the caller's.
-        Key::ZapretDir => std::path::absolute(value)
-            .ok()
-            .and_then(|path| path.to_str().map(Value::from))
-            .ok_or_else(|| bad("a path that can be made absolute")),
+        Key::Socks5 if value.trim().is_empty() => Ok(Value::Null),
         Key::Socks5 => Ok(value.into()),
         Key::Autostart | Key::StartMinimized | Key::CliEnabled => value
             .parse::<bool>()
@@ -1052,6 +1047,8 @@ mod tests {
     fn bad_arguments_are_refused_by_clap() {
         for args in [
             &["settings", "set", "colour", "red"][..],
+            // Only the window moves the folder whose winws.exe the SYSTEM service runs.
+            &["settings", "set", "zapret_dir", r"C:\Users\me\winws"],
             &["lists", "add", "everything", "x"],
             &["tests", "run", "--timeout", "5"],
             &["frobnicate"],
@@ -1065,7 +1062,10 @@ mod tests {
             .render()
             .to_string();
         assert!(
-            err.contains("zapret_dir") && err.contains("cli_enabled") && !err.contains('\u{1b}'),
+            err.contains("socks5")
+                && err.contains("cli_enabled")
+                && !err.contains("zapret_dir")
+                && !err.contains('\u{1b}'),
             "{err}"
         );
     }
@@ -1086,8 +1086,7 @@ mod tests {
     fn settings_set_changes_one_key_and_sends_all_of_them() {
         for (key, value, expected) in [
             ("socks5", "", Value::Null),
-            ("zapret_dir", r"C:\Запрет", json!(r"C:\Запрет")),
-            ("zapret_dir", "  ", Value::Null),
+            ("socks5", "  ", Value::Null),
             ("theme", "dark", json!("dark")),
             ("cli_enabled", "false", json!(false)),
             ("start_minimized", "false", json!(false)),
@@ -1104,26 +1103,6 @@ mod tests {
                 ]
             );
         }
-    }
-
-    #[test]
-    fn a_relative_zapret_dir_is_sent_absolute() {
-        // The app would resolve it against its own directory, not this one.
-        let (_, asked) = drive(
-            &["settings", "set", "zapret_dir", r"zapret\winws"],
-            vec![Ok(settings())],
-        );
-        let [
-            Request::GetSettings,
-            Request::SaveSettings { settings: saved },
-        ] = &asked[..]
-        else {
-            panic!("{asked:?}");
-        };
-        assert_eq!(
-            Path::new(saved["zapret_dir"].as_str().unwrap()),
-            std::env::current_dir().unwrap().join(r"zapret\winws")
-        );
     }
 
     #[test]
