@@ -33,6 +33,10 @@ pub struct Snapshot {
     pub strategy2: Option<String>,
     #[serde(default)]
     pub manual_winws2: Vec<Proc>,
+    /// Whether the snapshot recorded the zapret2 engine: false only in a `pending.json` from before
+    /// zapret2, whose restore leaves zapret2 alone.
+    #[serde(default)]
+    pub zapret2: bool,
     pub ipset: IpsetMode,
     pub ipset_backup: bool,
     /// The flag file `utils\game_filter.enabled`, which the `game_filter` operation writes
@@ -90,6 +94,7 @@ impl Snapshot {
             service2,
             strategy2,
             manual_winws2,
+            zapret2: true,
             ipset: ipset::try_mode(folder)?,
             ipset_backup: ipset::has_backup(folder),
             game_filter: game_filter::try_read(folder)?,
@@ -146,6 +151,7 @@ impl Snapshot {
     }
 
     /// Everything. Every step is tried even after one fails; the failures come back together.
+    /// zapret2 is part of it only when the snapshot recorded it.
     pub fn restore(&self, folder: &Folder) -> anyhow::Result<()> {
         let mut errors: Vec<String> = Vec::new();
         let mut note = |step: &str, result: anyhow::Result<()>| {
@@ -154,7 +160,11 @@ impl Snapshot {
             }
         };
         note("files", self.restore_files(folder));
-        for (name, image) in [(SERVICE, "winws.exe"), (SERVICE2, WINWS2)] {
+        let mut engines = vec![(SERVICE, "winws.exe")];
+        if self.zapret2 {
+            engines.push((SERVICE2, WINWS2));
+        }
+        for (name, image) in engines {
             note(&format!("stop {name}"), service::stop(name));
             note(&format!("stop {image}"), procs::kill_all(image));
         }
@@ -162,11 +172,14 @@ impl Snapshot {
             "service",
             restore_service(SERVICE, self.service.as_ref(), self.strategy.as_deref()),
         );
-        note(
-            "service zapret2",
-            restore_service(SERVICE2, self.service2.as_ref(), self.strategy2.as_deref()),
-        );
-        for proc in self.manual_winws.iter().chain(&self.manual_winws2) {
+        if self.zapret2 {
+            note(
+                "service zapret2",
+                restore_service(SERVICE2, self.service2.as_ref(), self.strategy2.as_deref()),
+            );
+        }
+        let manual2 = self.manual_winws2.iter().filter(|_| self.zapret2);
+        for proc in self.manual_winws.iter().chain(manual2) {
             note("start winws", procs::spawn_detached(proc));
         }
         log::info!(
@@ -209,7 +222,8 @@ fn engine(
 }
 
 /// One engine's service as the snapshot holds it: gone when there was none, else its
-/// configuration, strategy name and state.
+/// configuration, strategy name and state. The name and the state do not depend on each other:
+/// both are done, and the first error comes back.
 fn restore_service(
     name: &str,
     snap: Option<&ServiceSnap>,
@@ -225,12 +239,11 @@ fn restore_service(
         service::stop_and_delete(name)?;
         service::create(name, &snap.image_path, snap.auto_start)?;
     }
-    if let Some(strategy) = strategy {
-        service::set_strategy_of(name, strategy)?;
-    }
-    if snap.running {
+    let named = strategy.map_or(Ok(()), |strategy| service::set_strategy_of(name, strategy));
+    let state = if snap.running {
         service::start(name)
     } else {
         service::stop(name)
-    }
+    };
+    named.and(state)
 }

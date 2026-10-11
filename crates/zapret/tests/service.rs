@@ -86,6 +86,10 @@ fn an_engine_that_exits_is_a_launch_error_naming_its_image() {
 fn a_flowseal_install_takes_zapret2_down() {
     use zapret::service::{SERVICE, SERVICE2, active, create};
     let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
+    // What `apply` does before `install` removes anything: a missing or broken `general` fails here,
+    // not with the stand-in left installed.
+    let file = zapret::strategies::find(&folder, "general").unwrap();
+    zapret::batparse::parse_file(&folder, &file.path).unwrap();
     // A stand-in zapret2: the install removes it whatever it runs.
     create(SERVICE2, r#""C:\Windows\System32\cmd.exe" /c exit"#, false).unwrap();
     assert_eq!(active().0, SERVICE2);

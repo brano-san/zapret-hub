@@ -41,6 +41,7 @@ fn sample(ipset: IpsetMode) -> Snapshot {
             exe: Some(PathBuf::from(r"D:\zapret2\winws2.exe")),
             args: vec!["--wf-tcp-out=443".into()],
         }],
+        zapret2: true,
         ipset,
         ipset_backup: false,
         game_filter: filter(GameFilterMode::Tcp, "2000-2100", "1024-65535"),
@@ -93,6 +94,7 @@ fn a_pending_json_from_before_zapret2_still_loads() {
     assert_eq!(snap.service2, None);
     assert_eq!(snap.strategy2, None);
     assert!(snap.manual_winws2.is_empty());
+    assert!(!snap.zapret2, "its restore leaves zapret2 alone");
 }
 
 #[test]
@@ -126,6 +128,7 @@ fn begin_with_nothing_pending_takes_and_saves_a_snapshot() {
 
     let snap = snapshot::begin(&folder, "tests", &pending).unwrap();
     assert_eq!(snap.operation, "tests");
+    assert!(snap.zapret2, "a snapshot taken now records zapret2");
     assert_eq!(Snapshot::load(&pending).unwrap(), Some(snap));
 }
 
