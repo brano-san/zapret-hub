@@ -485,6 +485,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tester",
+ "windows",
  "zapret",
 ]
 
