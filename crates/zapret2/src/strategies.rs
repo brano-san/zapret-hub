@@ -279,7 +279,8 @@ pub fn tail(engine: &Engine, folder: Option<&Folder>, text: &str) -> anyhow::Res
 /// `--lua-init=@<file>`; and the line has no `\"`, which a placeholder right before a quote makes.
 /// Only the `--option=value` spelling is read, and quotes just group (`"--lua-desync=x"` and
 /// `--lua-init="@C:\My Lua\x.lua"` read as without them): single-dash, abbreviated and
-/// space-separated options are not seen. `--intercept=0` (step 3) is the real check.
+/// space-separated options are not seen. A circular profile must number its variants 1, 2, ...
+/// (`circular::analyze`'s errors). `--intercept=0` (step 3) is the real check.
 pub fn check(engine: &Engine, tail: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
         !tail.contains("\\\""),
@@ -325,6 +326,8 @@ pub fn check(engine: &Engine, tail: &str) -> anyhow::Result<()> {
         "--lua-desync calls {}, which no lua\\*.lua file and no --lua-init defines",
         missing.join(", ")
     );
+    let circular = crate::circular::analyze(tail);
+    anyhow::ensure!(circular.errors.is_empty(), "{}", circular.errors.join("\n"));
     Ok(())
 }
 

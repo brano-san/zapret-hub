@@ -2,6 +2,7 @@
 //! spec): its folder and version here, its strategies in `strategies`, the check that runs winws2
 //! and the `zapret2` service in `service`.
 
+pub mod circular;
 pub mod service;
 pub mod strategies;
 
