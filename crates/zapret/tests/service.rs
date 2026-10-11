@@ -85,10 +85,10 @@ fn an_engine_that_exits_is_a_launch_error_naming_its_image() {
 #[ignore = "needs admin rights and E:\\Zapret; replaces the zapret and zapret2 services"]
 fn a_flowseal_install_takes_zapret2_down() {
     use zapret::service::{SERVICE, SERVICE2, active, create};
+    let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
     // A stand-in zapret2: the install removes it whatever it runs.
     create(SERVICE2, r#""C:\Windows\System32\cmd.exe" /c exit"#, false).unwrap();
     assert_eq!(active().0, SERVICE2);
-    let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
     let check = zapret::service::apply(&folder, "general").unwrap();
     eprintln!("{check:?}");
     assert_eq!(state(SERVICE2), SvcState::NotInstalled);
@@ -122,7 +122,7 @@ fn finds_a_process_with_its_arguments() {
 fn live_status_of_the_zapret_service() {
     let status = zapret::service::status(zapret::service::SERVICE);
     let config = zapret::service::config(zapret::service::SERVICE);
-    let strategy = zapret::service::strategy();
+    let strategy = zapret::service::strategy_of(zapret::service::SERVICE);
     let timestamps = zapret::service::tcp_timestamps();
     let candidates = zapret::folder::candidates();
     eprintln!(
