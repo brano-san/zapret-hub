@@ -190,7 +190,9 @@ export type FolderCheck = {
 	version: string | null,
 };
 
-export type FolderKind = "Zapret" | "Logs";
+export type FolderKind = "Zapret" | 
+/**  `data/zapret2`: the user's zapret2 strategies; needs the zapret2 folder to be set. */
+"Zapret2" | "Logs";
 
 export type GameFilter = {
 	mode: GameFilterMode,

@@ -120,6 +120,14 @@
         }}>{S.strategies.newStrategy}</button
       >
     </div>
+    <div class="buttons folders">
+      <button disabled={!app.settings?.zapret_dir} onclick={() => call(S.failed.open, commands.openFolder("Zapret"))}>
+        {S.strategies.folderFlowseal}
+      </button>
+      {#if app.overview?.zapret2.dir}
+        <button onclick={() => call(S.failed.open, commands.openFolder("Zapret2"))}>{S.strategies.folderZapret2}</button>
+      {/if}
+    </div>
     <table>
       <thead>
         <tr><th>{S.strategies.name}</th><th>{S.strategies.result}</th></tr>
@@ -325,6 +333,10 @@
 
   .search {
     margin-bottom: 10px;
+  }
+
+  .folders {
+    margin: 0 0 10px;
   }
 
   .scroll {

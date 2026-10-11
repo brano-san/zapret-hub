@@ -93,6 +93,8 @@ pub struct LiveRun {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub enum FolderKind {
     Zapret,
+    /// `data/zapret2`: the user's zapret2 strategies; needs the zapret2 folder to be set.
+    Zapret2,
     Logs,
 }
 

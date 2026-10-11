@@ -1,7 +1,7 @@
 //! What commands, the tray and background jobs share.
 
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -337,10 +337,21 @@ pub fn open_url(url: &str) -> anyhow::Result<()> {
     explorer(OsStr::new(url))
 }
 
+/// The folder of the user's zapret2 strategies, created when missing.
+fn strategies_folder(data: &Path) -> anyhow::Result<PathBuf> {
+    let dir = zapret2::strategies::dir(data);
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
 pub fn open_folder(app: &AppHandle, kind: FolderKind) -> anyhow::Result<()> {
     let state = state(app);
     let path = match kind {
         FolderKind::Zapret => state.folder()?.root().to_path_buf(),
+        FolderKind::Zapret2 => {
+            state.engine2_required()?;
+            strategies_folder(&state.paths.data())?
+        }
         FolderKind::Logs => {
             let logs = state.paths.logs();
             std::fs::create_dir_all(&logs)?;
@@ -348,4 +359,17 @@ pub fn open_folder(app: &AppHandle, kind: FolderKind) -> anyhow::Result<()> {
         }
     };
     explorer(path.as_os_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_zapret2_folder_is_data_zapret2_and_is_created() {
+        let data = tempfile::tempdir().unwrap();
+        let dir = strategies_folder(data.path()).unwrap();
+        assert_eq!(dir, data.path().join("zapret2"));
+        assert!(dir.is_dir());
+    }
 }

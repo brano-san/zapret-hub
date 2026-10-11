@@ -205,6 +205,8 @@ export const S = {
     delete: "Удалить",
     deleteTitle: "Удалить стратегию?",
     deleteText: (name: string) => `Файл «${name}.bat» и запись о нём будут удалены.`,
+    folderFlowseal: "Папка Flowseal",
+    folderZapret2: "Папка zapret2",
     newStrategy: "Новая стратегия",
     newTitle: "Новая стратегия",
     newName: "Имя стратегии",
