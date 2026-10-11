@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { commands, type StrategyDetail, type StrategyRow } from "$lib/ipc/bindings";
+  import { commands, type Merged, type StrategyDetail, type StrategyRow } from "$lib/ipc/bindings";
   import { call } from "$lib/api";
   import { app, change, refreshLive } from "$lib/app.svelte";
   import { confirmation } from "$lib/confirm.svelte";
-  import { ZAPRET2_TEMPLATE, blockSummary, hubStem, ms, nameError, ownName, runDate, uniqueName, zapret2Name } from "$lib/format";
+  import { ZAPRET2_TEMPLATE, blockSummary, hubStem, mergeNote, ms, nameError, ownName, runDate, uniqueName, variantLabel, zapret2Name } from "$lib/format";
   import { S } from "$lib/strings";
   import RepeatsSelect from "../components/RepeatsSelect.svelte";
   import TargetChecks from "../components/TargetChecks.svelte";
@@ -20,6 +20,8 @@
   /** The «new strategy» form: its engine and name. */
   let creating = $state<{ engine: "flowseal" | "zapret2"; name: string } | null>(null);
   let createError = $state("");
+  /** «Сделать circular из стратегий»: the strategies picked, in order, the new name and the preview. */
+  let merging = $state<{ picked: string[]; name: string; result: Merged | null } | null>(null);
   let cloneName = $state("");
   let repeats = $state(1);
 
@@ -30,6 +32,8 @@
   const cloneError = $derived(nameError(cloneName));
   /** A run is going: another cannot start. */
   const testing = $derived((app.overview?.testing ?? false) || app.live !== null);
+  /** What a merge can take: the zapret2 strategies that pass the static check. */
+  const mergeable = $derived(rows.filter((row) => zapret2Name(row.name) !== null && row.error === null));
 
   async function open(name: string): Promise<void> {
     // Another strategy: its copy gets a fresh name; a reload of the same one keeps what was typed.
@@ -106,6 +110,13 @@
     if (sure && (await change(S.failed.deleteCustom, () => commands.deleteCustom(record))) !== undefined) detail = null;
   }
 
+  async function preview(): Promise<void> {
+    if (!merging) return;
+    const picked = [...merging.picked];
+    const result = await call(S.failed.merge, commands.zapret2Merge(picked));
+    if (merging && result) merging.result = result;
+  }
+
   async function removeZapret2(name: string): Promise<void> {
     const sure = await confirmation.ask({
       title: S.strategies.deleteTitle,
@@ -133,6 +144,7 @@
           detail = null;
           editing = null;
           editing2 = null;
+          merging = null;
           createError = "";
           creating = { engine: app.settings?.zapret_dir ? "flowseal" : "zapret2", name: uniqueName("my strategy", taken) };
         }}>{S.strategies.newStrategy}</button
@@ -144,6 +156,16 @@
       </button>
       {#if app.overview?.zapret2.dir}
         <button onclick={() => call(S.failed.open, commands.openFolder("Zapret2"))}>{S.strategies.folderZapret2}</button>
+        <button
+          disabled={locked}
+          onclick={() => {
+            detail = null;
+            editing = null;
+            editing2 = null;
+            creating = null;
+            merging = { picked: [], name: uniqueName("circular", taken), result: null };
+          }}>{S.circular.merge}</button
+        >
       {/if}
     </div>
     <table>
@@ -160,6 +182,7 @@
                   editing = null;
                   editing2 = null;
                   creating = null;
+                  merging = null;
                   void open(row.name);
                 }}>{row.name}</button
               >
@@ -194,6 +217,60 @@
           void (saved ? open(saved) : load());
         }}
       />
+    {:else if merging}
+      {@const m = merging}
+      <h2>{S.circular.mergeTitle}</h2>
+      <p class="muted">{S.circular.mergeHint}</p>
+      {#each mergeable as row (row.name)}
+        {@const at = m.picked.indexOf(row.name)}
+        <label class="choice">
+          <input
+            type="checkbox"
+            checked={at >= 0}
+            disabled={at < 0 && m.picked.length >= 5}
+            onchange={() => {
+              m.picked = at >= 0 ? m.picked.filter((name) => name !== row.name) : [...m.picked, row.name];
+              m.result = null;
+            }}
+          />
+          <span>{row.name}</span>
+          {#if at >= 0}<span class="badge muted">{at + 1}</span>{/if}
+        </label>
+      {/each}
+      <p class="muted">{S.circular.mergePick(m.picked.length)}</p>
+      <div class="buttons">
+        <button class="primary" disabled={app.busy || m.picked.length < 2} onclick={preview}>{S.circular.preview}</button>
+        <button onclick={() => (merging = null)}>{S.common.cancel}</button>
+      </div>
+      {#if m.result}
+        {@const result = m.result}
+        {@const first = zapret2Name(m.picked[0] ?? "") ?? ""}
+        <section class="part">
+          <h3>{S.circular.previewTitle}</h3>
+          {#if !result.notes.some((note) => note.kind === "Rotates")}<p class="warn">{S.circular.nothingRotates}</p>{/if}
+          <ul class="notes">
+            {#each result.notes as note, i (i)}
+              <li class={note.kind === "Rotates" ? "ok" : note.kind === "Same" ? "muted" : "warn"}>{mergeNote(note, first)}</li>
+            {/each}
+          </ul>
+          <details>
+            <summary>{S.circular.previewText}</summary>
+            <pre>{result.text}</pre>
+          </details>
+          <div class="buttons">
+            <input placeholder={S.strategies.newName} bind:value={m.name} aria-label={S.strategies.newName} />
+            <button
+              class="primary"
+              disabled={nameError(m.name) !== null}
+              onclick={() => {
+                editing2 = { name: m.name.trim(), from: "", create: true, initial: result.text };
+                merging = null;
+              }}>{S.circular.openEditor}</button
+            >
+          </div>
+          {#if nameError(m.name)}<p class="bad">{nameError(m.name)}</p>{/if}
+        </section>
+      {/if}
     {:else if creating}
       <h2>{S.strategies.newTitle}</h2>
       <div class="row">
@@ -242,6 +319,31 @@
               <pre>{d.final_args}</pre>
             </details>
           {/if}
+        </section>
+      {/if}
+      {#if d.circular.profiles.some((profile) => profile.circular) || d.circular.warnings.length > 0}
+        <section class="part">
+          <h3>{S.circular.title}</h3>
+          <p class="muted">{S.circular.hint}</p>
+          {#each d.circular.profiles.filter((profile) => profile.circular) as profile (profile.index)}
+            {@const settings = profile.circular}
+            <h4>{S.circular.profile(profile.number, blockSummary(profile.filter))}</h4>
+            {#if settings}
+              <p class="muted">
+                {S.circular.settings(settings.fails, settings.retrans)}{#if settings.extra.length > 0}
+                  · {S.circular.extra(settings.extra.join(":"))}{/if}
+              </p>
+            {/if}
+            <ol class="variants">
+              {#each profile.variants as variant (variant.number)}
+                <li value={variant.number} title={variant.text}>
+                  {variantLabel(variant.text)}
+                  {#if variant.is_final}<span class="badge ok" title={S.circular.finalHint}>{S.circular.final}</span>{/if}
+                </li>
+              {/each}
+            </ol>
+          {/each}
+          {#each d.circular.warnings as warning (warning)}<p class="warn">{warning}</p>{/each}
         </section>
       {/if}
       <section class="part">
@@ -361,6 +463,12 @@
     margin: 8px 0 0;
     font-size: 13px;
     font-weight: 600;
+  }
+
+  .variants,
+  .notes {
+    margin: 4px 0;
+    padding-left: 22px;
   }
 
   .split {
