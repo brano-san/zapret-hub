@@ -87,6 +87,10 @@ pub struct TestRun {
     pub id: String,
     pub suite: Suite,
     pub flowseal_version: Option<String>,
+    /// `winws2.exe --version` when zapret2 strategies ran: the hash of a command line does not see
+    /// an engine update (zapret2 spec 7). Runs from before zapret2 have none.
+    #[serde(default)]
+    pub zapret2_version: Option<String>,
     pub canceled: bool,
     /// What could not be put back after the run.
     pub restore_error: Option<String>,

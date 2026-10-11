@@ -39,6 +39,7 @@ pub fn start_tests(app: &AppHandle, request: Request) -> anyhow::Result<()> {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 tester::run::run(
                     &folder,
+                    None,
                     &state.paths.data(),
                     &request,
                     socks5.as_deref(),

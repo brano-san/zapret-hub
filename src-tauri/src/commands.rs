@@ -130,6 +130,7 @@ pub async fn list_strategies(handle: AppHandle) -> Answer<Vec<StrategyRow>> {
         let active = zapret::service::strategy();
         tester::catalog::rows(
             &state.folder()?,
+            None,
             &state.store(),
             &state.paths.data(),
             active.as_deref(),
@@ -146,6 +147,7 @@ pub async fn get_strategy(handle: AppHandle, name: String) -> Answer<StrategyDet
         let active = zapret::service::strategy();
         tester::catalog::detail(
             &state.folder()?,
+            None,
             &state.store(),
             &state.paths.data(),
             active.as_deref(),

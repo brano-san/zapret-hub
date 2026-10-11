@@ -3981,6 +3981,7 @@ dependencies = [
  "specta",
  "tempfile",
  "zapret",
+ "zapret2",
 ]
 
 [[package]]

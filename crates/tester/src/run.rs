@@ -1,7 +1,9 @@
-//! A test run (spec 7.3): snapshot, zapret stopped, each strategy started as winws directly with
-//! the arguments «Применить» would install, the checks, everything put back.
+//! A test run (spec 7.3): snapshot, zapret stopped, each strategy started as winws (or winws2,
+//! zapret2 spec 7) directly with the arguments «Применить» would install, the checks, everything
+//! put back.
 
 use std::path::{Path, PathBuf};
+use std::process::ExitStatus;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -9,8 +11,10 @@ use std::time::Duration;
 use probe::curl::CheckKind;
 use zapret::folder::Folder;
 use zapret::procs::Winws;
+use zapret::service::{SERVICE, SERVICE2, WINWS2};
 use zapret::snapshot::{Snapshot, pending_path};
 use zapret::targets::Target;
+use zapret2::Engine;
 
 use crate::dpi::DpiTarget;
 use crate::model::{DpiTargetResult, Score, StrategyResult, Suite, TargetResult, TestRun};
@@ -49,12 +53,16 @@ pub enum Progress {
 const READY: Duration = Duration::from_secs(5);
 /// The pause `test zapret.ps1` makes once winws is up.
 const SETTLE: Duration = Duration::from_millis(300);
+/// winws2 reports capture started before its Lua starts: it gets this long more, and must still
+/// run then (zapret2 spec 7).
+const LUA_SETTLE: Duration = Duration::from_secs(2);
 
 /// What can fail is checked and fetched first, while zapret still works; then the state is saved,
 /// zapret stopped and the strategies run. The state is put back even when something panics (the
-/// panic goes on afterwards).
+/// panic goes on afterwards). `engine2` runs the `zapret2:` strategies.
 pub fn run(
     folder: &Folder,
+    engine2: Option<&Engine>,
     data_dir: &Path,
     request: &Request,
     socks5: Option<&str>,
@@ -62,6 +70,7 @@ pub fn run(
     progress: &(dyn Fn(Progress) + Sync),
 ) -> anyhow::Result<TestRun> {
     request.check()?;
+    let zapret2_version = zapret2_version(engine2, request)?;
     anyhow::ensure!(
         probe::curl::available(),
         "curl.exe was not found: the tests need Windows 10 1803 or newer"
@@ -82,7 +91,7 @@ pub fn run(
     // An earlier pending.json is restored first; when that fails nothing starts (spec 10).
     let snapshot = zapret::snapshot::begin(folder, "tests", &pending)?;
     let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let outcome = run_strategies(folder, request, &work, cancel, progress);
+        let outcome = run_strategies(folder, engine2, data_dir, request, &work, cancel, progress);
         let canceled = cancel.load(Ordering::Relaxed);
         progress(Progress::Restoring);
         (outcome, canceled)
@@ -121,12 +130,28 @@ pub fn run(
         id,
         suite: request.suite,
         flowseal_version: folder.version(),
+        zapret2_version,
         canceled,
         restore_error,
         strategies,
     };
     crate::history::save(&crate::history::dir(data_dir), &run)?;
     Ok(run)
+}
+
+/// The engine version for the run's record. A `zapret2:` strategy without a working engine stops
+/// the run here, before anything changes (zapret2 spec 7).
+fn zapret2_version(engine2: Option<&Engine>, request: &Request) -> anyhow::Result<Option<String>> {
+    if !request
+        .strategies
+        .iter()
+        .any(|name| name.starts_with(zapret2::PREFIX))
+    {
+        return Ok(None);
+    }
+    let engine = engine2
+        .ok_or_else(|| anyhow::anyhow!("the zapret2 folder is not set: choose it in Settings"))?;
+    Ok(Some(engine.version()?.text))
 }
 
 /// What every strategy is checked against.
@@ -168,13 +193,18 @@ fn prepare(
 
 fn run_strategies(
     folder: &Folder,
+    engine2: Option<&Engine>,
+    data_dir: &Path,
     request: &Request,
     work: &Work,
     cancel: &AtomicBool,
     progress: &(dyn Fn(Progress) + Sync),
 ) -> anyhow::Result<Vec<StrategyResult>> {
-    zapret::service::stop(zapret::service::SERVICE)?;
-    zapret::procs::kill_all("winws.exe")?;
+    // Both engines: a run may mix them (zapret2 spec 7).
+    for (service, image) in [(SERVICE, "winws.exe"), (SERVICE2, WINWS2)] {
+        zapret::service::stop(service)?;
+        zapret::procs::kill_all(image)?;
+    }
     if matches!(work, Work::Dpi(..)) {
         zapret::ipset::enter_test_any(folder)?;
     }
@@ -189,7 +219,7 @@ fn run_strategies(
             total,
             name: name.clone(),
         });
-        let result = run_one(folder, name, work, cancel);
+        let result = run_one(folder, engine2, data_dir, name, work, cancel);
         if cancel.load(Ordering::Relaxed) {
             break; // cut short: not a result
         }
@@ -201,7 +231,57 @@ fn run_strategies(
     Ok(results)
 }
 
-fn run_one(folder: &Folder, name: &str, work: &Work, cancel: &AtomicBool) -> StrategyResult {
+/// How a strategy starts: the program, its working folder, the arguments and their hash.
+struct Launch {
+    exe: PathBuf,
+    cwd: PathBuf,
+    tail: String,
+    sha256: String,
+    zapret2: bool,
+}
+
+/// The one place a test run tells the engines apart (zapret2 spec 3.1): by the name's prefix.
+fn launch(
+    folder: &Folder,
+    engine2: Option<&Engine>,
+    data_dir: &Path,
+    name: &str,
+) -> anyhow::Result<Launch> {
+    let Some(name) = name.strip_prefix(zapret2::PREFIX) else {
+        let file = zapret::strategies::find(folder, name)?;
+        let parsed = zapret::batparse::parse_file(folder, &file.path)?;
+        return Ok(Launch {
+            exe: folder.winws(),
+            cwd: folder.bin(),
+            tail: parsed.command_tail(),
+            sha256: parsed.sha256(),
+            zapret2: false,
+        });
+    };
+    let engine = engine2
+        .ok_or_else(|| anyhow::anyhow!("the zapret2 folder is not set: choose it in Settings"))?;
+    let strategy = zapret2::strategies::find(data_dir, name)?;
+    let tail = zapret2::strategies::tail(engine, Some(folder), &strategy.text)?;
+    zapret2::strategies::check(engine, &tail)?;
+    Ok(Launch {
+        exe: engine.exe().to_path_buf(),
+        cwd: engine.root().to_path_buf(),
+        // ponytail: the engine version is not in the hash (the run keeps it); add it if old
+        // results start to mislead (zapret2 spec 12).
+        sha256: zapret::sha256_hex(tail.as_bytes()),
+        tail,
+        zapret2: true,
+    })
+}
+
+fn run_one(
+    folder: &Folder,
+    engine2: Option<&Engine>,
+    data_dir: &Path,
+    name: &str,
+    work: &Work,
+    cancel: &AtomicBool,
+) -> StrategyResult {
     let mut result = StrategyResult {
         name: name.to_owned(),
         args_sha256: String::new(),
@@ -210,17 +290,15 @@ fn run_one(folder: &Folder, name: &str, work: &Work, cancel: &AtomicBool) -> Str
         dpi: Vec::new(),
         score: Score::default(),
     };
-    let parsed = zapret::strategies::find(folder, name)
-        .and_then(|file| zapret::batparse::parse_file(folder, &file.path));
-    let parsed = match parsed {
-        Ok(parsed) => parsed,
+    let launch = match launch(folder, engine2, data_dir, name) {
+        Ok(launch) => launch,
         Err(err) => {
             result.launch_error = Some(format!("{err:#}"));
             return result;
         }
     };
-    result.args_sha256 = parsed.sha256();
-    let mut winws = match Winws::start(&folder.winws(), &folder.bin(), &parsed.command_tail()) {
+    result.args_sha256 = launch.sha256;
+    let mut winws = match Winws::start(&launch.exe, &launch.cwd, &launch.tail) {
         Ok(winws) => winws,
         Err(err) => {
             result.launch_error = Some(format!("winws did not start: {err}"));
@@ -231,31 +309,47 @@ fn run_one(folder: &Folder, name: &str, work: &Work, cancel: &AtomicBool) -> Str
         result.launch_error = Some(output);
         return result;
     }
-    std::thread::sleep(SETTLE);
-    let workers = parallelism();
-    match work {
-        Work::Standard(targets) => {
-            result.targets = par_map(targets, workers, |(target, extra)| {
-                check_target(target, *extra, cancel)
-            });
-            result.score = crate::rank::score_standard(&result.targets);
-        }
-        Work::Dpi(targets, payload) => {
-            result.dpi = par_map(targets, workers, |target| {
-                check_dpi(target, payload, cancel)
-            });
-            result.score = crate::rank::score_dpi(&result.dpi);
+    std::thread::sleep(if launch.zapret2 { LUA_SETTLE } else { SETTLE });
+    // A winws2 whose Lua failed is gone by now: nothing to check.
+    if !(launch.zapret2 && winws.exited().is_some()) {
+        let workers = parallelism();
+        match work {
+            Work::Standard(targets) => {
+                result.targets = par_map(targets, workers, |(target, extra)| {
+                    check_target(target, *extra, cancel)
+                });
+                result.score = crate::rank::score_standard(&result.targets);
+            }
+            Work::Dpi(targets, payload) => {
+                result.dpi = par_map(targets, workers, |target| {
+                    check_dpi(target, payload, cancel)
+                });
+                result.score = crate::rank::score_dpi(&result.dpi);
+            }
         }
     }
     // Read after `stop`, which waits for the readers: the output is whole.
     let exited = winws.exited();
     let output = winws.stop();
-    if let Some(status) = exited {
-        result.launch_error = Some(format!(
-            "winws exited during the checks ({status}):\n{output}"
-        ));
-    }
+    result.launch_error = if launch.zapret2 {
+        lua_failure(exited, &output)
+    } else {
+        exited.map(|status| format!("winws exited during the checks ({status}):\n{output}"))
+    };
     result
+}
+
+/// winws2 prints its ready line before its Lua starts. One that has ended, or printed `LUA ERROR`
+/// (a strategy that fails on every packet does nothing), did not run the strategy: a launch error
+/// with its whole output, or a strategy that did nothing would rank above working ones (zapret2
+/// spec 7). Exit code 87 is a failed Lua start.
+pub fn lua_failure(exited: Option<ExitStatus>, output: &str) -> Option<String> {
+    if let Some(status) = exited {
+        return Some(format!("winws2 exited ({status}):\n{output}"));
+    }
+    output
+        .contains("LUA ERROR")
+        .then(|| format!("winws2 printed LUA ERROR:\n{output}"))
 }
 
 fn check_target(target: &Target, extra: bool, cancel: &AtomicBool) -> TargetResult {

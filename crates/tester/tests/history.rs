@@ -17,6 +17,7 @@ fn run(id: &str, suite: Suite, canceled: bool, strategies: Vec<StrategyResult>) 
         id: id.into(),
         suite,
         flowseal_version: None,
+        zapret2_version: None,
         canceled,
         restore_error: None,
         strategies,
@@ -60,6 +61,23 @@ fn runs_are_saved_listed_and_loaded() {
         "general (ALT)"
     );
     assert!(history::load(dir.path(), r"..\..\secret").is_err());
+}
+
+#[test]
+fn a_run_saved_before_zapret2_still_loads() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut old = serde_json::to_value(run(
+        "2026-10-09_10-00-00",
+        Suite::Standard,
+        false,
+        vec![result("general", "a")],
+    ))
+    .unwrap();
+    old.as_object_mut().unwrap().remove("zapret2_version");
+    std::fs::write(dir.path().join("2026-10-09_10-00-00.json"), old.to_string()).unwrap();
+    let loaded = history::load(dir.path(), "2026-10-09_10-00-00").unwrap();
+    assert_eq!(loaded.zapret2_version, None);
+    assert_eq!(loaded.strategies[0].name, "general");
 }
 
 #[test]

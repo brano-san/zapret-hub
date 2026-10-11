@@ -87,6 +87,40 @@ fn ranking_is_failures_then_latency_then_menu_order() {
 }
 
 #[test]
+fn a_mixed_run_ranks_both_engines_by_the_same_rules() {
+    let fast = |name| {
+        strategy(
+            name,
+            vec![target("A", "https://a.com", [Pass, Pass, Pass], 80)],
+        )
+    };
+    let mut results = vec![
+        fast("zapret2:mine"),
+        strategy(
+            "general",
+            vec![target("A", "https://a.com", [Pass, Pass, Error], 10)],
+        ),
+        StrategyResult {
+            launch_error: Some("winws2 printed LUA ERROR".into()),
+            ..fast("zapret2:general")
+        },
+        fast("general (ALT2)"),
+    ];
+    sort(Suite::Standard, &mut results);
+    let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
+    // A tie keeps Flowseal first: `zapret2:` sorts after its names.
+    assert_eq!(
+        names,
+        [
+            "general (ALT2)",
+            "zapret2:mine",
+            "general",
+            "zapret2:general"
+        ]
+    );
+}
+
+#[test]
 fn a_dead_network_ranks_by_menu_order() {
     let dead = |name| {
         strategy(
@@ -217,6 +251,7 @@ fn report_reads_like_test_zapret_ps1() {
         id: "2026-10-10_05-03-34".into(),
         suite: Suite::Standard,
         flowseal_version: Some("1.10.3".into()),
+        zapret2_version: None,
         canceled: false,
         restore_error: None,
         strategies: vec![strategy("general (ALT11)", targets)],

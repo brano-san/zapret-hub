@@ -345,6 +345,8 @@ export type StrategyDetail = {
 	result: StrategyResult | null,
 	/**  The record behind a custom strategy, for the editor. */
 	record: CustomStrategy | null,
+	/**  A zapret2 strategy's text as written, for its editor; empty for Flowseal's. */
+	source: string,
 };
 
 export type StrategyResult = {
@@ -359,12 +361,18 @@ export type StrategyResult = {
 };
 
 export type StrategyRow = {
-	/**  File stem: `general (ALT11)`, `general (HUB mine)`. */
+	/**  File stem: `general (ALT11)`, `general (HUB mine)`; `zapret2:<name>` for zapret2. */
 	name: string,
-	/**  A `HUB` file with a record in `data/strategies` (spec 5.2). */
+	/**
+	 *  A `HUB` file with a record in `data/strategies` (spec 5.2), or a zapret2 strategy of the
+	 *  user's.
+	 */
 	custom: boolean,
 	active: boolean,
-	/**  Not a strategy (`service.bat` would capture nothing) or not readable. */
+	/**
+	 *  Not a strategy (`service.bat` would capture nothing), not readable, or not passing the
+	 *  static check of zapret2.
+	 */
 	error: string | null,
 	last: LastResult | null,
 };
@@ -400,6 +408,11 @@ export type TestRun = {
 	id: string,
 	suite: Suite,
 	flowseal_version: string | null,
+	/**
+	 *  `winws2.exe --version` when zapret2 strategies ran: the hash of a command line does not see
+	 *  an engine update (zapret2 spec 7). Runs from before zapret2 have none.
+	 */
+	zapret2_version?: string | null,
 	canceled: boolean,
 	/**  What could not be put back after the run. */
 	restore_error: string | null,

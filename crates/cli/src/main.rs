@@ -1243,6 +1243,7 @@ mod tests {
             id: "2026-10-11_10-00-00".into(),
             suite: Suite::Dpi,
             flowseal_version: Some("1.10.3".into()),
+            zapret2_version: None,
             canceled: false,
             restore_error: None,
             strategies: vec![

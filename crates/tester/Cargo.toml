@@ -11,6 +11,7 @@ description = "Strategy test runs for Zapret Hub: the procedure, the ranking, th
 exec.workspace = true
 probe.workspace = true
 zapret.workspace = true
+zapret2.workspace = true
 anyhow.workspace = true
 log.workspace = true
 serde.workspace = true

@@ -181,6 +181,7 @@ mod tests {
             id: "2026-10-10_05-03-34".into(),
             suite: Suite::Standard,
             flowseal_version: None,
+            zapret2_version: None,
             canceled: false,
             restore_error: None,
             strategies,
