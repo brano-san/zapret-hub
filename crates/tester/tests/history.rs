@@ -9,6 +9,7 @@ fn result(name: &str, sha: &str) -> StrategyResult {
         targets: Vec::new(),
         dpi: Vec::new(),
         score: Score::default(),
+        passes: Vec::new(),
     }
 }
 
@@ -136,4 +137,32 @@ fn a_damaged_run_file_is_skipped() {
     )
     .unwrap();
     assert_eq!(history::summaries(dir.path()).unwrap().len(), 1);
+}
+
+/// Runs and requests from before repeats have no `passes` and no `repeats`.
+#[test]
+fn runs_and_requests_from_before_repeats_still_load() {
+    let mut old = serde_json::to_value(run(
+        "2026-10-09_10-00-00",
+        Suite::Standard,
+        false,
+        vec![result("general", "a")],
+    ))
+    .unwrap();
+    old["strategies"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("passes")
+        .unwrap();
+    let loaded: TestRun = serde_json::from_value(old).unwrap();
+    assert!(loaded.strategies[0].passes.is_empty());
+    let request: tester::run::Request =
+        serde_json::from_str(r#"{ "suite": "Standard", "strategies": ["general"] }"#).unwrap();
+    assert_eq!(request.repeats, 1);
+    request.check().unwrap();
+    let too_many = tester::run::Request {
+        repeats: 6,
+        ..request
+    };
+    assert!(too_many.check().is_err());
 }

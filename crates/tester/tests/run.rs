@@ -79,6 +79,7 @@ fn zapret2_strategies_need_a_working_engine_before_the_run_starts() {
     let request = Request {
         suite: Suite::Standard,
         strategies: vec!["general".into(), "zapret2:general".into()],
+        repeats: 1,
     };
     // `run` starts with this and stops the services only after it: asserted directly, so that the
     // test cannot touch them.
@@ -103,11 +104,13 @@ fn zapret2_strategies_need_a_working_engine_before_the_run_starts() {
     let flowseal = Request {
         suite: Suite::Standard,
         strategies: vec!["general".into()],
+        repeats: 1,
     };
     assert_eq!(tester::run::zapret2_version(None, &flowseal).unwrap(), None);
     let upper = Request {
         suite: Suite::Standard,
         strategies: vec!["Zapret2:general".into()],
+        repeats: 1,
     };
     assert!(tester::run::zapret2_version(None, &upper).is_err());
     assert!(!zapret::snapshot::pending_path(data.path()).exists());
@@ -118,6 +121,7 @@ fn flowseal_strategies_need_the_flowseal_folder_before_the_run_starts() {
     let request = |names: &[&str]| Request {
         suite: Suite::Standard,
         strategies: names.iter().map(|&n| n.to_owned()).collect(),
+        repeats: 1,
     };
     tester::run::needs_flowseal(None, &request(&["zapret2:mine", "ZAPRET2:general"])).unwrap();
     let err = tester::run::needs_flowseal(None, &request(&["zapret2:mine", "general"]))
@@ -133,6 +137,7 @@ fn a_request_without_strategies_is_refused() {
     let request = Request {
         suite: Suite::Standard,
         strategies: Vec::new(),
+        repeats: 1,
     };
     assert!(
         request
@@ -151,6 +156,7 @@ fn live_run_of_two_strategies() {
     let request = Request {
         suite: Suite::Standard,
         strategies: vec!["general (ALT11)".into(), "general".into()],
+        repeats: 1,
     };
     let run = tester::run::run(
         Some(&folder),
@@ -183,6 +189,7 @@ fn live_a_panic_during_the_run_is_passed_on_after_the_restore() {
     let request = Request {
         suite: Suite::Standard,
         strategies: vec!["general".into()],
+        repeats: 1,
     };
     let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         tester::run::run(
@@ -216,6 +223,7 @@ fn live_a_run_mixes_the_engines_and_brings_the_active_one_back() {
     let request = Request {
         suite: Suite::Standard,
         strategies: vec!["general".into(), "zapret2:general".into()],
+        repeats: 1,
     };
     let run = tester::run::run(
         Some(&folder),
@@ -244,6 +252,7 @@ fn live_cancel_stops_after_the_current_strategy() {
     let request = Request {
         suite: Suite::Standard,
         strategies: vec!["general (ALT11)".into(), "general".into()],
+        repeats: 1,
     };
     let run = tester::run::run(
         Some(&folder),

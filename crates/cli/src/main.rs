@@ -206,6 +206,10 @@ enum TestsCommand {
         /// Stop waiting after this many seconds (exit code 4); the run goes on.
         #[arg(long, requires = "wait")]
         timeout: Option<u64>,
+        /// Passes over the list (1-5): each strategy is measured this many times and ranked by
+        /// the aggregate.
+        #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..=5))]
+        repeats: u32,
         /// Strategy names in the order to run them; none: every strategy that parses.
         names: Vec<String>,
     },
@@ -577,6 +581,7 @@ fn run(args: Cli, call: Call) -> Result<Done, Fail> {
             dpi,
             wait,
             timeout,
+            repeats,
             names,
         }) => {
             let strategies = if names.is_empty() {
@@ -587,7 +592,11 @@ fn run(args: Cli, call: Call) -> Result<Done, Fail> {
             let suite = if dpi { Suite::Dpi } else { Suite::Standard };
             let count = strategies.len();
             call(Request::StartTests {
-                request: TestRequest { suite, strategies },
+                request: TestRequest {
+                    suite,
+                    strategies,
+                    repeats,
+                },
             })?;
             if wait {
                 return wait_for_run(call, timeout);
@@ -596,6 +605,7 @@ fn run(args: Cli, call: Call) -> Result<Done, Fail> {
                 "started": true,
                 "suite": suite_name(suite),
                 "strategies": count,
+                "repeats": repeats,
             })));
         }
         Command::Tests(TestsCommand::Wait { timeout }) => return wait_for_run(call, timeout),
@@ -779,13 +789,22 @@ fn wait_for_run(call: Call, timeout: Option<u64>) -> Result<Done, Fail> {
     }
 }
 
-/// `3/33 general (ALT2)`, once per strategy.
-fn progress(live: &Live, shown: &mut Option<u32>) -> Option<String> {
-    let index = live.current.filter(|index| *shown != Some(*index))?;
-    *shown = Some(index);
+/// `3/33 general (ALT2)`, once per strategy and pass; with repeats `pass 2/3: 3/33 general (ALT2)`.
+fn progress(live: &Live, shown: &mut Option<(u32, u32)>) -> Option<String> {
+    let index = live.current?;
+    let at = (live.pass, index);
+    if *shown == Some(at) {
+        return None;
+    }
+    *shown = Some(at);
     let names = &live.request.strategies;
+    let pass = if live.request.repeats > 1 {
+        format!("pass {}/{}: ", live.pass + 1, live.request.repeats)
+    } else {
+        String::new()
+    };
     Some(format!(
-        "{}/{} {}",
+        "{pass}{}/{} {}",
         index + 1,
         names.len(),
         names.get(index as usize)?
@@ -1304,7 +1323,7 @@ mod tests {
         assert_eq!(
             outcome,
             Ok(Done::Json(
-                json!({ "started": true, "suite": "standard", "strategies": 2 })
+                json!({ "started": true, "suite": "standard", "strategies": 2, "repeats": 1 })
             ))
         );
         assert_eq!(
@@ -1315,6 +1334,7 @@ mod tests {
                     request: TestRequest {
                         suite: Suite::Standard,
                         strategies: vec!["general".into(), "general (ALT11)".into()],
+                        repeats: 1,
                     }
                 }
             ]
@@ -1333,6 +1353,7 @@ mod tests {
                 total: 36,
                 ..Score::default()
             },
+            passes: Vec::new(),
         }
     }
 
@@ -1361,6 +1382,8 @@ mod tests {
                 "run",
                 "--dpi",
                 "--wait",
+                "--repeats",
+                "3",
                 "general (ALT11)",
                 "general",
             ],
@@ -1377,6 +1400,7 @@ mod tests {
                     request: TestRequest {
                         suite: Suite::Dpi,
                         strategies: vec!["general (ALT11)".into(), "general".into()],
+                        repeats: 3,
                     }
                 },
                 Request::TestsStatus,
@@ -1439,6 +1463,7 @@ mod tests {
                     request: TestRequest {
                         suite: Suite::Standard,
                         strategies: vec!["general".into()],
+                        repeats: 1,
                     }
                 },
                 Request::TestsStatus
@@ -1452,14 +1477,41 @@ mod tests {
             request: TestRequest {
                 suite: Suite::Standard,
                 strategies: vec!["general".into(), "general (ALT2)".into()],
+                repeats: 1,
             },
             current: Some(1),
             restoring: false,
+            pass: 0,
         };
         let mut shown = None;
         assert_eq!(
             progress(&live, &mut shown).as_deref(),
             Some("2/2 general (ALT2)")
+        );
+        assert_eq!(progress(&live, &mut shown), None);
+    }
+
+    #[test]
+    fn progress_names_each_pass_of_one_strategy() {
+        let mut live = Live {
+            request: TestRequest {
+                suite: Suite::Standard,
+                strategies: vec!["general".into()],
+                repeats: 3,
+            },
+            current: Some(0),
+            restoring: false,
+            pass: 0,
+        };
+        let mut shown = None;
+        assert_eq!(
+            progress(&live, &mut shown).as_deref(),
+            Some("pass 1/3: 1/1 general")
+        );
+        live.pass = 1;
+        assert_eq!(
+            progress(&live, &mut shown).as_deref(),
+            Some("pass 2/3: 1/1 general")
         );
         assert_eq!(progress(&live, &mut shown), None);
     }

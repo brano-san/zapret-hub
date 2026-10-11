@@ -239,6 +239,9 @@ pub struct Live {
     /// The strategy under test, from 0; `None` before the first and while restoring.
     pub current: Option<u32>,
     pub restoring: bool,
+    /// The pass under way, from 0, of `request.repeats`; an app from before repeats sends none.
+    #[serde(default)]
+    pub pass: u32,
 }
 
 /// How the newest run since the app started ended: saved as `run_id`, or failed before a result.
@@ -318,6 +321,7 @@ mod tests {
                 request: TestRequest {
                     suite: Suite::Standard,
                     strategies: vec!["general".into()],
+                    repeats: 1,
                 },
             },
             Request::TestsStatus,

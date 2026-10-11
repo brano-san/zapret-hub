@@ -37,6 +37,7 @@ pub fn start_tests(app: &AppHandle, request: Request) -> anyhow::Result<()> {
         request: request.clone(),
         current: None,
         restoring: false,
+        pass: 0,
         results: Vec::new(),
     }));
     let handle = app.clone();
@@ -78,8 +79,17 @@ pub fn start_tests(app: &AppHandle, request: Request) -> anyhow::Result<()> {
 
 fn on_progress(app: &AppHandle, progress: Progress) {
     state(app).update_live(|live| match &progress {
-        Progress::Strategy { index, .. } => live.current = Some(*index),
-        Progress::Done { result } => live.results.push(result.clone()),
+        Progress::Strategy { index, pass, .. } => {
+            live.current = Some(*index);
+            live.pass = *pass;
+        }
+        // A later pass brings the strategy's new aggregate: it takes the place of the old one.
+        Progress::Done { result } => {
+            match live.results.iter_mut().find(|r| r.name == result.name) {
+                Some(old) => *old = (**result).clone(),
+                None => live.results.push((**result).clone()),
+            }
+        }
         Progress::Restoring => {
             live.current = None;
             live.restoring = true;

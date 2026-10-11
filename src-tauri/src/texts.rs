@@ -173,6 +173,7 @@ mod tests {
                 median_ms: Some(120),
                 ..Score::default()
             },
+            passes: Vec::new(),
         }
     }
 

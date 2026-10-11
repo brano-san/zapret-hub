@@ -125,7 +125,7 @@ CLI — отдельный пакет. Манифест `requireAdministrator` �
 | `custom validate <file\|->` | `validate_custom` | |
 | `custom save <file\|-> [--create]` | `save_custom` | |
 | `custom delete <name>` | `delete_custom` | да |
-| `tests run [--dpi] [--wait] [<name>…]` | `start_tests` | |
+| `tests run [--dpi] [--repeats <N>] [--wait] [<name>…]` | `start_tests` | |
 | `tests status` | `tests_status` | |
 | `tests wait [--timeout <s>]` | `tests_status`, опрос | |
 | `tests cancel` | `cancel_tests` | |

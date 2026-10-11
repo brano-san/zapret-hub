@@ -87,6 +87,9 @@ pub struct LiveRun {
     /// The strategy under test; `None` before the first and while restoring.
     pub current: Option<u32>,
     pub restoring: bool,
+    /// The pass under way, from 0, of `request.repeats`.
+    pub pass: u32,
+    /// Each strategy once, its passes so far aggregated, in the order they first finished.
     pub results: Vec<StrategyResult>,
 }
 

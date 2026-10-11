@@ -24,12 +24,26 @@ pub struct Request {
     pub suite: Suite,
     /// Strategy names, in the order to run them.
     pub strategies: Vec<String>,
+    /// Passes over the list, `1..=MAX_REPEATS`; a request from before repeats has one.
+    #[serde(default = "one")]
+    pub repeats: u32,
 }
+
+fn one() -> u32 {
+    1
+}
+
+pub const MAX_REPEATS: u32 = 5;
 
 impl Request {
     /// What `run` refuses before it touches anything.
     pub fn check(&self) -> anyhow::Result<()> {
         anyhow::ensure!(!self.strategies.is_empty(), "no strategies to test");
+        anyhow::ensure!(
+            (1..=MAX_REPEATS).contains(&self.repeats),
+            "repeats must be from 1 to {MAX_REPEATS}, not {}",
+            self.repeats
+        );
         Ok(())
     }
 }
@@ -37,14 +51,17 @@ impl Request {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(tag = "kind")]
 pub enum Progress {
-    /// Strategy `index` (from 0) of `total` starts.
+    /// Strategy `index` (from 0) of `total` starts, in pass `pass` (from 0) of `passes`.
     Strategy {
         index: u32,
         total: u32,
         name: String,
+        pass: u32,
+        passes: u32,
     },
+    /// A strategy's passes so far, aggregated (`rank::aggregate`).
     Done {
-        result: StrategyResult,
+        result: Box<StrategyResult>,
     },
     Restoring,
 }
@@ -234,29 +251,39 @@ fn run_strategies(
     }
     warm_dns(work);
     let total = request.strategies.len() as u32;
-    let mut results = Vec::new();
-    for (index, name) in request.strategies.iter().enumerate() {
-        if cancel.load(Ordering::Relaxed) {
-            break;
+    let mut done: Vec<Vec<StrategyResult>> = vec![Vec::new(); request.strategies.len()];
+    // N whole passes over the list, not N runs of one strategy back to back: the network drifts
+    // over minutes, and interleaving spreads that drift over every strategy instead of handing a
+    // bad minute to whichever one ran then.
+    'passes: for pass in 0..request.repeats {
+        for (index, name) in request.strategies.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                break 'passes;
+            }
+            progress(Progress::Strategy {
+                index: index as u32,
+                total,
+                name: name.clone(),
+                pass,
+                passes: request.repeats,
+            });
+            // Nothing of either engine may filter while this one is measured: the previous
+            // strategy's process has exited (`Winws::stop` waits), and this catches any other.
+            stop_engines()?;
+            let result = run_one(folder, engine2, data_dir, name, work, cancel);
+            if cancel.load(Ordering::Relaxed) {
+                break 'passes; // cut short: not a result
+            }
+            done[index].push(result);
+            progress(Progress::Done {
+                result: Box::new(crate::rank::aggregate(done[index].clone())),
+            });
         }
-        progress(Progress::Strategy {
-            index: index as u32,
-            total,
-            name: name.clone(),
-        });
-        // Nothing of either engine may filter while this one is measured: the previous
-        // strategy's process has exited (`Winws::stop` waits), and this catches any other.
-        stop_engines()?;
-        let result = run_one(folder, engine2, data_dir, name, work, cancel);
-        if cancel.load(Ordering::Relaxed) {
-            break; // cut short: not a result
-        }
-        progress(Progress::Done {
-            result: result.clone(),
-        });
-        results.push(result);
     }
-    Ok(results)
+    Ok(whole_passes(done)
+        .into_iter()
+        .map(crate::rank::aggregate)
+        .collect())
 }
 
 /// Every winws.exe and winws2.exe ended, and gone (their WinDivert handles closed).
@@ -265,6 +292,20 @@ fn stop_engines() -> anyhow::Result<()> {
         zapret::procs::kill_all(image)?;
     }
     Ok(())
+}
+
+/// The passes of a canceled run that count: a strategy with one pass more than another would sum
+/// more checks, so a pass cut short is dropped, unless it is the first (then the strategies it
+/// reached are the run, as without repeats). Strategies without a pass are left out.
+pub fn whole_passes(mut done: Vec<Vec<StrategyResult>>) -> Vec<Vec<StrategyResult>> {
+    let whole = done.iter().map(Vec::len).min().unwrap_or(0);
+    if whole > 0 {
+        for passes in &mut done {
+            passes.truncate(whole);
+        }
+    }
+    done.retain(|passes| !passes.is_empty());
+    done
 }
 
 /// curl's `time_total` includes the name lookup, and Windows caches names for every process: the
@@ -345,6 +386,7 @@ fn run_one(
         targets: Vec::new(),
         dpi: Vec::new(),
         score: Score::default(),
+        passes: Vec::new(),
     };
     let launch = match launch(folder, engine2, data_dir, name) {
         Ok(launch) => launch,

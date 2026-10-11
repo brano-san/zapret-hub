@@ -79,6 +79,19 @@ pub struct StrategyResult {
     pub targets: Vec<TargetResult>,
     pub dpi: Vec<DpiTargetResult>,
     pub score: Score,
+    /// A run with repeats: every pass as it ran; the fields above are then their aggregate
+    /// (`rank::aggregate`). Empty for a single pass and in runs from before repeats.
+    #[serde(default)]
+    pub passes: Vec<Pass>,
+}
+
+/// One pass of a strategy in a run with repeats, as measured.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct Pass {
+    pub launch_error: Option<String>,
+    pub targets: Vec<TargetResult>,
+    pub dpi: Vec<DpiTargetResult>,
+    pub score: Score,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]

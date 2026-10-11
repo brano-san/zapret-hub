@@ -56,6 +56,9 @@ export const commands = {
 	/**  The strategy under test; `None` before the first and while restoring. */
 	current: number | null,
 	restoring: boolean,
+	/**  The pass under way, from 0, of `request.repeats`. */
+	pass: number,
+	/**  Each strategy once, its passes so far aggregated, in the order they first finished. */
 	results: StrategyResult[],
 } | null>("test_live"),
 	listRuns: () => typedError<RunSummary[], string>(__TAURI_INVOKE("list_runs")),
@@ -255,6 +258,9 @@ export type LiveRun = {
 	/**  The strategy under test; `None` before the first and while restoring. */
 	current: number | null,
 	restoring: boolean,
+	/**  The pass under way, from 0, of `request.repeats`. */
+	pass: number,
+	/**  Each strategy once, its passes so far aggregated, in the order they first finished. */
 	results: StrategyResult[],
 };
 
@@ -293,6 +299,14 @@ export type Overview = {
 	testing: boolean,
 };
 
+/**  One pass of a strategy in a run with repeats, as measured. */
+export type Pass = {
+	launch_error: string | null,
+	targets: TargetResult[],
+	dpi: DpiTargetResult[],
+	score: Score,
+};
+
 export type ProfileScore = {
 	ok: number,
 	total: number,
@@ -300,8 +314,10 @@ export type ProfileScore = {
 };
 
 export type Progress = 
-/**  Strategy `index` (from 0) of `total` starts. */
-{ kind: "Strategy"; index: number; total: number; name: string } | { kind: "Done"; result: StrategyResult } | { kind: "Restoring" };
+/**  Strategy `index` (from 0) of `total` starts, in pass `pass` (from 0) of `passes`. */
+{ kind: "Strategy"; index: number; total: number; name: string; pass: number; passes: number } | 
+/**  A strategy's passes so far, aggregated (`rank::aggregate`). */
+{ kind: "Done"; result: StrategyResult } | { kind: "Restoring" };
 
 export type ProxyStatus = {
 	ok: boolean,
@@ -326,6 +342,8 @@ export type Request = {
 	suite: Suite,
 	/**  Strategy names, in the order to run them. */
 	strategies: string[],
+	/**  Passes over the list, `1..=MAX_REPEATS`; a request from before repeats has one. */
+	repeats?: number,
 };
 
 export type RunSummary = {
@@ -402,6 +420,11 @@ export type StrategyResult = {
 	targets: TargetResult[],
 	dpi: DpiTargetResult[],
 	score: Score,
+	/**
+	 *  A run with repeats: every pass as it ran; the fields above are then their aggregate
+	 *  (`rank::aggregate`). Empty for a single pass and in runs from before repeats.
+	 */
+	passes?: Pass[],
 };
 
 export type StrategyRow = {

@@ -3,7 +3,9 @@
 use probe::curl::{CheckStatus, DpiStatus};
 use zapret::targets::{Target, url_host};
 
-use crate::model::{DpiTargetResult, ProfileScore, Score, StrategyResult, Suite, TargetResult};
+use crate::model::{
+    DpiTargetResult, Pass, ProfileScore, Score, StrategyResult, Suite, TargetResult,
+};
 
 pub const DISCORD: [&str; 4] = [
     "discord.com",
@@ -124,6 +126,76 @@ pub fn sort(suite: Suite, results: &mut [StrategyResult]) {
             zapret::strategies::natural_key(&format!("{}.bat", r.name)),
         )
     });
+}
+
+/// A strategy's passes (in pass order) as one result. Counts are summed: every strategy of a run
+/// gets the same number of passes, so the sorting keys (failed checks, LIKELY_BLOCKED, FAIL) rank
+/// as their averages would. Latencies are the median of the passes' medians. A launch error in
+/// any pass is the result's: a strategy whose engine fails now and then ranks last. The targets
+/// shown are the last pass's; each pass stays in `passes`. One pass comes back as it is.
+pub fn aggregate(mut passes: Vec<StrategyResult>) -> StrategyResult {
+    if passes.len() <= 1 {
+        return passes.pop().expect("at least one pass");
+    }
+    let n = passes.len();
+    let scores: Vec<Score> = passes.iter().map(|p| p.score.clone()).collect();
+    let sum = |f: fn(&Score) -> u32| scores.iter().map(f).sum::<u32>();
+    let mid =
+        |f: fn(&Score) -> Option<u32>| median(&mut scores.iter().filter_map(f).collect::<Vec<_>>());
+    let profile = |f: fn(&Score) -> &ProfileScore| ProfileScore {
+        ok: scores.iter().map(|s| f(s).ok).sum(),
+        total: scores.iter().map(|s| f(s).total).sum(),
+        median_ms: median(
+            &mut scores
+                .iter()
+                .filter_map(|s| f(s).median_ms)
+                .collect::<Vec<_>>(),
+        ),
+    };
+    let score = Score {
+        ok: sum(|s| s.ok),
+        total: sum(|s| s.total),
+        errors: sum(|s| s.errors),
+        ssl: sum(|s| s.ssl),
+        unsup: sum(|s| s.unsup),
+        median_ms: mid(|s| s.median_ms),
+        ping_ok: sum(|s| s.ping_ok),
+        ping_total: sum(|s| s.ping_total),
+        ping_median_ms: mid(|s| s.ping_median_ms),
+        fail: sum(|s| s.fail),
+        likely_blocked: sum(|s| s.likely_blocked),
+        discord: profile(|s| &s.discord),
+        youtube: profile(|s| &s.youtube),
+        dbd: profile(|s| &s.dbd),
+    };
+    let launch_error = passes.iter().enumerate().find_map(|(i, p)| {
+        p.launch_error
+            .as_ref()
+            .map(|err| format!("pass {} of {n}: {err}", i + 1))
+    });
+    let args_sha256 = passes
+        .iter()
+        .map(|p| p.args_sha256.clone())
+        .find(|sha| !sha.is_empty())
+        .unwrap_or_default();
+    let last = passes.last().expect("more than one pass");
+    StrategyResult {
+        name: last.name.clone(),
+        args_sha256,
+        launch_error,
+        targets: last.targets.clone(),
+        dpi: last.dpi.clone(),
+        score,
+        passes: passes
+            .into_iter()
+            .map(|p| Pass {
+                launch_error: p.launch_error,
+                targets: p.targets,
+                dpi: p.dpi,
+                score: p.score,
+            })
+            .collect(),
+    }
 }
 
 /// The lower middle: `[1, 2, 3, 4]` → 2.

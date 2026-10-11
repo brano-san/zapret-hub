@@ -202,12 +202,14 @@ mod tests {
         let request = TestRequest {
             suite: Suite::Standard,
             strategies: vec!["general".into(), "general (ALT2)".into()],
+            repeats: 2,
         };
         assert!(state.begin_testing());
         state.set_live(Some(LiveRun {
             request: request.clone(),
             current: Some(1),
             restoring: false,
+            pass: 1,
             results: Vec::new(),
         }));
         let going = read(&state);
@@ -217,7 +219,8 @@ mod tests {
             Some(::cli::Live {
                 request,
                 current: Some(1),
-                restoring: false
+                restoring: false,
+                pass: 1,
             })
         );
         let failed = ::cli::Outcome::Failed {

@@ -35,6 +35,7 @@ fn strategy(name: &str, targets: Vec<TargetResult>) -> StrategyResult {
         args_sha256: "x".into(),
         launch_error: None,
         score: score_standard(&targets),
+        passes: Vec::new(),
         targets,
         dpi: Vec::new(),
     }
@@ -211,6 +212,7 @@ fn dpi_ranks_blocked_then_failed() {
             launch_error: None,
             targets: Vec::new(),
             score: score_dpi(&targets),
+            passes: Vec::new(),
             dpi: targets,
         }
     };
@@ -268,4 +270,136 @@ fn report_reads_like_test_zapret_ps1() {
             "Best strategy: general (ALT11).bat\r\n",
         )
     );
+}
+
+#[test]
+fn passes_sum_their_counts_and_take_the_median_latency() {
+    let host = "https://a.example";
+    let pass = |statuses, ms| strategy("general", vec![target("A", host, statuses, ms)]);
+    let one = pass([Pass, Pass, Pass], 100);
+    assert_eq!(
+        tester::rank::aggregate(vec![one.clone()]),
+        one,
+        "a single pass is the result as it is"
+    );
+    let all = tester::rank::aggregate(vec![
+        pass([Pass, Pass, Pass], 300),
+        pass([Pass, Error, Unsup], 100),
+        pass([Pass, Pass, Ssl], 200),
+    ]);
+    let s = &all.score;
+    assert_eq!((s.ok, s.total, s.not_ok()), (6, 9, 3));
+    assert_eq!((s.errors, s.unsup, s.ssl), (1, 1, 1));
+    assert_eq!(s.median_ms, Some(200), "the median of 300, 100, 200");
+    assert_eq!((s.ping_ok, s.ping_total, s.ping_median_ms), (3, 3, Some(7)));
+    assert_eq!(all.passes.len(), 3);
+    assert_eq!(all.passes[1].score.median_ms, Some(100));
+    assert_eq!(all.targets, all.passes[2].targets, "the last pass is shown");
+    assert_eq!(all.launch_error, None);
+}
+
+#[test]
+fn a_launch_error_in_any_pass_ranks_the_strategy_last() {
+    let host = "https://a.example";
+    let good = strategy("general", vec![target("A", host, [Pass, Pass, Pass], 100)]);
+    let mut broken = good.clone();
+    broken.launch_error = Some("winws exited (exit code: 1)".into());
+    broken.score = Default::default();
+    let all = tester::rank::aggregate(vec![good.clone(), broken, good.clone()]);
+    assert_eq!(
+        all.launch_error.as_deref(),
+        Some("pass 2 of 3: winws exited (exit code: 1)")
+    );
+    let steady = tester::rank::aggregate(vec![
+        strategy(
+            "general (ALT)",
+            vec![target("A", host, [Error, Error, Error], 900)],
+        ),
+        strategy(
+            "general (ALT)",
+            vec![target("A", host, [Error, Error, Error], 900)],
+        ),
+        strategy(
+            "general (ALT)",
+            vec![target("A", host, [Error, Error, Error], 900)],
+        ),
+    ]);
+    let mut ranked = vec![all, steady];
+    sort(Suite::Standard, &mut ranked);
+    assert_eq!(ranked[0].name, "general (ALT)");
+}
+
+#[test]
+fn ranking_with_repeats_uses_the_aggregate() {
+    let host = "https://a.example";
+    let run = |name: &str, passes: &[([CheckStatus; 3], u32)]| {
+        tester::rank::aggregate(
+            passes
+                .iter()
+                .map(|(statuses, ms)| strategy(name, vec![target("A", host, *statuses, *ms)]))
+                .collect(),
+        )
+    };
+    // Lucky once: the best single pass, but worse over three.
+    let lucky = run(
+        "general",
+        &[
+            ([Pass, Pass, Pass], 50),
+            ([Error, Pass, Pass], 400),
+            ([Error, Error, Pass], 400),
+        ],
+    );
+    let steady = run(
+        "general (ALT)",
+        &[
+            ([Pass, Pass, Error], 150),
+            ([Pass, Pass, Pass], 160),
+            ([Pass, Pass, Pass], 170),
+        ],
+    );
+    let mut ranked = vec![lucky, steady];
+    sort(Suite::Standard, &mut ranked);
+    assert_eq!(ranked[0].name, "general (ALT)");
+    assert_eq!(ranked[0].score.median_ms, Some(160));
+}
+
+#[test]
+fn a_canceled_run_keeps_only_whole_passes() {
+    use tester::run::whole_passes;
+    let r = |name: &str| strategy(name, Vec::new());
+    // Canceled in pass 2 after the first strategy: pass 2 is dropped.
+    let kept = whole_passes(vec![vec![r("a"), r("a")], vec![r("b")], vec![r("c")]]);
+    assert_eq!(kept.iter().map(Vec::len).collect::<Vec<_>>(), [1, 1, 1]);
+    // Canceled in pass 1: the strategies it reached are the run.
+    let kept = whole_passes(vec![vec![r("a")], vec![r("b")], Vec::new()]);
+    assert_eq!(kept.iter().map(Vec::len).collect::<Vec<_>>(), [1, 1]);
+}
+
+#[test]
+fn dpi_passes_sum_blocked_and_failed() {
+    let pass = |status| StrategyResult {
+        dpi: Vec::new(),
+        score: score_dpi(&[DpiTargetResult {
+            id: "US.X".into(),
+            provider: "p".into(),
+            country: "us".into(),
+            host: "x.example".into(),
+            checks: vec![DpiResult {
+                kind: CheckKind::Tls12,
+                status,
+                code: "NA".into(),
+                up_bytes: 0,
+                down_bytes: 0,
+                time_s: -1.0,
+            }],
+        }]),
+        ..strategy("general", Vec::new())
+    };
+    let all = tester::rank::aggregate(vec![
+        pass(DpiStatus::LikelyBlocked),
+        pass(DpiStatus::Ok),
+        pass(DpiStatus::Fail),
+    ]);
+    let s = &all.score;
+    assert_eq!((s.ok, s.total, s.likely_blocked, s.fail), (1, 3, 1, 1));
 }

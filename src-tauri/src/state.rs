@@ -384,9 +384,11 @@ mod tests {
             request: Request {
                 suite: Suite::Standard,
                 strategies: vec!["general".into()],
+                repeats: 1,
             },
             current: Some(0),
             restoring: false,
+            pass: 0,
             results: Vec::new(),
         }));
         let saved = cli::Outcome::Run {

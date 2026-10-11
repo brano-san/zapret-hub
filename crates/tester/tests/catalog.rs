@@ -52,6 +52,7 @@ fn result(name: &str, sha: &str) -> StrategyResult {
         targets: Vec::new(),
         dpi: Vec::new(),
         score: Score::default(),
+        passes: Vec::new(),
     }
 }
 
