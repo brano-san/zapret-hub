@@ -133,7 +133,8 @@ PowerShell читает вывод программ в кодировке `[Cons
 
 Команд окна, которых нет в CLI:
 - `pick_folder`, `open_url`, `open_folder` — открывают окна и проводник;
-- `check_folder` — открыл бы путь, переданный клиентом, а папку zapret CLI не меняет (раздел «Настройки»);
+- `check_folder`, `check_zapret2_folder` — открыли бы путь, переданный клиентом (второй ещё и запустил бы из него
+  `winws2.exe`), а папки zapret и zapret2 CLI не меняет (раздел «Настройки»);
 - `take_notices` — забрал бы уведомления у окна;
 - `test_live` — его заменяет `tests status`.
 
@@ -288,6 +289,13 @@ Flowseal показывает стратегии zapret2: сначала вст�
 свои. `apply`, `strategies show` и `tests run` принимают эти имена как есть, прогон может смешивать оба движка.
 Применение стратегии zapret2 ставит службу `zapret2` и удаляет службу `zapret`, применение стратегии Flowseal —
 наоборот.
+
+Папка Flowseal для zapret2 необязательна. Без неё `strategies list` показывает только стратегии zapret2, а
+`apply`, `tests run`, `zapret2 validate|save|delete`, `quick-check`, `restart` и `service remove` работают с zapret2.
+Команды Flowseal (его стратегии, `flowseal`, `game-filter`, `ipset`, `fake`, списки, `hosts`, `checks`) отвечают
+ошибкой `the zapret folder is not set: choose it in Settings`, код 1. Стратегия zapret2 с `%LISTS%`, `%BIN%` или
+`%GameFilter*%` без папки Flowseal не проходит проверку: `the strategy uses %LISTS%: choose the zapret folder in
+Settings` (у встроенных это поле `error` в `strategies list`).
 
 `zapret2 info` печатает папку, версию движка и совместимость Lua (`compat`) или ошибку (`error`).
 
