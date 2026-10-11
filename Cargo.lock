@@ -5123,6 +5123,7 @@ dependencies = [
  "windows",
  "windows-registry",
  "zapret",
+ "zapret2",
 ]
 
 [[package]]

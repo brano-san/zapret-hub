@@ -9,7 +9,7 @@ use tauri::{AppHandle, Manager as _};
 use tauri_specta::Event as _;
 use zapret::custom::CustomStrategy;
 use zapret::folder::Folder;
-use zapret::service::{QuickCheck, SERVICE};
+use zapret::service::{QuickCheck, active};
 use zapret::user_lists::UserList;
 
 use crate::dto::{
@@ -57,9 +57,18 @@ fn finish_with_check(
     result
 }
 
-/// «Применить» (spec 5.4).
+/// «Применить» (spec 5.4). A `zapret2:` name goes to zapret2 (zapret2 spec 3.1, 6); its folder
+/// is opened first, so a broken one changes nothing.
 pub fn apply(app: &AppHandle, name: &str) -> anyhow::Result<QuickCheck> {
-    let result = state(app).change_safely("apply", |folder| zapret::service::apply(folder, name));
+    let state = state(app);
+    let result = match name.strip_prefix(zapret2::PREFIX) {
+        Some(name) => state.engine2_required().and_then(|engine| {
+            state.change_safely("apply", |folder| {
+                zapret2::service::apply(&engine, folder, &state.paths.data(), name)
+            })
+        }),
+        None => state.change_safely("apply", |folder| zapret::service::apply(folder, name)),
+    };
     finish_with_check(app, result)
 }
 
@@ -74,7 +83,7 @@ pub fn apply_best(app: &AppHandle) -> anyhow::Result<QuickCheck> {
 
 pub fn restart(app: &AppHandle) -> anyhow::Result<QuickCheck> {
     let result = state(app).change(|folder| {
-        zapret::service::restart(SERVICE)?;
+        zapret::service::restart(active().0)?;
         // winws needs a moment before it intercepts anything (spec 5.4).
         std::thread::sleep(Duration::from_secs(2));
         Ok(zapret::service::quick_check(folder))
@@ -100,7 +109,8 @@ pub fn check_flowseal_update(app: &AppHandle) -> anyhow::Result<Option<String>> 
 
 /// One save at a time, from reading the settings in force to setting the new ones: otherwise the
 /// file, the memory and the scheduled task could disagree. A save from the `pipe` never turns the
-/// CLI on and never moves the zapret folder (`settings::to_save`, CLI spec 5, 7.2).
+/// CLI on and never moves the zapret or zapret2 folder (`settings::to_save`, CLI spec 5, 7.2,
+/// zapret2 spec 10).
 pub fn save_settings(app: &AppHandle, settings: Settings, pipe: bool) -> anyhow::Result<()> {
     let state = state(app);
     let _saving = state.saving();
@@ -109,14 +119,18 @@ pub fn save_settings(app: &AppHandle, settings: Settings, pipe: bool) -> anyhow:
     settings.socks5 =
         crate::settings::validate_socks(settings.socks5.as_deref().unwrap_or_default())?;
     let folder_changed = settings.zapret_dir != old.zapret_dir;
-    if folder_changed {
+    let engine_changed = settings.zapret2_dir != old.zapret2_dir;
+    if folder_changed || engine_changed {
         anyhow::ensure!(
             !state.testing(),
             "a test run is going: wait for it or cancel it"
         );
-        if let Some(dir) = &settings.zapret_dir {
-            Folder::open(dir)?;
-        }
+    }
+    if folder_changed && let Some(dir) = &settings.zapret_dir {
+        Folder::open(dir)?;
+    }
+    if engine_changed && let Some(dir) = &settings.zapret2_dir {
+        zapret2::Engine::open(dir)?;
     }
     if settings.autostart != old.autostart {
         if settings.autostart {
@@ -188,15 +202,19 @@ pub fn prepare_folder(app: &AppHandle) {
 pub fn overview(app: &AppHandle) -> Overview {
     let state = state(app);
     let folder = state.folder();
+    let settings = state.settings();
+    let (service, image) = active();
     Overview {
-        folder: state.settings().zapret_dir,
+        folder: settings.zapret_dir,
         folder_error: folder.as_ref().err().map(|err| format!("{err:#}")),
         version: folder.as_ref().ok().and_then(Folder::version),
         update: state.update(),
-        service: zapret::service::state(SERVICE),
+        service_name: service.to_owned(),
+        service: zapret::service::state(service),
         windivert: zapret::service::state("WinDivert"),
-        winws_running: zapret::procs::is_running("winws.exe"),
+        winws_running: zapret::procs::is_running(image),
         strategy: zapret::service::strategy(),
+        zapret2: zapret2::info(settings.zapret2_dir.as_deref()),
         quick: state.quick(),
         last_run: state.last_run(),
         testing: state.testing(),

@@ -4,7 +4,7 @@ use tauri::image::Image;
 use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Wry};
-use zapret::service::{QuickCheck, SERVICE, SvcState};
+use zapret::service::{QuickCheck, SvcState, active};
 
 use crate::dto::NoticeLevel;
 use crate::{actions, notify, texts, window};
@@ -81,7 +81,7 @@ pub fn refresh(app: &AppHandle) {
     };
     let state = actions::state(app);
     let strategy = zapret::service::strategy();
-    let light = light(zapret::service::state(SERVICE), state.quick().as_ref());
+    let light = light(zapret::service::state(active().0), state.quick().as_ref());
     let updated = menu(app, strategy.as_deref(), &state.best(5))
         .and_then(|menu| tray.set_menu(Some(menu)))
         .and_then(|()| tray.set_icon(Some(icon(light))))

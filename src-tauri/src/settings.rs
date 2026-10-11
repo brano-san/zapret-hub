@@ -20,6 +20,8 @@ pub enum Theme {
 #[serde(default)]
 pub struct Settings {
     pub zapret_dir: Option<String>,
+    /// The zapret2 folder (zapret2 spec 4); `None` while zapret2 is off.
+    pub zapret2_dir: Option<String>,
     /// `127.0.0.1:2080`: checked on the overview, used when a download fails directly.
     pub socks5: Option<String>,
     pub autostart: bool,
@@ -35,6 +37,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             zapret_dir: None,
+            zapret2_dir: None,
             socks5: None,
             autostart: false,
             start_minimized: true,
@@ -78,14 +81,18 @@ pub fn load_or_default(path: &Path) -> (Settings, Option<String>) {
 
 /// What a save leaves of `sent` against the settings in force. The window's goes as sent. One from
 /// zapret-hub-cli (`pipe`) never turns the CLI on: a save that passed the gate just before the user
-/// turned the CLI off must not turn it back on (CLI spec 7.2). Nor does it move the zapret folder:
-/// the SYSTEM service runs that folder's winws.exe, so any program of the user could pick what
-/// SYSTEM runs (CLI spec 5).
+/// turned the CLI off must not turn it back on (CLI spec 7.2). Nor does it move the zapret or the
+/// zapret2 folder: the SYSTEM service runs winws.exe or winws2.exe from it, so any program of the
+/// user could pick what SYSTEM runs (CLI spec 5, zapret2 spec 10).
 pub fn to_save(current: &Settings, mut sent: Settings, pipe: bool) -> anyhow::Result<Settings> {
     if pipe {
         anyhow::ensure!(
             sent.zapret_dir == current.zapret_dir,
             "the zapret folder can be changed only in the Zapret Hub window (Settings)"
+        );
+        anyhow::ensure!(
+            sent.zapret2_dir == current.zapret2_dir,
+            "the zapret2 folder can be changed only in the Zapret Hub window (Settings)"
         );
         sent.cli_enabled &= current.cli_enabled;
     }
@@ -128,6 +135,7 @@ mod tests {
         let path = dir.path().join("zapret-hub.toml");
         let settings = Settings {
             zapret_dir: Some(r"E:\Zapret".into()),
+            zapret2_dir: Some(r"D:\zapret2".into()),
             socks5: Some("127.0.0.1:18082".into()),
             autostart: true,
             start_minimized: false,
@@ -197,6 +205,40 @@ mod tests {
                 refused,
                 Err(
                     "the zapret folder can be changed only in the Zapret Hub window (Settings)"
+                        .into()
+                ),
+                "{moved:?} from the pipe"
+            );
+            assert_eq!(
+                to_save(&current, moved.clone(), false).unwrap(),
+                moved,
+                "the window moves it"
+            );
+        }
+        assert_eq!(
+            to_save(&current, current.clone(), true).unwrap(),
+            current,
+            "the same folder goes through"
+        );
+    }
+
+    #[test]
+    fn only_the_window_moves_the_zapret2_folder() {
+        let current = Settings {
+            zapret2_dir: Some(r"D:\zapret2".into()),
+            cli_enabled: true,
+            ..Settings::default()
+        };
+        let in_dir = |dir: Option<&str>| Settings {
+            zapret2_dir: dir.map(str::to_owned),
+            ..current.clone()
+        };
+        for moved in [in_dir(Some(r"C:\Users\me\zapret2")), in_dir(None)] {
+            let refused = to_save(&current, moved.clone(), true).map_err(|err| err.to_string());
+            assert_eq!(
+                refused,
+                Err(
+                    "the zapret2 folder can be changed only in the Zapret Hub window (Settings)"
                         .into()
                 ),
                 "{moved:?} from the pipe"

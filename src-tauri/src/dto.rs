@@ -19,10 +19,15 @@ pub struct Overview {
     pub version: Option<String>,
     /// A newer Flowseal version, once a check found one.
     pub update: Option<String>,
+    /// The active engine's service: `zapret`, or `zapret2` once installed (zapret2 spec 3.1).
+    pub service_name: String,
     pub service: SvcState,
     pub windivert: SvcState,
+    /// That service's process: `winws.exe` or `winws2.exe`.
     pub winws_running: bool,
     pub strategy: Option<String>,
+    /// The zapret2 folder and its version, or why it cannot be used.
+    pub zapret2: zapret2::Info,
     pub quick: Option<QuickCheck>,
     pub last_run: Option<RunSummary>,
     pub testing: bool,

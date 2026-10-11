@@ -16,7 +16,7 @@ use zapret::fakes::FakeKind;
 use zapret::game_filter::GameFilter;
 use zapret::hosts::HostsPlan;
 use zapret::ipset::IpsetMode;
-use zapret::service::{QuickCheck, SERVICE};
+use zapret::service::{QuickCheck, active};
 use zapret::user_lists::UserList;
 
 use crate::actions::{self, state as app};
@@ -64,7 +64,8 @@ pub async fn save_settings(handle: AppHandle, settings: Settings) -> Answer<()> 
     blocking(move || actions::save_settings(&handle, settings, false)).await
 }
 
-/// `save_settings` for zapret-hub-cli (`cli.rs`), not a window command: it never turns the CLI on.
+/// `save_settings` for zapret-hub-cli (`cli.rs`), not a window command: it never turns the CLI on
+/// and never moves the zapret or zapret2 folder (`settings::to_save`).
 pub async fn save_settings_from_pipe(handle: AppHandle, settings: Settings) -> Answer<()> {
     blocking(move || actions::save_settings(&handle, settings, true)).await
 }
@@ -130,7 +131,7 @@ pub async fn list_strategies(handle: AppHandle) -> Answer<Vec<StrategyRow>> {
         let active = zapret::service::strategy();
         tester::catalog::rows(
             &state.folder()?,
-            None,
+            state.engine2().ok().flatten().as_ref(),
             &state.store(),
             &state.paths.data(),
             active.as_deref(),
@@ -147,7 +148,7 @@ pub async fn get_strategy(handle: AppHandle, name: String) -> Answer<StrategyDet
         let active = zapret::service::strategy();
         tester::catalog::detail(
             &state.folder()?,
-            None,
+            state.engine2().ok().flatten().as_ref(),
             &state.store(),
             &state.paths.data(),
             active.as_deref(),
@@ -277,14 +278,17 @@ pub async fn get_flowseal(handle: AppHandle) -> Answer<FlowsealState> {
     blocking(move || actions::flowseal(&handle)).await
 }
 
-/// The ports are baked into the service's arguments: it is installed again (spec 5.5).
+/// The ports are baked into the active service's arguments: it is installed again (spec 5.5).
 #[tauri::command]
 #[specta::specta]
 pub async fn set_game_filter(handle: AppHandle, filter: GameFilter) -> Answer<()> {
     blocking(move || {
-        let done = app(&handle).change_safely("game_filter", |folder| {
+        let state = app(&handle);
+        let engine2 = state.engine2().ok().flatten();
+        let done = state.change_safely("game_filter", |folder| {
             zapret::game_filter::write(folder, &filter)?;
-            zapret::service::reinstall_active(folder)
+            zapret::service::reinstall_active(folder)?;
+            zapret2::service::reinstall_active(engine2.as_ref(), folder, &state.paths.data())
         });
         actions::changed(&handle);
         done
@@ -298,7 +302,7 @@ pub async fn set_ipset_mode(handle: AppHandle, mode: IpsetMode) -> Answer<()> {
     blocking(move || {
         let done = app(&handle).change_safely("ipset", |folder| {
             zapret::ipset::set_mode(folder, mode)?;
-            zapret::service::restart_if_running(SERVICE)
+            zapret::service::restart_if_running(active().0)
         });
         actions::changed(&handle);
         done
@@ -324,7 +328,7 @@ pub async fn replace_fake(handle: AppHandle, kind: FakeKind, source: String) -> 
     blocking(move || {
         let done = app(&handle).change(|folder| {
             zapret::fakes::replace(folder, kind, &source)?;
-            zapret::service::restart_if_running(SERVICE)
+            zapret::service::restart_if_running(active().0)
         });
         actions::changed(&handle);
         done

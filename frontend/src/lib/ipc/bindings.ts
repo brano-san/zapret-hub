@@ -45,7 +45,7 @@ export const commands = {
 	/**  «Копировать»: the run as `test zapret.ps1` writes it. */
 	runReport: (id: string) => typedError<string, string>(__TAURI_INVOKE("run_report", { id })),
 	getFlowseal: () => typedError<FlowsealState, string>(__TAURI_INVOKE("get_flowseal")),
-	/**  The ports are baked into the service's arguments: it is installed again (spec 5.5). */
+	/**  The ports are baked into the active service's arguments: it is installed again (spec 5.5). */
 	setGameFilter: (filter: GameFilter) => typedError<null, string>(__TAURI_INVOKE("set_game_filter", { filter })),
 	setIpsetMode: (mode: IpsetMode) => typedError<null, string>(__TAURI_INVOKE("set_ipset_mode", { mode })),
 	setCheckUpdates: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_check_updates", { enabled })),
@@ -196,6 +196,18 @@ export type HostsPlan = {
 	removed: string[],
 };
 
+/**  The zapret2 folder as «Настройки», «Обзор» and `zapret2_info` show it. */
+export type Info = {
+	/**  The `zapret2_dir` setting; `None` while zapret2 is off. */
+	dir: string | null,
+	/**  `v1.0.5.2 (6b6c63e…)`. */
+	version: string | null,
+	/**  `lua_compat_ver`, the same in the engine and its Lua files. */
+	compat: number | null,
+	/**  Why the folder cannot be used. */
+	error: string | null,
+};
+
 export type IpsetMode = "loaded" | "none" | "any";
 
 export type LastResult = {
@@ -242,10 +254,15 @@ export type Overview = {
 	version: string | null,
 	/**  A newer Flowseal version, once a check found one. */
 	update: string | null,
+	/**  The active engine's service: `zapret`, or `zapret2` once installed (zapret2 spec 3.1). */
+	service_name: string,
 	service: SvcState,
 	windivert: SvcState,
+	/**  That service's process: `winws.exe` or `winws2.exe`. */
 	winws_running: boolean,
 	strategy: string | null,
+	/**  The zapret2 folder and its version, or why it cannot be used. */
+	zapret2: Info,
 	quick: QuickCheck | null,
 	last_run: RunSummary | null,
 	testing: boolean,
@@ -321,6 +338,8 @@ export type Score = {
 
 export type Settings = {
 	zapret_dir?: string | null,
+	/**  The zapret2 folder (zapret2 spec 4); `None` while zapret2 is off. */
+	zapret2_dir?: string | null,
 	/**  `127.0.0.1:2080`: checked on the overview, used when a download fails directly. */
 	socks5?: string | null,
 	autostart?: boolean,

@@ -21,6 +21,16 @@ pub fn start_tests(app: &AppHandle, request: Request) -> anyhow::Result<()> {
     );
     let state = state(app);
     let folder = state.folder()?;
+    // Only a run with zapret2 strategies needs zapret2: then a folder that opens, or the reason.
+    let engine2 = if request
+        .strategies
+        .iter()
+        .any(|name| name.starts_with(zapret2::PREFIX))
+    {
+        Some(state.engine2_required()?)
+    } else {
+        None
+    };
     anyhow::ensure!(state.begin_testing(), "a test run is already going");
     state.set_live(Some(LiveRun {
         request: request.clone(),
@@ -39,7 +49,7 @@ pub fn start_tests(app: &AppHandle, request: Request) -> anyhow::Result<()> {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 tester::run::run(
                     &folder,
-                    None,
+                    engine2.as_ref(),
                     &state.paths.data(),
                     &request,
                     socks5.as_deref(),

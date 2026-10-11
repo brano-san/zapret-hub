@@ -28,6 +28,7 @@ cli.workspace = true
 probe.workspace = true
 tester.workspace = true
 zapret.workspace = true
+zapret2.workspace = true
 anyhow.workspace = true
 log.workspace = true
 serde.workspace = true

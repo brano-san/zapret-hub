@@ -103,10 +103,10 @@ pub const QUICK_FAILED: &str = "Быстрая проверка не прошл�
 
 pub fn quick_result(check: &QuickCheck) -> String {
     if check.service != SvcState::Running {
-        return "Служба zapret не запущена".to_owned();
+        return "Служба не запущена".to_owned();
     }
     if !check.winws_running {
-        return "Служба запущена, но winws.exe не работает".to_owned();
+        return "Служба запущена, но её процесс не работает".to_owned();
     }
     check
         .checks

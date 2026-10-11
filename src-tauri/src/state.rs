@@ -119,6 +119,18 @@ impl AppState {
         Folder::open(dir)
     }
 
+    /// The zapret2 engine; `None` while `zapret2_dir` is empty (zapret2 spec 4).
+    pub fn engine2(&self) -> anyhow::Result<Option<zapret2::Engine>> {
+        let dir = lock(&self.settings).zapret2_dir.clone();
+        dir.map(zapret2::Engine::open).transpose()
+    }
+
+    /// For what cannot go without zapret2: applying, checking and saving its strategies.
+    pub fn engine2_required(&self) -> anyhow::Result<zapret2::Engine> {
+        self.engine2()?
+            .context("the zapret2 folder is not set: choose it in Settings")
+    }
+
     pub fn store(&self) -> Store {
         Store::new(self.paths.strategies())
     }
@@ -338,5 +350,23 @@ mod tests {
         assert!(!state.testing());
         assert_eq!(state.live(), None);
         assert_eq!(state.last_outcome(), Some(saved));
+    }
+
+    #[test]
+    fn zapret2_is_off_until_its_folder_is_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path());
+        assert_eq!(state.engine2().unwrap(), None);
+        let err = state.engine2_required().unwrap_err();
+        assert!(
+            format!("{err:#}").contains("zapret2 folder is not set"),
+            "{err:#}"
+        );
+        state.set_settings(Settings {
+            zapret2_dir: Some(dir.path().display().to_string()),
+            ..Settings::default()
+        });
+        let err = state.engine2_required().unwrap_err();
+        assert!(format!("{err:#}").contains("missing winws2.exe"), "{err:#}");
     }
 }
