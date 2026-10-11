@@ -29,6 +29,7 @@ const strategies = (n: number) => `${n} ${plural(n, ["стратегия", "ст
 
 export const LINKS = {
   release: (version: string) => `https://github.com/Flowseal/zapret-discord-youtube/releases/tag/${version}`,
+  zapret2: "https://github.com/bol-van/zapret2/releases",
 };
 
 export const S = {
@@ -87,6 +88,7 @@ export const S = {
     fix: "Не исправлено",
     cache: "Кэш Discord не очищен",
     removeService: "Служба не удалена",
+    zapret2: "Папка zapret2 не проверена",
     wizard: "Настройки не сохранены",
     start: "Окно не загрузило данные",
   },
@@ -102,11 +104,11 @@ export const S = {
   status: { Ok: "OK", Ssl: "SSL", Unsup: "UNSUP", Error: "ERROR" } satisfies Record<CheckStatus, string>,
   dpiStatus: { Ok: "OK", Fail: "FAIL", Unsupported: "UNSUP", LikelyBlocked: "БЛОК" } satisfies Record<DpiStatus, string>,
   overview: {
-    service: "Служба zapret",
+    service: (name: string) => `Служба ${name}`,
     strategy: "Стратегия",
     noStrategy: "не выбрана",
-    notRunning: "служба zapret не запущена",
-    winwsMissing: "служба запущена, но winws.exe не работает",
+    notRunning: "служба не запущена",
+    winwsMissing: "служба запущена, но её процесс не работает",
     stopPending:
       "Служба застряла в остановке: скорее всего, WinDivert держит другой обход. Загляните в «Системные проверки» на вкладке Zapret.",
     quick: "Быстрая проверка",
@@ -115,6 +117,7 @@ export const S = {
     quickFailed: "не пройдена",
     restart: "Перезапустить zapret",
     flowseal: "Flowseal",
+    zapret2: "zapret2",
     version: (version: string | null) => (version ? `Версия ${version}` : "Версия не найдена"),
     updateAvailable: (version: string) => `Вышла версия ${version}`,
     release: "Страница релиза",
@@ -140,6 +143,13 @@ export const S = {
     pick: "Выбрать…",
     missing: (parts: string[]) => `не хватает: ${parts.join(", ")}`,
     folderOk: (version: string | null) => (version ? `Flowseal ${version}` : "папка подходит"),
+    zapret2: "Папка zapret2",
+    zapret2Hint:
+      "Необязательно. Распакованный релиз bol-van/zapret2: его стратегии появятся рядом со стратегиями Flowseal. Пусто — zapret2 выключен. Нужна и папка zapret выше: списки и фейки берутся из неё.",
+    zapret2Example: "Например, D:\zapret2",
+    zapret2Ok: (version: string | null, compat: number | null) =>
+      `zapret2 ${version ?? "?"}, совместимость Lua ${compat ?? "?"}`,
+    zapret2Releases: "Релизы zapret2",
     proxy: "Прокси SOCKS5",
     proxyAddress: "Адрес",
     proxyHint: "Нужен для проверки на обзоре и для загрузок, если напрямую не вышло. Пусто — без прокси.",
@@ -180,6 +190,7 @@ export const S = {
     result: "Последний тест",
     active: "активная",
     custom: "своя",
+    zapret2: "zapret2",
     stale: "устарел",
     notStrategy: "не стратегия",
     untested: "не проверялась",
@@ -212,6 +223,15 @@ export const S = {
     appliedOk: "Сохранено и установлено заново: быстрая проверка пройдена.",
     appliedFailed: "Сохранено и установлено заново, но быстрая проверка не прошла.",
     allTraffic: "все пакеты",
+  },
+  zapret2: {
+    hint: "Аргументы winws2: глобальная часть (--wf-…, --lua-init, --blob), затем профили через --new. Строка с # в начале — комментарий. %LUA%, %FILES%, %LISTS%, %BIN% и %GameFilter% подставляются при проверке и установке.",
+    text: "Текст стратегии",
+    valid: "Проверка пройдена: статическая, winws2 --dry-run и --intercept=0 без ошибок.",
+    global: "Глобальная часть",
+    profile: (n: number) => `Профиль ${n}`,
+    commandLine: "Командная строка winws2",
+    deleteText: (name: string) => `Файл «${name}.txt» в data\zapret2 будет удалён.`,
   },
   results: {
     rank: "#",
@@ -247,7 +267,8 @@ export const S = {
     progress: (index: number, total: number, name: string) => `Стратегия ${index} из ${total}: ${name}`,
     restoring: "Возвращаю службу, ipset и winws как было…",
     runTitle: (date: string, suite: string) => `Прогон ${date} · ${suite}`,
-    flowseal: (version: string | null) => `Flowseal ${version ?? "?"}`,
+    versions: (flowseal: string | null, zapret2?: string | null) =>
+      `Flowseal ${flowseal ?? "?"}${zapret2 ? ` · zapret2 ${zapret2}` : ""}`,
     canceled: "отменён",
     applyBest: (name: string) => `Применить лучшую: ${name}`,
     copied: "Скопировано",
@@ -258,9 +279,9 @@ export const S = {
   },
   zapret: {
     service: "Служба",
-    serviceHint: "Как «Remove Services» в service.bat: служба zapret, процессы winws, затем WinDivert.",
+    serviceHint: "Как «Remove Services» в service.bat: служба zapret или zapret2, процессы winws, затем WinDivert.",
     remove: "Удалить службу",
-    removeTitle: "Удалить службу zapret?",
+    removeTitle: "Удалить службу?",
     removeText: "Обход перестанет работать, пока стратегия не будет применена снова.",
     gameFilter: "Игровой фильтр",
     gameModes: { disabled: "выключен", all: "TCP и UDP", tcp: "только TCP", udp: "только UDP" } satisfies Record<

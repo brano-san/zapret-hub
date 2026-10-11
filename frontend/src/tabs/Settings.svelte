@@ -1,11 +1,11 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
-  import { commands, type FolderCheck, type ProxyStatus, type Settings, type Theme } from "$lib/ipc/bindings";
+  import { commands, type FolderCheck, type Info, type ProxyStatus, type Settings, type Theme } from "$lib/ipc/bindings";
   import { call } from "$lib/api";
   import { app, change, loadSettings } from "$lib/app.svelte";
   import { follow } from "$lib/draft";
   import { ms } from "$lib/format";
-  import { S } from "$lib/strings";
+  import { LINKS, S } from "$lib/strings";
 
   const THEMES: Theme[] = ["system", "light", "dark"];
 
@@ -13,6 +13,7 @@
   let draft = $state<Settings | null>(null);
   let from: Settings | null = null;
   let folder = $state<FolderCheck | null>(null);
+  let zapret2 = $state<Info | null>(null);
   let proxy = $state<ProxyStatus | null>(null);
   let saved = $state(false);
   let version = $state("");
@@ -30,6 +31,16 @@
     }
   }
 
+  async function pickZapret2(): Promise<void> {
+    const path = await call(S.failed.pick, commands.pickFolder());
+    if (path && draft) draft.zapret2_dir = path;
+  }
+
+  /** The saved folder's version, or why it cannot be used: a new folder is checked by «Сохранить». */
+  async function checkZapret2(): Promise<void> {
+    zapret2 = (await call(S.failed.zapret2, commands.zapret2Info())) ?? null;
+  }
+
   async function checkProxy(): Promise<void> {
     proxy = null;
     const addr = draft?.socks5?.trim();
@@ -41,6 +52,7 @@
     const settings: Settings = {
       ...draft,
       zapret_dir: draft.zapret_dir?.trim() || null,
+      zapret2_dir: draft.zapret2_dir?.trim() || null,
       socks5: draft.socks5?.trim() || null,
     };
     // The draft as sent: anything typed while the save runs stays an edit.
@@ -66,6 +78,7 @@
       draft = copy;
       from = next;
       void checkFolder();
+      void checkZapret2();
     });
   });
 
@@ -84,6 +97,30 @@
         {folder.missing.length > 0 ? S.settings.missing(folder.missing) : S.settings.folderOk(folder.version)}
       </p>
     {/if}
+  </section>
+
+  <section class="card">
+    <h2>{S.settings.zapret2}</h2>
+    <p class="muted">{S.settings.zapret2Hint}</p>
+    <div class="row">
+      <input
+        class="grow"
+        bind:value={draft.zapret2_dir}
+        placeholder={S.settings.zapret2Example}
+        aria-label={S.settings.zapret2}
+      />
+      <button onclick={pickZapret2}>{S.settings.pick}</button>
+    </div>
+    {#if zapret2?.dir}
+      {#if zapret2.error}
+        <pre class="bad">{zapret2.error}</pre>
+      {:else}
+        <p class="ok">{S.settings.zapret2Ok(zapret2.version, zapret2.compat)}</p>
+      {/if}
+    {/if}
+    <button class="link" onclick={() => call(S.failed.open, commands.openUrl(LINKS.zapret2))}>
+      {S.settings.zapret2Releases}
+    </button>
   </section>
 
   <section class="card">
@@ -117,7 +154,7 @@
     <p class="muted">{S.settings.cliHint}</p>
   </section>
 
-  <!-- One button for the four cards above: they are saved together. -->
+  <!-- One button for the five cards above: they are saved together. -->
   <div class="buttons">
     <button class="primary" disabled={app.busy} onclick={save}>{S.common.save}</button>
     {#if saved}<span class="ok">{S.settings.saved}</span>{/if}

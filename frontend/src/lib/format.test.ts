@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockSummary, runDate } from "./format";
+import { blockSummary, runDate, zapret2Name } from "./format";
 
 describe("blockSummary", () => {
   it("names the protocol, the ports and what the block is limited to", () => {
@@ -13,6 +13,13 @@ describe("blockSummary", () => {
       "TCP 443 · discord.media",
     );
     expect(blockSummary("--dpi-desync=fake")).toBe("все пакеты");
+  });
+});
+
+describe("zapret2Name", () => {
+  it("tells zapret2 strategies by their prefix", () => {
+    expect(zapret2Name("zapret2:general-sni")).toBe("general-sni");
+    expect(zapret2Name("general (ALT11)")).toBeNull();
   });
 });
 

@@ -16,6 +16,14 @@ export function hubStem(name: string): string {
   return `general (HUB ${name})`;
 }
 
+/** A zapret2 strategy's name is `zapret2:<name>` (zapret2 spec 3.1). */
+export const ZAPRET2 = "zapret2:";
+
+/** `mine` for `zapret2:mine`; `null` for a Flowseal strategy. */
+export function zapret2Name(name: string): string | null {
+  return name.startsWith(ZAPRET2) ? name.slice(ZAPRET2.length) : null;
+}
+
 /** A block's card header (spec 6): protocol and ports, l7, the list or domains it is limited to. */
 export function blockSummary(block: string): string {
   const pick = (flag: string): string | undefined => {

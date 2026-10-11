@@ -3,16 +3,19 @@
   import { call } from "$lib/api";
   import { app, change } from "$lib/app.svelte";
   import { confirmation } from "$lib/confirm.svelte";
-  import { blockSummary, hubStem, ms, runDate } from "$lib/format";
+  import { blockSummary, hubStem, ms, runDate, zapret2Name } from "$lib/format";
   import { S } from "$lib/strings";
   import TargetChecks from "../components/TargetChecks.svelte";
   import StrategyEditor from "./StrategyEditor.svelte";
+  import Zapret2Editor from "./Zapret2Editor.svelte";
 
   let rows = $state<StrategyRow[]>([]);
   let query = $state("");
   let detail = $state<StrategyDetail | null>(null);
   /** The stem of the custom strategy under edit. */
   let editing = $state<string | null>(null);
+  /** The zapret2 strategy under edit, or a copy not saved yet (zapret2 spec 5.2). */
+  let editing2 = $state<{ name: string; from: string; create: boolean } | null>(null);
   let cloneName = $state("");
 
   const visible = $derived(rows.filter((row) => row.name.toLowerCase().includes(query.trim().toLowerCase())));
@@ -37,6 +40,12 @@
 
   async function clone(source: string): Promise<void> {
     const name = cloneName.trim();
+    if (zapret2Name(source) !== null) {
+      // A zapret2 copy is saved from its editor: the check may want its text changed first.
+      cloneName = "";
+      editing2 = { name, from: source, create: true };
+      return;
+    }
     const created = await change(S.failed.clone, () => commands.cloneStrategy(source, name));
     if (!created) return;
     cloneName = "";
@@ -52,6 +61,16 @@
       danger: true,
     });
     if (sure && (await change(S.failed.deleteCustom, () => commands.deleteCustom(record))) !== undefined) detail = null;
+  }
+
+  async function removeZapret2(name: string): Promise<void> {
+    const sure = await confirmation.ask({
+      title: S.strategies.deleteTitle,
+      text: S.zapret2.deleteText(name),
+      yes: S.strategies.delete,
+      danger: true,
+    });
+    if (sure && (await change(S.failed.deleteCustom, () => commands.deleteZapret2(name))) !== undefined) detail = null;
   }
 </script>
 
@@ -70,11 +89,13 @@
                 class="link"
                 onclick={() => {
                   editing = null;
+                  editing2 = null;
                   void open(row.name);
                 }}>{row.name}</button
               >
               {#if row.active}<span class="badge ok">{S.strategies.active}</span>{/if}
               {#if row.custom}<span class="badge muted">{S.strategies.custom}</span>{/if}
+              {#if zapret2Name(row.name) !== null}<span class="badge muted">{S.strategies.zapret2}</span>{/if}
             </td>
             <td>{@render summary(row)}</td>
           </tr>
@@ -92,12 +113,24 @@
           void load();
         }}
       />
+    {:else if editing2}
+      <Zapret2Editor
+        name={editing2.name}
+        from={editing2.from}
+        create={editing2.create}
+        onClose={(saved) => {
+          editing2 = null;
+          void (saved ? open(saved) : load());
+        }}
+      />
     {:else if detail}
       {@const d = detail}
+      {@const z2 = zapret2Name(d.row.name)}
       <h2>
         {d.row.name}
         {#if d.row.active}<span class="badge ok">{S.strategies.active}</span>{/if}
         {#if d.row.custom}<span class="badge muted">{S.strategies.custom}</span>{/if}
+        {#if z2 !== null}<span class="badge muted">{S.strategies.zapret2}</span>{/if}
         {#if d.row.last?.stale}<span class="badge warn">{S.strategies.stale}</span>{/if}
       </h2>
       {#if d.record}<p class="muted">{S.strategies.clonedFrom(d.record.cloned_from)}</p>{/if}
@@ -114,25 +147,41 @@
             {S.strategies.delete}
           </button>
         {/if}
+        {#if z2 !== null && d.row.custom}
+          {@const own = z2}
+          <button disabled={locked} onclick={() => (editing2 = { name: own, from: d.row.name, create: false })}>
+            {S.strategies.edit}
+          </button>
+          <button class="danger" disabled={locked || d.row.active} onclick={() => removeZapret2(own)}>
+            {S.strategies.delete}
+          </button>
+        {/if}
       </div>
       <div class="buttons">
         <input placeholder={S.strategies.cloneName} bind:value={cloneName} aria-label={S.strategies.cloneName} />
-        <button disabled={locked || !cloneName.trim() || d.row.error !== null} onclick={() => clone(d.row.name)}>
+        <!-- A zapret2 copy starts from the text: a static check error is a reason to copy it. -->
+        <button
+          disabled={locked || !cloneName.trim() || (z2 === null && d.row.error !== null)}
+          onclick={() => clone(d.row.name)}
+        >
           {S.strategies.clone}
         </button>
       </div>
       {#if d.row.error}<pre class="bad">{d.row.error}</pre>{/if}
       {#if d.wf}
-        <h3>{S.strategies.filter}</h3>
+        <h3>{z2 === null ? S.strategies.filter : S.zapret2.global}</h3>
         <pre>{d.wf}</pre>
       {/if}
       {#each d.blocks as block, i (i)}
-        <h3>{S.strategies.block(i + 1)} <span class="muted">· {blockSummary(block)}</span></h3>
+        <h3>
+          {z2 === null ? S.strategies.block(i + 1) : S.zapret2.profile(i + 1)}
+          <span class="muted">· {blockSummary(block)}</span>
+        </h3>
         <pre>{block}</pre>
       {/each}
       {#if d.final_args}
         <details>
-          <summary>{S.strategies.finalArgs}</summary>
+          <summary>{z2 === null ? S.strategies.finalArgs : S.zapret2.commandLine}</summary>
           <pre>{d.final_args}</pre>
         </details>
       {/if}

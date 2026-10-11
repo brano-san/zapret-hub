@@ -118,7 +118,7 @@
     <section class="card">
       <h2>{S.tests.runTitle(runDate(run.id), suiteName(run.suite))}</h2>
       <p class="muted">
-        {S.tests.flowseal(run.flowseal_version)}{#if run.canceled}{" · "}{S.tests.canceled}{/if}
+        {S.tests.versions(run.flowseal_version, run.zapret2_version)}{#if run.canceled}{" · "}{S.tests.canceled}{/if}
       </p>
       {#if run.restore_error}<pre class="bad">{run.restore_error}</pre>{/if}
       <div class="buttons">

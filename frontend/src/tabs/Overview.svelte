@@ -40,7 +40,7 @@
   {/if}
   <div class="cards">
     <section class="card">
-      <h2>{S.overview.service}</h2>
+      <h2>{S.overview.service(o.service_name)}</h2>
       <p class={o.service === "Running" ? "ok" : "bad"}>{S.svc[o.service]}</p>
       <p>{S.overview.strategy}: <strong>{o.strategy ?? S.overview.noStrategy}</strong></p>
       {#if o.service === "Running" && !o.winws_running}<p class="warn">{S.overview.winwsMissing}</p>{/if}
@@ -80,6 +80,17 @@
       {/if}
       <div class="buttons"><button disabled={app.busy} onclick={checkUpdate}>{S.overview.checkUpdate}</button></div>
     </section>
+
+    {#if o.zapret2.dir}
+      <section class="card">
+        <h2>{S.overview.zapret2}</h2>
+        {#if o.zapret2.error}
+          <pre class="bad">{o.zapret2.error}</pre>
+        {:else}
+          <p>{S.overview.version(o.zapret2.version)}</p>
+        {/if}
+      </section>
+    {/if}
 
     <section class="card">
       <h2>{S.overview.proxy}</h2>
