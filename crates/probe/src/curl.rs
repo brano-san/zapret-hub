@@ -298,7 +298,8 @@ fn revoke_flag() -> &'static str {
     })
 }
 
-fn get(url: &str, socks5: Option<&str>) -> Command {
+/// `-L -f -s -S`, a 10 s connect timeout, the revocation flag, `no-cache`, through `socks5` when given.
+pub fn get(url: &str, socks5: Option<&str>) -> Command {
     let mut cmd = Command::new("curl.exe");
     cmd.args([
         "-L",
@@ -319,7 +320,7 @@ fn get(url: &str, socks5: Option<&str>) -> Command {
 }
 
 /// Tries directly, then once more through the proxy when there is one.
-fn with_fallback<T>(
+pub fn with_fallback<T>(
     socks5: Option<&str>,
     attempt: impl Fn(Option<&str>) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
