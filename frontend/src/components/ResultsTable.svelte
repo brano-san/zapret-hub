@@ -78,7 +78,7 @@
   <thead>
     <tr>
       {#each columns as column (column)}
-        <th>
+        <th class:num={column !== "name"}>
           <button class="head" onclick={() => sortOn(column)}>
             {S.results[column]}{key === column ? (dir === "asc" ? " ↑" : " ↓") : ""}
           </button>
@@ -91,7 +91,7 @@
     {#each items as { result, rank } (result.name)}
       <tr class:selected={open === result.name}>
         {#each columns as column (column)}
-          <td>{@render cell(column, result, rank)}</td>
+          <td class:num={column !== "name"} title={column === "dbd" ? S.results.dbdHint : undefined}>{@render cell(column, result, rank)}</td>
         {/each}
         {#if onApply}
           <td><button {disabled} onclick={() => onApply?.(result.name)}>{S.common.apply}</button></td>
@@ -119,14 +119,16 @@
   {:else if column === "latency"}
     {ms(s.median_ms)}
   {:else if column === "ping"}
-    {ms(s.ping_median_ms)} <span class="muted">{s.ping_ok}/{s.ping_total}</span>
+    <span class="pair"><span>{ms(s.ping_median_ms)}</span><span class="muted">{s.ping_ok}/{s.ping_total}</span></span>
   {:else if column === "discord"}
     {@render profile(s.discord.ok, s.discord.total)}
   {:else if column === "youtube"}
     {@render profile(s.youtube.ok, s.youtube.total)}
   {:else if column === "dbd"}
-    {ms(s.dbd.median_ms)}
-    {#if failed(s.dbd) > 0}<span class="bad">−{failed(s.dbd)}</span>{/if}
+    <span class="pair">
+      <span>{ms(s.dbd.median_ms)}</span>
+      <span class="bad" title={S.results.dbdFailed(failed(s.dbd), s.dbd.total)}>{failed(s.dbd) > 0 ? `−${failed(s.dbd)}` : ""}</span>
+    </span>
   {:else if column === "blocked"}
     <span class={s.likely_blocked > 0 ? "bad" : "ok"}>{s.likely_blocked}</span>
   {:else if column === "fail"}
@@ -141,6 +143,20 @@
 {/snippet}
 
 <style>
+  :global(th.num),
+  :global(td.num) {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Two fixed-width sub-cells: the value and the count beside it line up from row to row. */
+  .pair {
+    display: inline-grid;
+    grid-template-columns: 7ch 5ch;
+    column-gap: 8px;
+    justify-items: end;
+  }
+
   .head {
     padding: 0;
     border: none;

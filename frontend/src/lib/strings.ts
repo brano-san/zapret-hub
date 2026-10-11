@@ -256,6 +256,9 @@ export const S = {
     discord: "Discord",
     youtube: "YouTube",
     dbd: "DbD/Steam",
+    dbdHint:
+      "Медиана времени HTTPS-проверок (HTTP, TLS 1.2, TLS 1.3) трёх хостов: steam.live.bhvrdbd.com, api.epicgames.dev, store.steampowered.com. Красное число со знаком минус — сколько из этих проверок не прошло.",
+    dbdFailed: (failed: number, total: number) => `Не прошло ${failed} из ${total} проверок игровых хостов`,
     blocked: "Блок",
     fail: "Сбои",
     ok: "OK",
