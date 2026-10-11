@@ -1,7 +1,7 @@
 <script lang="ts">
   import { commands, type StrategyDetail, type StrategyRow } from "$lib/ipc/bindings";
   import { call } from "$lib/api";
-  import { app, change } from "$lib/app.svelte";
+  import { app, change, refreshLive } from "$lib/app.svelte";
   import { confirmation } from "$lib/confirm.svelte";
   import { ZAPRET2_TEMPLATE, blockSummary, hubStem, ms, nameError, ownName, runDate, uniqueName, zapret2Name } from "$lib/format";
   import { S } from "$lib/strings";
@@ -26,6 +26,8 @@
   /** Names a new one must not take: the user's own in either engine (and Flowseal's, harmlessly). */
   const taken = $derived(rows.map((row) => ownName(row.name)));
   const cloneError = $derived(nameError(cloneName));
+  /** A run is going: another cannot start. */
+  const testing = $derived((app.overview?.testing ?? false) || app.live !== null);
 
   async function open(name: string): Promise<void> {
     // Another strategy: its copy gets a fresh name; a reload of the same one keeps what was typed.
@@ -82,6 +84,14 @@
     creating = null;
     await open(hubStem(created.name));
     editing = hubStem(created.name);
+  }
+
+  /** A standard run of this one strategy; its progress is on the «Тесты» tab, as for any run. */
+  async function test(name: string): Promise<void> {
+    const started = await change(S.failed.startTests, () => commands.startTests({ suite: "Standard", strategies: [name] }));
+    if (started === undefined) return;
+    await refreshLive();
+    app.tab = "tests";
   }
 
   async function remove(record: string, stem: string): Promise<void> {
@@ -240,6 +250,16 @@
         {:else}
           <p class="muted">{S.strategies.untested}</p>
         {/if}
+        <div class="buttons">
+          <button disabled={app.busy || testing || d.row.error !== null} onclick={() => test(d.row.name)}>
+            {S.strategies.runTest}
+          </button>
+          {#if testing}
+            <span class="muted">{S.strategies.runTestBusy}</span>
+          {:else if d.row.error !== null}
+            <span class="muted">{S.strategies.runTestError}</span>
+          {/if}
+        </div>
       </section>
       <section class="part">
         <h3>{S.strategies.cloneTitle}</h3>
