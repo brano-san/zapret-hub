@@ -166,7 +166,8 @@ fn expand(line: &str, root_dp0: &str, bin: &str, lists: &str, vars: &GameFilterV
     out
 }
 
-fn replace_ci(hay: &str, needle: &str, with: &str) -> String {
+/// Every case-insensitive occurrence of an ASCII `needle` replaced, as cmd expands `%VAR%`.
+pub fn replace_ci(hay: &str, needle: &str, with: &str) -> String {
     let lower = hay.to_ascii_lowercase();
     let needle_lower = needle.to_ascii_lowercase();
     let mut out = String::with_capacity(hay.len());

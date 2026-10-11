@@ -1,0 +1,77 @@
+# Built into Zapret Hub, read-only: clone it to change it.
+# From the Windows example in zapret2's docs/readme.md (https://github.com/bol-van/zapret2,
+# MIT License, Copyright (c) 2016-2026 bol-van), on Flowseal's lists and fakes: list-google.txt
+# where the example has its YouTube list, the general lists and ipset-all.txt for the rest.
+# Discord voice is caught by its ports, as Flowseal does: Flowseal has no WinDivert filter files.
+--wf-tcp-out=80,443
+--wf-udp-out=443,19294-19344,50000-50100
+--lua-init=@"%LUA%zapret-lib.lua"
+--lua-init=@"%LUA%zapret-antidpi.lua"
+--lua-init="fake_default_tls = tls_mod(fake_default_tls,'rnd,rndsni')"
+--blob=quic_google:@"%BIN%quic_initial_www_google_com.bin"
+
+# HTTP
+--filter-tcp=80 --filter-l7=http
+--hostlist="%LISTS%list-general.txt" --hostlist="%LISTS%list-general-user.txt"
+--hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt"
+--out-range=-d10 --payload=http_req
+--lua-desync=fake:blob=fake_default_http:ip_autottl=-2,3-20:ip6_autottl=-2,3-20:tcp_md5
+--lua-desync=fakedsplit:ip_autottl=-2,3-20:ip6_autottl=-2,3-20:tcp_md5
+--new
+
+# YouTube over TLS
+--filter-tcp=443 --filter-l7=tls --hostlist="%LISTS%list-google.txt"
+--out-range=-d10 --payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:tcp_md5:repeats=11:tls_mod=rnd,dupsid,sni=www.google.com
+--lua-desync=multidisorder:pos=1,midsld
+--new
+
+# The general lists over TLS
+--filter-tcp=443 --filter-l7=tls
+--hostlist="%LISTS%list-general.txt" --hostlist="%LISTS%list-general-user.txt"
+--hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt"
+--out-range=-d10 --payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:tcp_md5:tcp_seq=-10000:repeats=6
+--lua-desync=multidisorder:pos=midsld
+--new
+
+# YouTube over QUIC
+--filter-udp=443 --filter-l7=quic --hostlist="%LISTS%list-google.txt"
+--payload=quic_initial
+--lua-desync=fake:blob=quic_google:repeats=11
+--new
+
+# The general lists over QUIC
+--filter-udp=443 --filter-l7=quic
+--hostlist="%LISTS%list-general.txt" --hostlist="%LISTS%list-general-user.txt"
+--hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt"
+--payload=quic_initial
+--lua-desync=fake:blob=fake_default_quic:repeats=11
+--new
+
+# Discord voice
+--filter-udp=19294-19344,50000-50100 --filter-l7=wireguard,stun,discord
+--payload=wireguard_initiation,wireguard_cookie,stun,discord_ip_discovery
+--lua-desync=fake:blob=0x00000000000000000000000000000000:repeats=2
+--new
+
+# Addresses in ipset-all.txt: the ipset modes, and every address during the DPI tests
+--filter-tcp=80 --filter-l7=http --ipset="%LISTS%ipset-all.txt"
+--hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt"
+--ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
+--out-range=-d10 --payload=http_req
+--lua-desync=fake:blob=fake_default_http:ip_autottl=-2,3-20:ip6_autottl=-2,3-20:tcp_md5
+--lua-desync=fakedsplit:ip_autottl=-2,3-20:ip6_autottl=-2,3-20:tcp_md5
+--new
+--filter-tcp=443 --filter-l7=tls --ipset="%LISTS%ipset-all.txt"
+--hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt"
+--ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
+--out-range=-d10 --payload=tls_client_hello
+--lua-desync=fake:blob=fake_default_tls:tcp_md5:tcp_seq=-10000:repeats=6
+--lua-desync=multidisorder:pos=midsld
+--new
+--filter-udp=443 --filter-l7=quic --ipset="%LISTS%ipset-all.txt"
+--hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt"
+--ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
+--payload=quic_initial
+--lua-desync=fake:blob=fake_default_quic:repeats=11

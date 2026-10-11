@@ -173,7 +173,7 @@ pub fn split_bat(bat: &str) -> anyhow::Result<(String, Vec<String>)> {
 }
 
 /// Whitespace-separated; whitespace inside quotes does not split.
-fn quoted_tokens(text: &str) -> Vec<String> {
+pub fn quoted_tokens(text: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut quoted = false;

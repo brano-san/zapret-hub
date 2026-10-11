@@ -1,0 +1,35 @@
+# Every "function <name>(" in lua/zapret-lib.lua, zapret-antidpi.lua and zapret-auto.lua of
+# bol-van/zapret2 at a1adf7b (master after v1.0.5.2), for the static check of the built-in
+# strategies. Regenerate from a zapret2 checkout (Git Bash):
+# grep -ho 'function [A-Za-z_][A-Za-z0-9_]*(' lua/zapret-{lib,antidpi,auto}.lua | sed 's/^function //; s/($//' | sort -u
+append_path apply_arg_prefix apply_execution_plan apply_fooling apply_ip_id argdebug
+array_field_search array_search automate_conn_record automate_failure_check automate_failure_counter
+automate_failure_counter_reset automate_host_record autottl autottl_eval barray blob blob_exist
+blob_or_def bquic_tvb btable circular cond_false cond_lua cond_payload_str cond_random
+cond_tcp_has_ts cond_true condition count_strategies cutoff_shim_check dbg deepcopy del_ip6_exthdr
+delete_pos_1 desync_copy desync_opts desync_orchestrator_example desync_timer_name
+detect_payload_str dht_dn direction_check direction_cutoff_opposite dis_ipdst dis_ipsrc dis_l4_name
+dis_l4_ports dis_reconstruct_l3 dis_reverse dis_timer_name dissect_nld dissect_url drop fake
+fakeddisorder fakedsplit find_ip6_exthdr find_next_line find_tcp_option fix_ip6_next fix_ip_proto
+frag_idx genhost gunzip_file gzip_file has_nonprintable hexdump hexdump_dlog hop_count_guess host_ip
+host_or_ip hostfakesplit http_dissect_header http_dissect_headers http_dissect_reply
+http_dissect_req http_domcase http_hostcase http_methodeol http_reconstruct_headers
+http_reconstruct_req http_unixeol in_list insert_ip6_exthdr instance_cutoff_shim ip2ifname ip_proto
+ip_proto_l3 ip_proto_l4 ipfrag2 is_absolute_path is_dpi_redirect is_gzip_file is_retransmission
+is_tls_handshake is_tls_handshake_type_hello is_tls_hello is_tls_record l3_base_len l3_extra_len
+l3_len l3l4_extra_len l3l4_len l4_base_len l4_extra_len l4_len len16_header len8_header logical_xor
+luaexec make_readable move_ts_top multidisorder multidisorder_legacy multidisorder_send multisplit
+oob orchestrate packet_len parse_autottl parse_tcp_flags pass pattern payload_check
+payload_match_filter per_instance_condition pktdebug pktmod plan_clear plan_instance_execute
+plan_instance_execute_preapplied plan_instance_pop pos_array_normalize pos_check_from
+pos_check_range pos_check_to pos_counter_overflow pos_get pos_get_pos pos_normalize pos_range_str
+pos_str posdebug prepare_bin quic_tvb rawsend_dissect_ipfrag rawsend_dissect_segmented rawsend_opts
+rawsend_opts_base rawsend_payload_segmented readfile reconstruct_opts repeater replay_drop
+replay_drop_key replay_drop_set replay_execution_plan replay_first require_iff rst send
+send_timer_delayed seq_ge seq_gt seq_le seq_lt seq_within standard_detector_defaults
+standard_failure_detector standard_hostkey standard_success_detector stopif str_or_hex string2hex
+synack synack_split syndata tcpseg tls_client_hello_clone tls_client_hello_mod tls_dissect
+tls_dissect_ext tls_dissect_handshake tls_handshake_data_len tls_handshake_full tls_handshake_len
+tls_handshake_type tls_mod_shim tls_reconstruct tls_reconstruct_ext tls_reconstruct_handshake
+tls_record_data_len tls_record_full tls_record_type ttl_discover udplen update_ifaddrs var_debug
+verdict_aggregate writable_file_name writefile wsize wsize_rewrite wssize z_readfile zero_based_pos

@@ -1,5 +1,7 @@
 //! bol-van/zapret2 (`winws2.exe`, strategies in Lua) as Zapret Hub's second engine (zapret2
-//! spec): its folder and version.
+//! spec): its folder and version here, its strategies in `strategies`.
+
+pub mod strategies;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
