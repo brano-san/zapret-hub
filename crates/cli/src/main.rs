@@ -439,6 +439,12 @@ fn unavailable(err: &io::Error) -> String {
                                        sandboxes"
             .to_owned(),
         Some(ERROR_PIPE_BUSY) => "Zapret Hub's pipe stayed busy for 10 s: try again".to_owned(),
+        // `pipe::request` had sent the whole line: the app may have run it before it stopped.
+        None if err.kind() == io::ErrorKind::UnexpectedEof => {
+            "Zapret Hub closed the connection without a full answer, so the command may have run: \
+             check with `zapret-hub-cli status`"
+                .to_owned()
+        }
         _ => format!("cannot reach Zapret Hub: {err}"),
     }
 }
@@ -633,7 +639,12 @@ fn setting(key: Key, value: &str) -> Result<Value, Fail> {
     };
     match key {
         Key::ZapretDir | Key::Socks5 if value.trim().is_empty() => Ok(Value::Null),
-        Key::ZapretDir | Key::Socks5 => Ok(value.into()),
+        // The app resolves a relative path against its own directory, not the caller's.
+        Key::ZapretDir => std::path::absolute(value)
+            .ok()
+            .and_then(|path| path.to_str().map(Value::from))
+            .ok_or_else(|| bad("a path that can be made absolute")),
+        Key::Socks5 => Ok(value.into()),
         Key::Autostart | Key::StartMinimized | Key::CliEnabled => value
             .parse::<bool>()
             .map(Value::Bool)
@@ -683,7 +694,8 @@ fn suite_name(suite: Suite) -> &'static str {
 
 /// Asks `tests_status` every 2 s until the run is over; the progress goes to stderr (spec 7.1).
 fn wait_for_run(call: Call, timeout: Option<u64>) -> Result<Done, Fail> {
-    let deadline = timeout.map(|secs| Instant::now() + Duration::from_secs(secs));
+    // A deadline the clock cannot reach (a `--timeout` near u64::MAX) is no deadline.
+    let deadline = timeout.and_then(|secs| Instant::now().checked_add(Duration::from_secs(secs)));
     let mut shown = None;
     loop {
         let status: TestsStatus = read(call(Request::TestsStatus)?)?;
@@ -1022,9 +1034,17 @@ mod tests {
         let denied = answer(Err(io::Error::from_raw_os_error(ERROR_ACCESS_DENIED))).unwrap_err();
         assert_eq!(denied.code, UNAVAILABLE);
         assert!(denied.error.contains("Windows user"), "{}", denied.error);
-        // The pipe's "closed without an answer" (not an os error) is "cannot reach" too.
+        // The pipe's "closed without a full answer" is no os error, and the app may have run the
+        // command by then: the text says how to find out.
         let closed = answer(Err(io::ErrorKind::UnexpectedEof.into())).unwrap_err();
-        assert_eq!(closed.code, UNAVAILABLE);
+        assert_eq!(
+            closed,
+            Fail::new(
+                UNAVAILABLE,
+                "Zapret Hub closed the connection without a full answer, so the command may have \
+                 run: check with `zapret-hub-cli status`"
+            )
+        );
     }
 
     #[test]
@@ -1066,6 +1086,7 @@ mod tests {
         for (key, value, expected) in [
             ("socks5", "", Value::Null),
             ("zapret_dir", r"C:\Запрет", json!(r"C:\Запрет")),
+            ("zapret_dir", "  ", Value::Null),
             ("theme", "dark", json!("dark")),
             ("cli_enabled", "false", json!(false)),
             ("start_minimized", "false", json!(false)),
@@ -1082,6 +1103,26 @@ mod tests {
                 ]
             );
         }
+    }
+
+    #[test]
+    fn a_relative_zapret_dir_is_sent_absolute() {
+        // The app would resolve it against its own directory, not this one.
+        let (_, asked) = drive(
+            &["settings", "set", "zapret_dir", r"zapret\winws"],
+            vec![Ok(settings())],
+        );
+        let [
+            Request::GetSettings,
+            Request::SaveSettings { settings: saved },
+        ] = &asked[..]
+        else {
+            panic!("{asked:?}");
+        };
+        assert_eq!(
+            Path::new(saved["zapret_dir"].as_str().unwrap()),
+            std::env::current_dir().unwrap().join(r"zapret\winws")
+        );
     }
 
     #[test]
@@ -1285,6 +1326,37 @@ mod tests {
         let (outcome, asked) = drive(&["tests", "wait", "--timeout", "0"], vec![Ok(going)]);
         assert_eq!(code(outcome), TIMED_OUT);
         assert_eq!(asked, [Request::TestsStatus]);
+    }
+
+    #[test]
+    fn a_timeout_past_the_end_of_the_clock_means_no_limit() {
+        // `Instant + Duration` panics there; only u64::MAX seconds gets that far.
+        let huge = u64::MAX.to_string();
+        let ended = json!({ "testing": false, "live": null, "last": null });
+        let (outcome, asked) = drive(
+            &["tests", "wait", "--timeout", &huge],
+            vec![Ok(ended.clone())],
+        );
+        assert_eq!(outcome, Ok(Done::Json(json!({ "last": null }))));
+        assert_eq!(asked, [Request::TestsStatus]);
+        // The run has started by then.
+        let (outcome, asked) = drive(
+            &["tests", "run", "--wait", "--timeout", &huge, "general"],
+            vec![Ok(Value::Null), Ok(ended)],
+        );
+        assert_eq!(outcome, Ok(Done::Json(json!({ "last": null }))));
+        assert_eq!(
+            asked,
+            [
+                Request::StartTests {
+                    request: TestRequest {
+                        suite: Suite::Standard,
+                        strategies: vec!["general".into()],
+                    }
+                },
+                Request::TestsStatus
+            ]
+        );
     }
 
     #[test]
