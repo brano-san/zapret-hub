@@ -222,10 +222,17 @@ fn run_strategies(
         zapret::service::stop(service)?;
     }
     stop_engines()?;
+    // As «Применить» does (`service::install`): strategies with `fooling=ts` need them.
+    if zapret::service::tcp_timestamps() == Some(false)
+        && let Err(err) = zapret::service::enable_tcp_timestamps()
+    {
+        log::warn!("TCP timestamps stay off for the tests: {err:#}");
+    }
     // Every address through the ipset profiles; without Flowseal there are none.
     if let (Work::Dpi(..), Some(folder)) = (work, folder) {
         zapret::ipset::enter_test_any(folder)?;
     }
+    warm_dns(work);
     let total = request.strategies.len() as u32;
     let mut results = Vec::new();
     for (index, name) in request.strategies.iter().enumerate() {
@@ -258,6 +265,25 @@ fn stop_engines() -> anyhow::Result<()> {
         zapret::procs::kill_all(image)?;
     }
     Ok(())
+}
+
+/// curl's `time_total` includes the name lookup, and Windows caches names for every process: the
+/// first strategy to ask would pay it alone. Resolved once here, with neither engine running.
+/// ponytail: an entry whose TTL ends mid-run is looked up again by whichever strategy runs then;
+/// repeats spread that.
+fn warm_dns(work: &Work) {
+    use std::net::ToSocketAddrs as _;
+    let hosts: Vec<String> = match work {
+        Work::Standard(targets) => targets
+            .iter()
+            .filter_map(|(target, _)| target.url.as_deref())
+            .map(|url| zapret::targets::url_host(url).to_owned())
+            .collect(),
+        Work::Dpi(targets, _) => targets.iter().map(|t| t.host.clone()).collect(),
+    };
+    par_map(&hosts, parallelism(), |host| {
+        let _ = (host.as_str(), 443).to_socket_addrs();
+    });
 }
 
 /// How a strategy starts: the program, its working folder, the arguments and their hash.
