@@ -133,62 +133,85 @@
         {#if z2 !== null}<span class="badge muted">{S.strategies.zapret2}</span>{/if}
         {#if d.row.last?.stale}<span class="badge warn">{S.strategies.stale}</span>{/if}
       </h2>
-      {#if d.record}<p class="muted">{S.strategies.clonedFrom(d.record.cloned_from)}</p>{/if}
-      <div class="buttons">
-        <button
-          class="primary"
-          disabled={locked || d.row.error !== null}
-          onclick={() => change(S.failed.apply, () => commands.applyStrategy(d.row.name))}>{S.common.apply}</button
-        >
-        {#if d.record}
-          {@const record = d.record}
-          <button disabled={locked} onclick={() => (editing = d.row.name)}>{S.strategies.edit}</button>
-          <button class="danger" disabled={locked || d.row.active} onclick={() => remove(record.name, d.row.name)}>
-            {S.strategies.delete}
-          </button>
-        {/if}
-        {#if z2 !== null && d.row.custom}
-          {@const own = z2}
-          <button disabled={locked} onclick={() => (editing2 = { name: own, from: d.row.name, create: false })}>
-            {S.strategies.edit}
-          </button>
-          <button class="danger" disabled={locked || d.row.active} onclick={() => removeZapret2(own)}>
-            {S.strategies.delete}
-          </button>
-        {/if}
-      </div>
-      <div class="buttons">
-        <input placeholder={S.strategies.cloneName} bind:value={cloneName} aria-label={S.strategies.cloneName} />
-        <!-- A zapret2 copy starts from the text: a static check error is a reason to copy it. -->
-        <button
-          disabled={locked || !cloneName.trim() || (z2 === null && d.row.error !== null)}
-          onclick={() => clone(d.row.name)}
-        >
-          {S.strategies.clone}
-        </button>
-      </div>
       {#if d.row.error}<pre class="bad">{d.row.error}</pre>{/if}
-      {#if d.wf}
-        <h3>{z2 === null ? S.strategies.filter : S.zapret2.global}</h3>
-        <pre>{d.wf}</pre>
+      {#if d.wf || d.blocks.length > 0}
+        <section class="part">
+          <h3>{S.strategies.filtersTitle}</h3>
+          {#if d.wf}
+            <h4>{z2 === null ? S.strategies.filter : S.zapret2.global}</h4>
+            <pre>{d.wf}</pre>
+          {/if}
+          {#each d.blocks as block, i (i)}
+            <h4>
+              {z2 === null ? S.strategies.block(i + 1) : S.zapret2.profile(i + 1)}
+              <span class="muted">· {blockSummary(block)}</span>
+            </h4>
+            <pre>{block}</pre>
+          {/each}
+          {#if d.final_args}
+            <details>
+              <summary>{z2 === null ? S.strategies.finalArgs : S.zapret2.commandLine}</summary>
+              <pre>{d.final_args}</pre>
+            </details>
+          {/if}
+        </section>
       {/if}
-      {#each d.blocks as block, i (i)}
-        <h3>
-          {z2 === null ? S.strategies.block(i + 1) : S.zapret2.profile(i + 1)}
-          <span class="muted">· {blockSummary(block)}</span>
-        </h3>
-        <pre>{block}</pre>
-      {/each}
-      {#if d.final_args}
-        <details>
-          <summary>{z2 === null ? S.strategies.finalArgs : S.zapret2.commandLine}</summary>
-          <pre>{d.final_args}</pre>
-        </details>
-      {/if}
-      {#if d.result}
-        <h3>{S.strategies.lastRun(runDate(d.row.last?.run_id ?? ""))}</h3>
-        <TargetChecks result={d.result} />
-      {/if}
+      <section class="part">
+        <h3>{S.strategies.resultsTitle}</h3>
+        {#if d.result}
+          <p class="muted">{S.strategies.lastRun(runDate(d.row.last?.run_id ?? ""))}</p>
+          <TargetChecks result={d.result} />
+        {:else}
+          <p class="muted">{S.strategies.untested}</p>
+        {/if}
+      </section>
+      <section class="part">
+        <h3>{S.strategies.cloneTitle}</h3>
+        <div class="buttons">
+          <input placeholder={S.strategies.cloneName} bind:value={cloneName} aria-label={S.strategies.cloneName} />
+          <!-- A zapret2 copy starts from the text: a static check error is a reason to copy it. -->
+          <button
+            disabled={locked || !cloneName.trim() || (z2 === null && d.row.error !== null)}
+            onclick={() => clone(d.row.name)}
+          >
+            {S.strategies.clone}
+          </button>
+        </div>
+      </section>
+      <section class="part">
+        <h3>{S.strategies.applyTitle}</h3>
+        <p>{S.strategies.engine}: {z2 === null ? S.strategies.engineFlowseal : S.strategies.engineZapret2}</p>
+        <p>{S.strategies.file}: <code>{z2 === null ? `${d.row.name}.bat` : `data\zapret2\${z2}.txt`}</code></p>
+        {#if d.record}<p class="muted">{S.strategies.clonedFrom(d.record.cloned_from)}</p>{/if}
+        <p>
+          {S.strategies.state}:
+          {#if d.row.active}<span class="ok">{S.strategies.activeNow}</span>{:else}<span class="muted">{S.strategies.notActive}</span>{/if}
+        </p>
+        <p>{S.strategies.result}: {@render summary(d.row)}{#if d.row.last}<span class="muted"> · {runDate(d.row.last.run_id)}</span>{/if}</p>
+        <div class="buttons">
+          <button
+            class="primary"
+            disabled={locked || d.row.error !== null}
+            onclick={() => change(S.failed.apply, () => commands.applyStrategy(d.row.name))}>{S.common.apply}</button
+          >
+          {#if d.record}
+            {@const record = d.record}
+            <button disabled={locked} onclick={() => (editing = d.row.name)}>{S.strategies.edit}</button>
+            <button class="danger" disabled={locked || d.row.active} onclick={() => remove(record.name, d.row.name)}>
+              {S.strategies.delete}
+            </button>
+          {/if}
+          {#if z2 !== null && d.row.custom}
+            {@const own = z2}
+            <button disabled={locked} onclick={() => (editing2 = { name: own, from: d.row.name, create: false })}>
+              {S.strategies.edit}
+            </button>
+            <button class="danger" disabled={locked || d.row.active} onclick={() => removeZapret2(own)}>
+              {S.strategies.delete}
+            </button>
+          {/if}
+        </div>
+      </section>
     {:else}
       <p class="muted">{S.strategies.pick}</p>
     {/if}
@@ -214,6 +237,24 @@
 {/snippet}
 
 <style>
+  /* The detail's blocks: filters, results, clone and apply each stand in a frame of their own. */
+  .part {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+
+  .part h3 {
+    margin-top: 0;
+  }
+
+  .part h4 {
+    margin: 8px 0 0;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
   .split {
     display: grid;
     grid-template-columns: minmax(340px, 2fr) 3fr;
