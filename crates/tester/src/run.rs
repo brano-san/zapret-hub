@@ -218,10 +218,10 @@ fn run_strategies(
     progress: &(dyn Fn(Progress) + Sync),
 ) -> anyhow::Result<Vec<StrategyResult>> {
     // Both engines: a run may mix them (zapret2 spec 7).
-    for (service, image) in [(SERVICE, "winws.exe"), (SERVICE2, WINWS2)] {
+    for service in [SERVICE, SERVICE2] {
         zapret::service::stop(service)?;
-        zapret::procs::kill_all(image)?;
     }
+    stop_engines()?;
     // Every address through the ipset profiles; without Flowseal there are none.
     if let (Work::Dpi(..), Some(folder)) = (work, folder) {
         zapret::ipset::enter_test_any(folder)?;
@@ -237,6 +237,9 @@ fn run_strategies(
             total,
             name: name.clone(),
         });
+        // Nothing of either engine may filter while this one is measured: the previous
+        // strategy's process has exited (`Winws::stop` waits), and this catches any other.
+        stop_engines()?;
         let result = run_one(folder, engine2, data_dir, name, work, cancel);
         if cancel.load(Ordering::Relaxed) {
             break; // cut short: not a result
@@ -247,6 +250,14 @@ fn run_strategies(
         results.push(result);
     }
     Ok(results)
+}
+
+/// Every winws.exe and winws2.exe ended, and gone (their WinDivert handles closed).
+fn stop_engines() -> anyhow::Result<()> {
+    for image in ["winws.exe", WINWS2] {
+        zapret::procs::kill_all(image)?;
+    }
+    Ok(())
 }
 
 /// How a strategy starts: the program, its working folder, the arguments and their hash.

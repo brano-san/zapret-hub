@@ -52,6 +52,8 @@ pub fn is_running(image: &str) -> bool {
 
 /// `taskkill /IM <image> /F`, when one runs. A process that ends between the check and taskkill
 /// makes taskkill fail: with none left that is done; otherwise the error carries taskkill's output.
+/// taskkill returns once termination is asked for, not done: this waits until the processes are
+/// gone, so their handles (WinDivert's among them) are closed before what comes next starts.
 pub fn kill_all(image: &str) -> anyhow::Result<()> {
     if !is_running(image) {
         return Ok(());
@@ -66,6 +68,14 @@ pub fn kill_all(image: &str) -> anyhow::Result<()> {
         return Ok(());
     }
     output.check()?;
+    let started = Instant::now();
+    while is_running(image) {
+        anyhow::ensure!(
+            started.elapsed() < Duration::from_secs(10),
+            "{image} is still running 10 s after taskkill /F"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
     Ok(())
 }
 
@@ -196,8 +206,11 @@ impl Winws {
     }
 }
 
+/// Waits for the exit too: the next strategy must not start while this one's WinDivert handle is
+/// open.
 impl Drop for Winws {
     fn drop(&mut self) {
         let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
