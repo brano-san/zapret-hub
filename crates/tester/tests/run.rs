@@ -84,6 +84,37 @@ fn live_run_of_two_strategies() {
 }
 
 #[test]
+#[ignore = "needs admin rights and E:\\Zapret; stops zapret for a few seconds"]
+fn live_a_panic_during_the_run_is_passed_on_after_the_restore() {
+    use zapret::service::{SERVICE, state};
+    let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let before = state(SERVICE);
+    let request = Request {
+        suite: Suite::Standard,
+        strategies: vec!["general".into()],
+    };
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tester::run::run(
+            &folder,
+            data.path(),
+            &request,
+            None,
+            &AtomicBool::new(false),
+            &|p| {
+                // Zapret is stopped by now: the restore has to bring it back.
+                if matches!(p, Progress::Strategy { .. }) {
+                    panic!("progress panics");
+                }
+            },
+        )
+    }));
+    assert!(ran.is_err(), "the panic is passed on");
+    assert_eq!(state(SERVICE), before);
+    assert!(!zapret::snapshot::pending_path(data.path()).exists());
+}
+
+#[test]
 #[ignore = "needs admin rights, E:\\Zapret and the network"]
 fn live_cancel_stops_after_the_current_strategy() {
     let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
