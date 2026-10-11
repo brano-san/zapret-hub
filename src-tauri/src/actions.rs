@@ -63,8 +63,12 @@ pub fn apply(app: &AppHandle, name: &str) -> anyhow::Result<QuickCheck> {
     let state = state(app);
     let result = match name.strip_prefix(zapret2::PREFIX) {
         Some(name) => state.engine2_required().and_then(|engine| {
+            let data = state.paths.data();
+            // The check runs first: a failure changes nothing, no snapshot, no restart (spec 6).
+            let (strategy, tail) =
+                state.change(|folder| zapret2::service::prepare(&engine, folder, &data, name))?;
             state.change_safely("apply", |folder| {
-                zapret2::service::apply(&engine, folder, &state.paths.data(), name)
+                zapret2::service::install_checked(&engine, folder, &strategy, &tail)
             })
         }),
         None => state.change_safely("apply", |folder| zapret::service::apply(folder, name)),
@@ -183,9 +187,17 @@ pub fn save_zapret2(
     let full = format!("{}{}", zapret2::PREFIX, name.trim());
     let active = zapret::service::strategy();
     if !create && active.is_some_and(|active| active.eq_ignore_ascii_case(&full)) {
+        // The check runs first: a failure changes nothing (spec 6).
+        let (claimed, tail) = state.change(|folder| {
+            zapret2::service::check_save(&engine, Some(folder), &data, name, text, false)
+        })?;
+        let saved = zapret2::strategies::Strategy {
+            name: claimed,
+            text: text.to_owned(),
+            builtin: false,
+        };
         let result = state.change_safely("custom", |folder| {
-            let (saved, tail) =
-                zapret2::service::save(&engine, Some(folder), &data, name, text, false)?;
+            zapret2::strategies::write(&data, &saved.name, text)?;
             zapret2::service::install(&engine, &saved, &tail)?;
             // winws2 needs a moment before it intercepts anything (spec 5.4).
             std::thread::sleep(Duration::from_secs(2));

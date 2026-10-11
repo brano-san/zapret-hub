@@ -156,3 +156,18 @@ fn live_a_game_filter_change_reinstalls_zapret2() {
     );
     fs::remove_dir_all(strategies::dir(data.path())).unwrap();
 }
+
+#[test]
+fn the_check_before_a_snapshot_changes_nothing_when_it_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    common::fake_engine(dir.path(), "", "NFQWS2_COMPAT_VER_REQUIRED=6\n");
+    let engine = Engine::open(dir.path()).unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let text = "--lua-desync=nosuch\n";
+    let err = format!(
+        "{:#}",
+        zapret2::service::check_save(&engine, None, data.path(), "mine", text, true).unwrap_err()
+    );
+    assert!(err.contains("nosuch"), "{err}");
+    assert!(!strategies::dir(data.path()).join("mine.txt").exists());
+}

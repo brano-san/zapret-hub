@@ -76,20 +76,40 @@ pub fn install(engine: &Engine, strategy: &Strategy, tail: &str) -> anyhow::Resu
     service::set_strategy_of(SERVICE2, &strategy.full_name())
 }
 
-/// «Применить» for `zapret2:<name>`, inside `change_safely("apply")`: the check while nothing has
-/// changed yet, the service, and after 2 s the quick check (spec 6).
+/// The check of «Применить» (spec 6), run before any snapshot so that a failure changes nothing.
+pub fn prepare(
+    engine: &Engine,
+    folder: &Folder,
+    data_dir: &Path,
+    name: &str,
+) -> anyhow::Result<(Strategy, String)> {
+    let strategy = strategies::find(data_dir, name)?;
+    let tail = strategies::tail(engine, Some(folder), &strategy.text)?;
+    validate(engine, &tail)?;
+    Ok((strategy, tail))
+}
+
+/// «Применить» after `prepare`: the service, and after 2 s the quick check (spec 6).
+pub fn install_checked(
+    engine: &Engine,
+    folder: &Folder,
+    strategy: &Strategy,
+    tail: &str,
+) -> anyhow::Result<QuickCheck> {
+    install(engine, strategy, tail)?;
+    std::thread::sleep(Duration::from_secs(2));
+    Ok(service::quick_check(folder))
+}
+
+/// «Применить» for `zapret2:<name>`: the check while nothing has changed yet, then the service.
 pub fn apply(
     engine: &Engine,
     folder: &Folder,
     data_dir: &Path,
     name: &str,
 ) -> anyhow::Result<QuickCheck> {
-    let strategy = strategies::find(data_dir, name)?;
-    let tail = strategies::tail(engine, Some(folder), &strategy.text)?;
-    validate(engine, &tail)?;
-    install(engine, &strategy, &tail)?;
-    std::thread::sleep(Duration::from_secs(2));
-    Ok(service::quick_check(folder))
+    let (strategy, tail) = prepare(engine, folder, data_dir, name)?;
+    install_checked(engine, folder, &strategy, &tail)
 }
 
 /// After a game filter change: the active zapret2 strategy installed again, its ports are in the
@@ -120,8 +140,24 @@ pub fn reinstall_active(
     install(engine, &strategy, &tail)
 }
 
-/// `save_zapret2` up to the file (spec 5.2): the name, `create` against what exists, the whole
-/// check, the file. Returns what was saved and its command line, for a service that runs it.
+/// `save_zapret2` before the file (spec 5.2): the name, `create` against what exists, the whole
+/// check. Returns the claimed name and the command line.
+pub fn check_save(
+    engine: &Engine,
+    folder: Option<&Folder>,
+    data_dir: &Path,
+    name: &str,
+    text: &str,
+    create: bool,
+) -> anyhow::Result<(String, String)> {
+    let name = strategies::claim(data_dir, name, create)?;
+    let tail = strategies::tail(engine, folder, text)?;
+    validate(engine, &tail)?;
+    Ok((name, tail))
+}
+
+/// `save_zapret2` up to the file (spec 5.2): `check_save`, then the file. Returns what was saved
+/// and its command line, for a service that runs it.
 pub fn save(
     engine: &Engine,
     folder: Option<&Folder>,
@@ -130,9 +166,7 @@ pub fn save(
     text: &str,
     create: bool,
 ) -> anyhow::Result<(Strategy, String)> {
-    let name = strategies::claim(data_dir, name, create)?;
-    let tail = strategies::tail(engine, folder, text)?;
-    validate(engine, &tail)?;
+    let (name, tail) = check_save(engine, folder, data_dir, name, text, create)?;
     strategies::write(data_dir, &name, text)?;
     let saved = Strategy {
         name,
