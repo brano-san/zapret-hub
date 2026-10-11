@@ -108,6 +108,11 @@ describe("localizeError", () => {
     expect(localizeError(raw)).toBe(`${S.names.invalid}\n\n${raw}`);
     expect(localizeError("something else")).toBe("something else");
   });
+
+  it("explains an antivirus block of a download", () => {
+    const raw = "add the folder D:\\zapret2-v0.9.4 to the antivirus exclusions and download again: x.zip: blocked or removed by Windows Defender or another antivirus";
+    expect(localizeError(raw)).toBe(`${S.download.defender}\n\n${raw}`);
+  });
 });
 
 describe("repeats", () => {

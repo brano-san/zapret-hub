@@ -6,6 +6,7 @@
   import { follow } from "$lib/draft";
   import { ms } from "$lib/format";
   import { LINKS, S } from "$lib/strings";
+  import DownloadEngine from "../components/DownloadEngine.svelte";
 
   const THEMES: Theme[] = ["system", "light", "dark"];
 
@@ -98,6 +99,14 @@
         {folder.missing.length > 0 ? S.settings.missing(folder.missing) : S.settings.folderOk(folder.version)}
       </p>
     {/if}
+    <DownloadEngine
+      engine="Flowseal"
+      ondone={async (dir) => {
+        if (!draft) return;
+        draft.zapret_dir = dir;
+        await checkFolder();
+      }}
+    />
   </section>
 
   <section class="card">
@@ -119,6 +128,14 @@
         <p class="ok">{S.settings.zapret2Ok(zapret2.version, zapret2.compat)}</p>
       {/if}
     {/if}
+    <DownloadEngine
+      engine="Zapret2"
+      ondone={async (dir) => {
+        if (!draft) return;
+        draft.zapret2_dir = dir;
+        zapret2 = (await call(S.failed.zapret2, commands.checkZapret2Folder(dir))) ?? null;
+      }}
+    />
     <button class="link" onclick={() => call(S.failed.open, commands.openUrl(LINKS.zapret2))}>
       {S.settings.zapret2Releases}
     </button>

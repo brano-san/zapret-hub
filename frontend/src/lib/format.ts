@@ -142,5 +142,7 @@ export function ownName(name: string): string {
 export function localizeError(text: string): string {
   if (text.includes("a name is 1-40")) return `${S.names.invalid}\n\n${text}`;
   if (text.includes("is a Windows device name")) return `${S.names.device}\n\n${text}`;
+  // `zapret::release::DEFENDER`.
+  if (text.includes("blocked or removed by Windows Defender")) return `${S.download.defender}\n\n${text}`;
   return text;
 }

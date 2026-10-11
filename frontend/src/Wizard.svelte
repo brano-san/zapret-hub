@@ -5,6 +5,7 @@
   import { app, change, loadSettings, refreshOverview } from "$lib/app.svelte";
   import { foldersReady } from "$lib/format";
   import { LINKS, S } from "$lib/strings";
+  import DownloadEngine from "./components/DownloadEngine.svelte";
 
   let step = $state(1);
   let candidates = $state<Candidates | null>(null);
@@ -140,6 +141,13 @@
           <p class="muted">{S.wizard.searching}</p>
         {/if}
         {#if found1 && !checking1}<p class="muted">{S.wizard.autoFound}</p>{/if}
+        <DownloadEngine
+          engine="Flowseal"
+          ondone={async (dir) => {
+            flowsealPath = dir;
+            await checkFlowseal();
+          }}
+        />
       </section>
       <section>
         <h3>{S.wizard.zapret2Title}</h3>
@@ -166,6 +174,13 @@
           {/if}
         {/if}
         {#if found2 && !checking2}<p class="muted">{S.wizard.autoFound}</p>{/if}
+        <DownloadEngine
+          engine="Zapret2"
+          ondone={async (dir) => {
+            zapret2Path = dir;
+            await checkZapret2();
+          }}
+        />
         <button class="link" onclick={() => call(S.failed.open, commands.openUrl(LINKS.zapret2))}>
           {S.settings.zapret2Releases}
         </button>
