@@ -146,7 +146,7 @@ export const S = {
     zapret2: "Папка zapret2",
     zapret2Hint:
       "Необязательно. Распакованный релиз bol-van/zapret2: его стратегии появятся рядом со стратегиями Flowseal. Пусто — zapret2 выключен. Нужна и папка zapret выше: списки и фейки берутся из неё.",
-    zapret2Example: "Например, D:\zapret2",
+    zapret2Example: "Например, D:\\zapret2",
     zapret2Ok: (version: string | null, compat: number | null) =>
       `zapret2 ${version ?? "?"}, совместимость Lua ${compat ?? "?"}`,
     zapret2Releases: "Релизы zapret2",
@@ -231,7 +231,7 @@ export const S = {
     global: "Глобальная часть",
     profile: (n: number) => `Профиль ${n}`,
     commandLine: "Командная строка winws2",
-    deleteText: (name: string) => `Файл «${name}.txt» в data\zapret2 будет удалён.`,
+    deleteText: (name: string) => `Файл «${name}.txt» в data\\zapret2 будет удалён.`,
   },
   results: {
     rank: "#",

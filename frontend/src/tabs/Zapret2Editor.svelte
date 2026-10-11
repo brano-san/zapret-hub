@@ -21,9 +21,11 @@
 
   let text = $state<string | null>(null);
   let status = $state("");
+  let loaded = $state(false);
 
   onMount(async () => {
     text = (await call(S.failed.strategy, commands.getStrategy(from)))?.source ?? null;
+    loaded = true;
   });
 
   async function validate(): Promise<void> {
@@ -57,5 +59,6 @@
   </div>
   {#if status}<pre>{status}</pre>{/if}
 {:else}
-  <p class="muted">{S.common.loading}</p>
+  <p class="muted">{loaded ? S.failed.strategy : S.common.loading}</p>
+  {#if loaded}<div class="buttons"><button onclick={() => onClose(null)}>{S.common.close}</button></div>{/if}
 {/if}
