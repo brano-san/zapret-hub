@@ -61,14 +61,6 @@ fn winws2_that_died_or_printed_a_lua_error_did_not_run_the_strategy() {
 /// Refused before anything changes, so it runs here: the services are not touched.
 #[test]
 fn zapret2_strategies_need_a_working_engine_before_the_run_starts() {
-    let folder_dir = tempfile::tempdir().unwrap();
-    let root = folder_dir.path();
-    std::fs::write(root.join("service.bat"), "").unwrap();
-    std::fs::create_dir_all(root.join("bin")).unwrap();
-    std::fs::write(root.join("bin").join("winws.exe"), b"").unwrap();
-    std::fs::write(root.join("bin").join("WinDivert64.sys"), b"").unwrap();
-    std::fs::create_dir_all(root.join("lists")).unwrap();
-    let folder = zapret::folder::Folder::open(root).unwrap();
     let engine_dir = tempfile::tempdir().unwrap();
     for file in [
         "winws2.exe",
@@ -88,26 +80,36 @@ fn zapret2_strategies_need_a_working_engine_before_the_run_starts() {
         suite: Suite::Standard,
         strategies: vec!["general".into(), "zapret2:general".into()],
     };
-    let run = |engine2: Option<&zapret2::Engine>| {
-        let err = tester::run::run(
-            &folder,
-            engine2,
-            data.path(),
-            &request,
-            None,
-            &AtomicBool::new(false),
-            &|_| panic!("no strategy may start"),
+    // `run` starts with this and stops the services only after it: asserted directly, so that the
+    // test cannot touch them.
+    let refusal = |engine2: Option<&zapret2::Engine>| {
+        format!(
+            "{:#}",
+            tester::run::zapret2_version(engine2, &request).unwrap_err()
         )
-        .unwrap_err();
-        format!("{err:#}")
     };
-    assert!(run(None).contains("zapret2 folder"), "{}", run(None));
+    assert!(
+        refusal(None).contains("zapret2 folder"),
+        "{}",
+        refusal(None)
+    );
     // An empty winws2.exe cannot tell its version.
     assert!(
-        run(Some(&engine)).contains("os error 193"),
+        refusal(Some(&engine)).contains("os error 193"),
         "{}",
-        run(Some(&engine))
+        refusal(Some(&engine))
     );
+    // A Flowseal-only request needs no engine, and a mixed-case prefix is still zapret2's.
+    let flowseal = Request {
+        suite: Suite::Standard,
+        strategies: vec!["general".into()],
+    };
+    assert_eq!(tester::run::zapret2_version(None, &flowseal).unwrap(), None);
+    let upper = Request {
+        suite: Suite::Standard,
+        strategies: vec!["Zapret2:general".into()],
+    };
+    assert!(tester::run::zapret2_version(None, &upper).is_err());
     assert!(!zapret::snapshot::pending_path(data.path()).exists());
 }
 

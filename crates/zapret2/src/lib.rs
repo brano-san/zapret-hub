@@ -14,6 +14,14 @@ use std::time::{Duration, SystemTime};
 /// file name has no colon, so the names never meet Flowseal's.
 pub const PREFIX: &str = "zapret2:";
 
+/// `name` without the `zapret2:` prefix, whatever its case (`Zapret2:General` from a CLI call
+/// reaches the same strategy as `zapret2:General`); `None` for a Flowseal name.
+pub fn strip_prefix(name: &str) -> Option<&str> {
+    let head = name.get(..PREFIX.len())?;
+    head.eq_ignore_ascii_case(PREFIX)
+        .then(|| &name[PREFIX.len()..])
+}
+
 /// Where `winws2.exe` may be under the root: zapret-win-bundle, a `bin\`, the release zip.
 const EXE_DIRS: [&str; 3] = ["", "bin", r"binaries\windows-x86_64"];
 /// What `winws2.exe` needs next to it.

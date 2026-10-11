@@ -53,7 +53,7 @@ impl log::Log for Journal {
         if let Some((_, opened)) = file.as_mut() {
             let _ = opened.write_all(line.as_bytes());
         }
-        if cfg!(debug_assertions) {
+        if cfg!(debug_assertions) && !cfg!(test) {
             // Not `eprint!`: it panics when stderr is gone, and the panic hook logs here again.
             let _ = std::io::stderr().write_all(line.as_bytes());
         }

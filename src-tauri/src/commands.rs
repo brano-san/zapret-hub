@@ -146,9 +146,15 @@ pub async fn get_strategy(handle: AppHandle, name: String) -> Answer<StrategyDet
     blocking(move || {
         let state = app(&handle);
         let active = zapret::service::strategy();
+        // A zapret2 name shows why its folder cannot open, not a generic message.
+        let engine2 = if zapret2::strip_prefix(&name).is_some() {
+            Some(state.engine2_required()?)
+        } else {
+            state.engine2().ok().flatten()
+        };
         tester::catalog::detail(
             &state.folder()?,
-            state.engine2().ok().flatten().as_ref(),
+            engine2.as_ref(),
             &state.store(),
             &state.paths.data(),
             active.as_deref(),

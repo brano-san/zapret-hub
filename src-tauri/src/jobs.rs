@@ -25,7 +25,7 @@ pub fn start_tests(app: &AppHandle, request: Request) -> anyhow::Result<()> {
     let engine2 = if request
         .strategies
         .iter()
-        .any(|name| name.starts_with(zapret2::PREFIX))
+        .any(|name| zapret2::strip_prefix(name).is_some())
     {
         Some(state.engine2_required()?)
     } else {

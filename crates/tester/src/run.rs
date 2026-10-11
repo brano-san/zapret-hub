@@ -141,11 +141,14 @@ pub fn run(
 
 /// The engine version for the run's record. A `zapret2:` strategy without a working engine stops
 /// the run here, before anything changes (zapret2 spec 7).
-fn zapret2_version(engine2: Option<&Engine>, request: &Request) -> anyhow::Result<Option<String>> {
+pub fn zapret2_version(
+    engine2: Option<&Engine>,
+    request: &Request,
+) -> anyhow::Result<Option<String>> {
     if !request
         .strategies
         .iter()
-        .any(|name| name.starts_with(zapret2::PREFIX))
+        .any(|name| zapret2::strip_prefix(name).is_some())
     {
         return Ok(None);
     }
@@ -247,7 +250,7 @@ fn launch(
     data_dir: &Path,
     name: &str,
 ) -> anyhow::Result<Launch> {
-    let Some(name) = name.strip_prefix(zapret2::PREFIX) else {
+    let Some(name) = zapret2::strip_prefix(name) else {
         let file = zapret::strategies::find(folder, name)?;
         let parsed = zapret::batparse::parse_file(folder, &file.path)?;
         return Ok(Launch {
@@ -301,7 +304,11 @@ fn run_one(
     let mut winws = match Winws::start(&launch.exe, &launch.cwd, &launch.tail) {
         Ok(winws) => winws,
         Err(err) => {
-            result.launch_error = Some(format!("winws did not start: {err}"));
+            let image = launch
+                .exe
+                .file_name()
+                .map_or_else(|| "winws".into(), |n| n.to_string_lossy());
+            result.launch_error = Some(format!("{image} did not start: {err}"));
             return result;
         }
     };

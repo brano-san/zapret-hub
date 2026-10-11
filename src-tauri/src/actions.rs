@@ -61,7 +61,7 @@ fn finish_with_check(
 /// is opened first, so a broken one changes nothing.
 pub fn apply(app: &AppHandle, name: &str) -> anyhow::Result<QuickCheck> {
     let state = state(app);
-    let result = match name.strip_prefix(zapret2::PREFIX) {
+    let result = match zapret2::strip_prefix(name) {
         Some(name) => state.engine2_required().and_then(|engine| {
             let data = state.paths.data();
             // The check runs first: a failure changes nothing, no snapshot, no restart (spec 6).

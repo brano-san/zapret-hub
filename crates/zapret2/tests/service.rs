@@ -171,3 +171,12 @@ fn the_check_before_a_snapshot_changes_nothing_when_it_fails() {
     assert!(err.contains("nosuch"), "{err}");
     assert!(!strategies::dir(data.path()).join("mine.txt").exists());
 }
+
+#[test]
+fn the_prefix_is_matched_in_any_case() {
+    assert_eq!(zapret2::strip_prefix("zapret2:General"), Some("General"));
+    assert_eq!(zapret2::strip_prefix("Zapret2:a"), Some("a"));
+    assert_eq!(zapret2::strip_prefix("general"), None);
+    assert_eq!(zapret2::strip_prefix("zapret"), None);
+    assert_eq!(zapret2::strip_prefix("ёzapret2:a"), None);
+}

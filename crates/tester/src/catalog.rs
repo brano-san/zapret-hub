@@ -87,7 +87,7 @@ pub fn detail(
     let result = latest
         .get(&name.to_lowercase())
         .map(|latest| latest.result.clone());
-    if let Some(name) = name.strip_prefix(zapret2::PREFIX) {
+    if let Some(name) = zapret2::strip_prefix(name) {
         let engine = engine2.ok_or_else(|| {
             anyhow::anyhow!("the zapret2 folder is not set: choose it in Settings")
         })?;
