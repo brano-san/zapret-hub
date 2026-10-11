@@ -160,7 +160,7 @@ export const S = {
     themes: { system: "как в системе", light: "светлая", dark: "тёмная" } satisfies Record<Theme, string>,
     cli: "Командная строка",
     cliEnabled: "Управление из командной строки (zapret-hub-cli)",
-    cliHint: "Любая программа, запущенная от вашего имени, сможет менять zapret через приложение.",
+    cliHint: "Любая программа, запущенная от вашего имени, сможет менять zapret через приложение, а со zapret2 запускать код от администратора и SYSTEM (см. cli.md).",
     saved: "Сохранено",
     files: "Файлы",
     openLogs: "Открыть журнал",
@@ -378,7 +378,7 @@ export const S = {
       SecureDns: "Настройте безопасный DNS в браузере или, в Windows 11, в параметрах сети.",
       HostsYoutube: "В hosts есть записи youtube.com или youtu.be: они могут мешать YouTube.",
       WinDivertOrphan: "winws не запущен, а служба WinDivert работает: её держит другой обход или остаток прошлого запуска.",
-      Conflicts: "Найдены службы других обходов: они делят WinDivert с zapret.",
+      Conflicts: "Найдены службы других обходов: они делят WinDivert с zapret. Если среди них zapret2, это вторая служба самого приложения: «Удалить службы» удалит и её.",
     } satisfies Record<CheckId, string>,
     /** The issues `service.bat` links to. */
     links: {
