@@ -132,7 +132,7 @@ PowerShell читает вывод программ в кодировке `[Cons
 код 2.
 
 Команд окна, которых нет в CLI:
-- `pick_folder`, `open_url`, `open_folder` — открывают окна и проводник;
+- `pick_folder`, `open_url`, `open_folder` — открывают окна, файловый менеджер и браузер;
 - `check_folder`, `check_zapret2_folder` — открыли бы путь, переданный клиентом (второй ещё и запустил бы из него
   `winws2.exe`), а папки zapret и zapret2 CLI не меняет (раздел «Настройки»);
 - `take_notices` — забрал бы уведомления у окна;

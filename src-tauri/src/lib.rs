@@ -9,6 +9,7 @@ mod jobs;
 mod journal;
 mod notify;
 mod settings;
+mod shell;
 mod state;
 mod texts;
 mod tray;

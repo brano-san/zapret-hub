@@ -2,7 +2,6 @@
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager as _};
@@ -329,22 +328,13 @@ pub fn candidates() -> Candidates {
     }
 }
 
-/// Through explorer: it hands the path or the link to the user's own, unelevated shell.
-fn explorer(target: &OsStr) -> anyhow::Result<()> {
-    let mut cmd = Command::new("explorer.exe");
-    cmd.arg(target);
-    // explorer exits with 1 even when it opened the target: the code means nothing.
-    exec::run(&mut cmd, Duration::from_secs(10), None)?;
-    Ok(())
-}
-
 /// Release pages and the issues `service.bat` links to: https only.
 pub fn open_url(url: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
         url.starts_with("https://"),
         "only https links are opened: {url}"
     );
-    explorer(OsStr::new(url))
+    crate::shell::open(OsStr::new(url))
 }
 
 /// The folder of the user's zapret2 strategies, created when missing.
@@ -389,7 +379,7 @@ pub fn open_folder(app: &AppHandle, kind: FolderKind) -> anyhow::Result<()> {
             strategy_folder(state.folder_if_set()?.as_ref(), &state.paths.data(), &name)?
         }
     };
-    explorer(path.as_os_str())
+    crate::shell::open(path.as_os_str())
 }
 
 #[cfg(test)]
