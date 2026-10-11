@@ -11,19 +11,26 @@
     name: string;
     /** The strategy whose text the editor starts with: this one, or the one a copy is made of. */
     from: string;
+    /** A text to start with instead of `from`'s: a new strategy from scratch. */
+    initial?: string;
     /** A copy: saved as a new strategy. */
     create: boolean;
     /** The full name of what was saved, `null` when nothing was. */
     onClose: (saved: string | null) => void;
   }
 
-  let { name, from, create, onClose }: Props = $props();
+  let { name, from, initial, create, onClose }: Props = $props();
 
   let text = $state<string | null>(null);
   let status = $state("");
   let loaded = $state(false);
 
   onMount(async () => {
+    if (initial !== undefined) {
+      text = initial;
+      loaded = true;
+      return;
+    }
     text = (await call(S.failed.strategy, commands.getStrategy(from)))?.source ?? null;
     loaded = true;
   });

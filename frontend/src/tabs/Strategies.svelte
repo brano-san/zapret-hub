@@ -3,7 +3,7 @@
   import { call } from "$lib/api";
   import { app, change } from "$lib/app.svelte";
   import { confirmation } from "$lib/confirm.svelte";
-  import { blockSummary, hubStem, ms, runDate, zapret2Name } from "$lib/format";
+  import { ZAPRET2_TEMPLATE, blockSummary, hubStem, ms, runDate, zapret2Name } from "$lib/format";
   import { S } from "$lib/strings";
   import TargetChecks from "../components/TargetChecks.svelte";
   import StrategyEditor from "./StrategyEditor.svelte";
@@ -15,7 +15,10 @@
   /** The stem of the custom strategy under edit. */
   let editing = $state<string | null>(null);
   /** The zapret2 strategy under edit, or a copy not saved yet (zapret2 spec 5.2). */
-  let editing2 = $state<{ name: string; from: string; create: boolean } | null>(null);
+  let editing2 = $state<{ name: string; from: string; create: boolean; initial?: string } | null>(null);
+  /** The «new strategy» form: its engine and name. */
+  let creating = $state<{ engine: "flowseal" | "zapret2"; name: string } | null>(null);
+  let createError = $state("");
   let cloneName = $state("");
 
   const visible = $derived(rows.filter((row) => row.name.toLowerCase().includes(query.trim().toLowerCase())));
@@ -53,6 +56,28 @@
     editing = hubStem(created.name);
   }
 
+  async function create(): Promise<void> {
+    if (!creating) return;
+    const name = creating.name.trim();
+    createError = "";
+    if (creating.engine === "zapret2") {
+      creating = null;
+      editing2 = { name, from: "", create: true, initial: ZAPRET2_TEMPLATE };
+      return;
+    }
+    // The custom-strategy model starts from a source: the plain `general`.
+    const source = rows.find((row) => row.name === "general" && row.error === null);
+    if (!source) {
+      createError = S.strategies.newNoGeneral;
+      return;
+    }
+    const created = await change(S.failed.clone, () => commands.cloneStrategy(source.name, name));
+    if (!created) return;
+    creating = null;
+    await open(hubStem(created.name));
+    editing = hubStem(created.name);
+  }
+
   async function remove(record: string, stem: string): Promise<void> {
     const sure = await confirmation.ask({
       title: S.strategies.deleteTitle,
@@ -82,7 +107,19 @@
         <button class="link" onclick={() => (app.tab = "settings")}>{S.overview.zapret2Connect}</button>
       </p>
     {/if}
-    <input class="wide search" placeholder={S.strategies.search} bind:value={query} aria-label={S.strategies.search} />
+    <div class="row search">
+      <input class="grow" placeholder={S.strategies.search} bind:value={query} aria-label={S.strategies.search} />
+      <button
+        disabled={locked}
+        onclick={() => {
+          detail = null;
+          editing = null;
+          editing2 = null;
+          createError = "";
+          creating = { engine: "flowseal", name: "" };
+        }}>{S.strategies.newStrategy}</button
+      >
+    </div>
     <table>
       <thead>
         <tr><th>{S.strategies.name}</th><th>{S.strategies.result}</th></tr>
@@ -96,6 +133,7 @@
                 onclick={() => {
                   editing = null;
                   editing2 = null;
+                  creating = null;
                   void open(row.name);
                 }}>{row.name}</button
               >
@@ -123,12 +161,28 @@
       <Zapret2Editor
         name={editing2.name}
         from={editing2.from}
+        initial={editing2.initial}
         create={editing2.create}
         onClose={(saved) => {
           editing2 = null;
           void (saved ? open(saved) : load());
         }}
       />
+    {:else if creating}
+      <h2>{S.strategies.newTitle}</h2>
+      <div class="row">
+        <label class="inline"><input type="radio" bind:group={creating.engine} value="flowseal" /> {S.strategies.engineFlowseal}</label>
+        {#if app.overview?.zapret2.dir}
+          <label class="inline"><input type="radio" bind:group={creating.engine} value="zapret2" /> {S.strategies.engineZapret2}</label>
+        {/if}
+      </div>
+      <p class="muted">{creating.engine === "flowseal" ? S.strategies.newFlowsealNote : S.strategies.newZapret2Note}</p>
+      <div class="buttons">
+        <input placeholder={S.strategies.newName} bind:value={creating.name} aria-label={S.strategies.newName} />
+        <button class="primary" disabled={locked || !creating.name.trim()} onclick={create}>{S.strategies.newCreate}</button>
+        <button onclick={() => (creating = null)}>{S.common.cancel}</button>
+      </div>
+      {#if createError}<p class="bad">{createError}</p>{/if}
     {:else if detail}
       {@const d = detail}
       {@const z2 = zapret2Name(d.row.name)}

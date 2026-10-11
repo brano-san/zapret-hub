@@ -71,3 +71,19 @@ export function latestPerSuite<T extends { suite: Suite }>(runs: T[]): T[] {
     return run ? [run] : [];
   });
 }
+
+/** The text a new zapret2 strategy starts with: one profile, to be edited. */
+export const ZAPRET2_TEMPLATE = [
+  "# New zapret2 strategy. A line starting with # is a comment.",
+  "# Global part: what to intercept and which Lua to load.",
+  "--wf-tcp-out=443",
+  '--lua-init=@"%LUA%zapret-lib.lua"',
+  '--lua-init=@"%LUA%zapret-antidpi.lua"',
+  "",
+  "# A profile; add more of them, each after --new.",
+  "--filter-tcp=443 --filter-l7=tls",
+  '--hostlist="%LISTS%list-general.txt"',
+  "--out-range=-d10 --payload=tls_client_hello",
+  "--lua-desync=multidisorder:pos=midsld",
+  "",
+].join("\n");
