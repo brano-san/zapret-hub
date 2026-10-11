@@ -431,8 +431,10 @@ fn answer(line: io::Result<Vec<u8>>) -> Result<Value, Fail> {
 
 fn unavailable(err: &io::Error) -> String {
     match err.raw_os_error() {
+        // Also an app whose pipe stopped: `start` would only show its window.
         Some(ERROR_FILE_NOT_FOUND) => {
-            "Zapret Hub is not running: start it with `zapret-hub-cli start` or run zapret-hub.exe"
+            "Zapret Hub is not running: start it with `zapret-hub-cli start` or run zapret-hub.exe \
+             (if it is in the tray, its CLI pipe is closed: quit it from the tray and start it again)"
                 .to_owned()
         }
         Some(ERROR_ACCESS_DENIED) => "Zapret Hub's pipe did not let this program in: it answers \
@@ -1025,6 +1027,12 @@ mod tests {
         let absent = answer(Err(io::Error::from_raw_os_error(ERROR_FILE_NOT_FOUND))).unwrap_err();
         assert_eq!(absent.code, UNAVAILABLE);
         assert!(absent.error.contains("not running"), "{}", absent.error);
+        // An app whose pipe stopped is not running for the CLI, and `start` only shows its window.
+        assert!(
+            absent.error.contains("quit it from the tray"),
+            "{}",
+            absent.error
+        );
         let busy = answer(Err(io::Error::from_raw_os_error(ERROR_PIPE_BUSY))).unwrap_err();
         assert!(busy.error.contains("busy"), "{}", busy.error);
         let denied = answer(Err(io::Error::from_raw_os_error(ERROR_ACCESS_DENIED))).unwrap_err();
