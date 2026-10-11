@@ -188,6 +188,27 @@ fn restore_files_leaves_a_game_filter_file_that_reads_the_same() {
 }
 
 #[test]
+#[ignore = "needs admin rights and the zapret service installed from E:\\Zapret; restarts zapret"]
+fn live_begin_restores_a_pending_json_first() {
+    let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let pending = pending_path(data.path());
+    // What an interrupted operation would have left: this machine's state as it is now.
+    let earlier = Snapshot::take(&folder, "apply").unwrap();
+    earlier.save(&pending).unwrap();
+
+    let snap = snapshot::begin(&folder, "tests", &pending).unwrap();
+    assert_eq!(snap.operation, "tests");
+    assert_eq!(
+        snap.service, earlier.service,
+        "the service came back as it was"
+    );
+    assert_eq!(snap.strategy, earlier.strategy);
+    assert_eq!(snap.ipset, earlier.ipset);
+    assert_eq!(Snapshot::load(&pending).unwrap(), Some(snap));
+}
+
+#[test]
 #[ignore = "needs admin rights and the zapret service installed from E:\\Zapret"]
 fn live_snapshot_of_this_machine() {
     let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
