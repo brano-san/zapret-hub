@@ -257,6 +257,7 @@
 
   /* Two labelled fields stacked: four items in a row are wider than a card at the default window size. */
   .ranges {
+    margin-top: 8px;
     display: grid;
     grid-template-columns: auto 1fr;
     align-items: center;
