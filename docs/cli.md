@@ -49,6 +49,10 @@ zapret и zapret2, а с ними и то, какие `winws.exe` и `winws2.exe
 
 stdout — один JSON-документ с отступами, в UTF-8. При успехе это данные команды, при ошибке —
 `{"error": "…"}` с полным текстом ошибки. Исключение — `tests report`: он печатает текст отчёта.
+Команда, которой нечего вернуть (`custom validate`, `custom save`, `zapret2 validate`, `zapret2 save`,
+`tests cancel`, `ipset update` и т. п.), печатает `{"ok": true}`. Единственное `null` со
+смыслом — `flowseal check-update`: обновления нет. Ход (`tests wait`, `tests run --wait`) идёт в stderr,
+в stdout — только итоговый JSON.
 Порядок ключей в объектах не значим.
 
 | Код | Значение |
@@ -111,7 +115,7 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `tests wait [--timeout <s>]` | ждёт конца прогона и печатает рейтинг | `tests_status` |
 | `tests cancel` | отменяет прогон | `cancel_tests` |
 | `tests list` | сохранённые прогоны | `list_runs` |
-| `tests show <id> [--full]` | рейтинг прогона; `--full` — прогон целиком, со всеми проверками | `get_run` |
+| `tests show <id> [--full\|--failures]` | рейтинг прогона; `--full` — прогон целиком, со всеми проверками; `--failures` — сводка непрошедших проверок | `get_run` |
 | `tests report <id>` | прогон текстом в формате `test zapret.ps1` | `run_report` |
 | `flowseal` | игровой фильтр, ipset, фейки, свои списки, флаг обновлений | `get_flowseal` |
 | `flowseal check-update` | новая версия Flowseal или `null` | `check_flowseal_update` |
@@ -209,6 +213,11 @@ zapret-hub-cli settings set socks5 '""'
 проверки всех проходов, `ok` — прошедшие из них), задержки — медиана медиан проходов; ошибка запуска в любом
 проходе — ошибка стратегии (`pass 2 of 3: …`). Каждый проход отдельно — в `passes` стратегии в
 `tests show --full`; без повторов `passes` пуст.
+
+`tests show <id> --failures` печатает по стратегиям сводку каждой непрошедшей проверки по всем проходам:
+`{"<стратегия>": {"<цель> <вид> <статус>": {"count": N, "sample_error": "<первая строка ошибки curl>"}}}`,
+например `"YouTube Tls12 Error": {"count": 3, "sample_error": "curl: (28) Connection timed out"}`. Ошибка
+запуска — ключ `launch_error`; у проверки DPI `sample_error` — её код. Стратегии без сбоев не попадают в вывод.
 
 ```
 {
@@ -389,6 +398,6 @@ zapret-hub-cli apply zapret2:mine
     меняются; в окне «Настройки» → «Папка zapret2» выбрать папку релиза и сохранить; `settings get` →
     `zapret2_dir` с ней; `zapret2 info` →
     версия и `compat`. Текст `strategies show zapret2:general` (поле `source`) в файл → `zapret2 validate` →
-    код 0; `zapret2 save mine <файл> --create` → `null`; `apply zapret2:mine` → `sc query zapret2` — RUNNING,
+    код 0; `zapret2 save mine <файл> --create` → `{"ok": true}`; `apply zapret2:mine` → `sc query zapret2` — RUNNING,
     `sc query zapret` службу не находит; `apply general` → наоборот. `zapret2 delete mine` → код 2, с `--yes` →
     код 0.

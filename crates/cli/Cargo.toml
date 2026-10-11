@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 exec.workspace = true
+probe.workspace = true
 tester.workspace = true
 zapret.workspace = true
 anyhow.workspace = true

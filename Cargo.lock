@@ -575,6 +575,7 @@ dependencies = [
  "anyhow",
  "clap",
  "exec",
+ "probe",
  "serde",
  "serde_json",
  "tempfile",

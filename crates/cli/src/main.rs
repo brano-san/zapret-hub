@@ -1,6 +1,7 @@
 //! `zapret-hub-cli`: one command to the running Zapret Hub, one JSON document on stdout, fixed
 //! exit codes (CLI spec 6, 7).
 
+use std::collections::BTreeMap;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command as Process, ExitCode};
@@ -8,10 +9,11 @@ use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use cli::{Live, Outcome, PROTOCOL, Request, Response, TestsStatus};
+use probe::curl::{CheckStatus, DpiStatus};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tester::catalog::StrategyRow;
-use tester::model::{Suite, TestRun};
+use tester::model::{Pass, Suite, TestRun};
 use tester::run::Request as TestRequest;
 use zapret::checks::CheckAction;
 use zapret::custom::CustomStrategy;
@@ -230,6 +232,9 @@ enum TestsCommand {
         id: String,
         #[arg(long)]
         full: bool,
+        /// Instead: every check that did not pass, over all passes, counted per strategy.
+        #[arg(long, conflicts_with = "full")]
+        failures: bool,
     },
     /// A run as test zapret.ps1 writes it (text).
     Report { id: String },
@@ -411,6 +416,8 @@ impl Fail {
 
 /// One request to the app and its answer's `data`.
 type Call<'a> = &'a mut dyn FnMut(Request) -> Result<Value, Fail>;
+/// Where progress lines go: stderr, so that stdout stays one JSON document.
+type Note<'a> = &'a mut dyn FnMut(&str);
 
 fn main() -> ExitCode {
     let args = match Cli::try_parse() {
@@ -419,7 +426,13 @@ fn main() -> ExitCode {
         Err(err) if !err.use_stderr() => err.exit(),
         Err(err) => return finish(Err(Fail::new(USAGE, err.render().to_string()))),
     };
-    finish(run(args, &mut |request| answer(send(&request))))
+    finish(run(
+        args,
+        &mut |request| answer(send(&request)),
+        &mut |line| {
+            let _ = writeln!(io::stderr(), "{line}");
+        },
+    ))
 }
 
 fn send(request: &Request) -> io::Result<Vec<u8>> {
@@ -507,7 +520,7 @@ fn needs_yes(command: &Command) -> bool {
     )
 }
 
-fn run(args: Cli, call: Call) -> Result<Done, Fail> {
+fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
     if needs_yes(&args.command) && !args.yes {
         return Err(Fail::new(
             USAGE,
@@ -599,7 +612,7 @@ fn run(args: Cli, call: Call) -> Result<Done, Fail> {
                 },
             })?;
             if wait {
-                return wait_for_run(call, timeout);
+                return wait_for_run(call, timeout, note);
             }
             return Ok(Done::Json(json!({
                 "started": true,
@@ -608,8 +621,12 @@ fn run(args: Cli, call: Call) -> Result<Done, Fail> {
                 "repeats": repeats,
             })));
         }
-        Command::Tests(TestsCommand::Wait { timeout }) => return wait_for_run(call, timeout),
-        Command::Tests(TestsCommand::Show { id, full }) => return show(call, id, full),
+        Command::Tests(TestsCommand::Wait { timeout }) => {
+            return wait_for_run(call, timeout, note);
+        }
+        Command::Tests(TestsCommand::Show { id, full, failures }) => {
+            return show(call, id, full, failures);
+        }
         Command::Tests(TestsCommand::Report { id }) => {
             return Ok(Done::Text(read(call(Request::RunReport { id })?)?));
         }
@@ -665,7 +682,15 @@ fn run(args: Cli, call: Call) -> Result<Done, Fail> {
         Command::Discord(DiscordCommand::ClearCache) => Request::ClearDiscordCache,
         Command::Service(ServiceCommand::Remove) => Request::RemoveService,
     };
-    call(request).map(Done::Json)
+    // Only `flowseal check-update` has a `null` that means something (no update).
+    let silent = !matches!(request, Request::CheckFlowsealUpdate);
+    call(request).map(|data| {
+        Done::Json(if silent && data.is_null() {
+            json!({ "ok": true })
+        } else {
+            data
+        })
+    })
 }
 
 fn key_name(key: Key) -> String {
@@ -753,7 +778,7 @@ fn suite_name(suite: Suite) -> &'static str {
 }
 
 /// Asks `tests_status` every 2 s until the run is over; the progress goes to stderr (spec 7.1).
-fn wait_for_run(call: Call, timeout: Option<u64>) -> Result<Done, Fail> {
+fn wait_for_run(call: Call, timeout: Option<u64>, note: Note) -> Result<Done, Fail> {
     // A deadline the clock cannot reach (a `--timeout` near u64::MAX) is no deadline.
     let deadline = timeout.and_then(|secs| Instant::now().checked_add(Duration::from_secs(secs)));
     let mut shown = None;
@@ -763,7 +788,7 @@ fn wait_for_run(call: Call, timeout: Option<u64>) -> Result<Done, Fail> {
             return match status.last {
                 None => Ok(Done::Json(json!({ "last": null }))),
                 Some(Outcome::Failed { error }) => Err(Fail::new(FAILED, error)),
-                Some(Outcome::Run { run_id }) => show(call, run_id, false),
+                Some(Outcome::Run { run_id }) => show(call, run_id, false, false),
             };
         }
         if let Some(line) = status
@@ -771,7 +796,7 @@ fn wait_for_run(call: Call, timeout: Option<u64>) -> Result<Done, Fail> {
             .as_ref()
             .and_then(|live| progress(live, &mut shown))
         {
-            let _ = writeln!(io::stderr(), "{line}");
+            note(&line);
         }
         let left = deadline.map_or(POLL, |deadline| {
             deadline.saturating_duration_since(Instant::now())
@@ -811,12 +836,80 @@ fn progress(live: &Live, shown: &mut Option<(u32, u32)>) -> Option<String> {
     ))
 }
 
-fn show(call: Call, id: String, full: bool) -> Result<Done, Fail> {
+fn show(call: Call, id: String, full: bool, failures: bool) -> Result<Done, Fail> {
     let run = call(Request::GetRun { id })?;
     if full {
         return Ok(Done::Json(run));
     }
+    if failures {
+        return Ok(Done::Json(failures_of(&read(run)?)));
+    }
     Ok(Done::Json(compact(&read(run)?)))
+}
+
+/// `{strategy: {"<target> <kind> <status>": {count, sample_error}}}` for every check that did not
+/// pass, over all passes; `sample_error` is the first line curl wrote (a DPI check has none: its
+/// code). A launch failure is the key `launch_error`. Strategies without failures are left out.
+fn failures_of(run: &TestRun) -> Value {
+    let mut out = serde_json::Map::new();
+    for strategy in &run.strategies {
+        let mut groups: BTreeMap<String, (u32, Option<String>)> = BTreeMap::new();
+        let mut add = |key: String, error: Option<String>| {
+            let entry = groups.entry(key).or_default();
+            entry.0 += 1;
+            entry.1 = entry.1.take().or(error);
+        };
+        // A single pass keeps its checks in the strategy itself.
+        let single;
+        let passes: Vec<&Pass> = if strategy.passes.is_empty() {
+            single = Pass {
+                launch_error: strategy.launch_error.clone(),
+                targets: strategy.targets.clone(),
+                dpi: strategy.dpi.clone(),
+                score: strategy.score.clone(),
+            };
+            vec![&single]
+        } else {
+            strategy.passes.iter().collect()
+        };
+        for pass in passes {
+            if let Some(error) = &pass.launch_error {
+                add("launch_error".into(), Some(error.clone()));
+            }
+            for target in &pass.targets {
+                for check in target.checks.iter().filter(|c| c.status != CheckStatus::Ok) {
+                    let error = check
+                        .stderr
+                        .lines()
+                        .map(str::trim)
+                        .find(|line| !line.is_empty())
+                        .map(str::to_owned);
+                    add(
+                        format!("{} {:?} {:?}", target.name, check.kind, check.status),
+                        error,
+                    );
+                }
+            }
+            for target in &pass.dpi {
+                for check in target.checks.iter().filter(|c| c.status != DpiStatus::Ok) {
+                    add(
+                        format!("{} {:?} {:?}", target.id, check.kind, check.status),
+                        Some(check.code.clone()),
+                    );
+                }
+            }
+        }
+        if !groups.is_empty() {
+            let found: serde_json::Map<String, Value> = groups
+                .into_iter()
+                .map(|(key, (count, sample))| {
+                    (key, json!({ "count": count, "sample_error": sample }))
+                })
+                .collect();
+            out.insert(strategy.name.clone(), Value::Object(found));
+        }
+    }
+    Value::Object(out)
 }
 
 /// The ranking without the checks (spec 7.1); a saved run is ranked already.
@@ -902,16 +995,30 @@ mod tests {
         args: &[&str],
         answers: Vec<Result<Value, Fail>>,
     ) -> (Result<Done, Fail>, Vec<Request>) {
+        let (outcome, asked, _) = drive_noted(args, answers);
+        (outcome, asked)
+    }
+
+    /// `drive`, and the progress lines the CLI wrote besides its JSON.
+    fn drive_noted(
+        args: &[&str],
+        answers: Vec<Result<Value, Fail>>,
+    ) -> (Result<Done, Fail>, Vec<Request>, Vec<String>) {
+        let mut notes = Vec::new();
         let args =
             Cli::try_parse_from(std::iter::once("zapret-hub-cli").chain(args.iter().copied()))
                 .unwrap();
         let mut asked = Vec::new();
         let mut answers = answers.into_iter();
-        let outcome = run(args, &mut |request| {
-            asked.push(request);
-            answers.next().unwrap_or(Ok(Value::Null))
-        });
-        (outcome, asked)
+        let outcome = run(
+            args,
+            &mut |request| {
+                asked.push(request);
+                answers.next().unwrap_or(Ok(Value::Null))
+            },
+            &mut |line| notes.push(line.to_owned()),
+        );
+        (outcome, asked, notes)
     }
 
     fn code(outcome: Result<Done, Fail>) -> u8 {
@@ -1182,7 +1289,7 @@ mod tests {
             ("start_minimized", "false", json!(false)),
         ] {
             let (outcome, asked) = drive(&["settings", "set", key, value], vec![Ok(settings())]);
-            assert_eq!(outcome, Ok(Done::Json(Value::Null)), "{key}");
+            assert_eq!(outcome, Ok(Done::Json(json!({ "ok": true }))), "{key}");
             let mut changed = settings();
             changed[key] = expected;
             assert_eq!(
@@ -1468,6 +1575,76 @@ mod tests {
                 },
                 Request::TestsStatus
             ]
+        );
+    }
+
+    #[test]
+    fn progress_goes_to_notes_and_never_into_the_json() {
+        let live = json!({ "request": { "suite": "Standard", "strategies": ["a", "b"], "repeats": 3 },
+            "current": 1, "restoring": false, "pass": 0, "results": [] });
+        let going = json!({ "testing": true, "live": live, "last": null });
+        let ended = json!({ "testing": false, "live": null, "last": null });
+        let (outcome, _, notes) = drive_noted(
+            &["tests", "run", "--wait", "a", "b"],
+            vec![Ok(Value::Null), Ok(going), Ok(ended)],
+        );
+        assert_eq!(notes, ["pass 1/3: 2/2 b"]);
+        assert_eq!(outcome, Ok(Done::Json(json!({ "last": null }))));
+    }
+
+    #[test]
+    fn silent_commands_print_ok_but_an_empty_update_check_stays_null() {
+        for args in [&["tests", "cancel"][..], &["ipset", "update"], &["restart"]] {
+            let (outcome, _) = drive(args, Vec::new());
+            assert_eq!(outcome, Ok(Done::Json(json!({ "ok": true }))), "{args:?}");
+        }
+        let (outcome, _) = drive(&["flowseal", "check-update"], Vec::new());
+        assert_eq!(outcome, Ok(Done::Json(Value::Null)));
+    }
+
+    #[test]
+    fn failures_count_every_bad_check_over_all_passes() {
+        use probe::curl::{CheckKind, CheckResult};
+        use tester::model::TargetResult;
+        let check = |kind, status, stderr: &str| CheckResult {
+            kind,
+            status,
+            http_code: "000".into(),
+            time_ms: None,
+            stderr: stderr.into(),
+        };
+        let pass = |checks| Pass {
+            launch_error: None,
+            targets: vec![TargetResult {
+                name: "YouTube".into(),
+                url: None,
+                extra: false,
+                checks,
+                ping_ms: None,
+            }],
+            dpi: Vec::new(),
+            score: Score::default(),
+        };
+        let bad = pass(vec![
+            check(CheckKind::Http, CheckStatus::Ok, ""),
+            check(
+                CheckKind::Tls12,
+                CheckStatus::Error,
+                "
+curl: (28) timeout
+more",
+            ),
+        ]);
+        let mut worse = bad.clone();
+        worse.targets[0].checks[1].stderr = "curl: (35) reset".into();
+        let mut strategy = result("general", None);
+        strategy.passes = vec![bad, worse];
+        let mut run = test_run();
+        run.strategies = vec![strategy, result("clean", None)];
+        assert_eq!(
+            failures_of(&run),
+            json!({ "general": { "YouTube Tls12 Error":
+                { "count": 2, "sample_error": "curl: (28) timeout" } } })
         );
     }
 
