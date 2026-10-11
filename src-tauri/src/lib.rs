@@ -34,7 +34,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             dto::TestProgress,
             dto::TestsFinished,
             dto::StateChanged,
-            dto::NoticesChanged
+            dto::NoticesChanged,
+            dto::DownloadProgress
         ])
         .commands(collect_commands![
             commands::app_version,
@@ -64,6 +65,9 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::delete_zapret2,
             commands::start_tests,
             commands::cancel_tests,
+            commands::default_download_parent,
+            commands::download_engine,
+            commands::cancel_download,
             commands::test_live,
             commands::list_runs,
             commands::get_run,

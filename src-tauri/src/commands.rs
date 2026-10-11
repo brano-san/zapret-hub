@@ -5,6 +5,7 @@ use std::path::Path;
 use probe::socks::ProxyStatus;
 use tauri::{AppHandle, Manager as _, State};
 use tauri_plugin_dialog::DialogExt as _;
+use tauri_specta::Event as _;
 use tester::catalog::{StrategyDetail, StrategyRow};
 use tester::history::RunSummary;
 use tester::model::TestRun;
@@ -16,12 +17,14 @@ use zapret::fakes::FakeKind;
 use zapret::game_filter::GameFilter;
 use zapret::hosts::HostsPlan;
 use zapret::ipset::IpsetMode;
+use zapret::release::{Downloaded, Engine};
 use zapret::service::{QuickCheck, active};
 use zapret::user_lists::UserList;
 
 use crate::actions::{self, state as app};
 use crate::dto::{
-    Candidates, Detected, FlowsealState, FolderCheck, FolderKind, LiveRun, Notice, Overview,
+    Candidates, Detected, DownloadProgress, FlowsealState, FolderCheck, FolderKind, LiveRun,
+    Notice, Overview,
 };
 use crate::settings::Settings;
 use crate::state::AppState;
@@ -318,6 +321,52 @@ pub async fn start_tests(handle: AppHandle, request: Request) -> Answer<()> {
 #[specta::specta]
 pub fn cancel_tests(state: State<'_, AppState>) {
     state.cancel_tests();
+}
+
+/// Window only, like the folders themselves: the pipe has no download (cli.md).
+#[tauri::command]
+#[specta::specta]
+pub fn default_download_parent() -> String {
+    zapret::release::default_parent().display().to_string()
+}
+
+/// The latest release of `engine` unpacked into a new folder under `parent`; the page follows
+/// `DownloadProgress` and puts the folder into its field.
+#[tauri::command]
+#[specta::specta]
+pub async fn download_engine(
+    handle: AppHandle,
+    engine: Engine,
+    parent: String,
+) -> Answer<Downloaded> {
+    blocking(move || {
+        let state = app(&handle);
+        let socks5 = state.socks5();
+        state.download(|cancel| {
+            zapret::release::install(
+                engine,
+                Path::new(&parent),
+                socks5.as_deref(),
+                cancel,
+                &|received, total| {
+                    let clamp = |n: u64| u32::try_from(n).unwrap_or(u32::MAX);
+                    let _ = DownloadProgress {
+                        engine,
+                        received: clamp(received),
+                        total: clamp(total),
+                    }
+                    .emit(&handle);
+                },
+            )
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn cancel_download(state: State<'_, AppState>) {
+    state.cancel_download();
 }
 
 #[tauri::command]

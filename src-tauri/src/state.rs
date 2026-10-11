@@ -65,6 +65,9 @@ pub struct AppState {
     queue: Mutex<()>,
     testing: AtomicBool,
     cancel: AtomicBool,
+    /// A release download from the window (`release::install`): one at a time, its own cancel.
+    downloading: AtomicBool,
+    download_cancel: AtomicBool,
     live: Mutex<Option<LiveRun>>,
     quick: Mutex<Option<QuickCheck>>,
     /// The newest finished standard run: «Применить лучшую», the overview, the tray.
@@ -85,6 +88,8 @@ impl AppState {
             queue: Mutex::new(()),
             testing: AtomicBool::new(false),
             cancel: AtomicBool::new(false),
+            downloading: AtomicBool::new(false),
+            download_cancel: AtomicBool::new(false),
             live: Mutex::new(None),
             quick: Mutex::new(None),
             ranking: Mutex::new(None),
@@ -186,6 +191,33 @@ impl AppState {
 
     pub fn cancel_flag(&self) -> &AtomicBool {
         &self.cancel
+    }
+
+    /// Runs `work` as the one download, with the download's cancel flag cleared for it.
+    pub fn download<T>(
+        &self,
+        work: impl FnOnce(&AtomicBool) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
+        // Cleared even when `work` panics.
+        struct Done<'a>(&'a AtomicBool);
+        impl Drop for Done<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::SeqCst);
+            }
+        }
+        anyhow::ensure!(
+            self.downloading
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok(),
+            "a download is already going"
+        );
+        let _done = Done(&self.downloading);
+        self.download_cancel.store(false, Ordering::SeqCst);
+        work(&self.download_cancel)
+    }
+
+    pub fn cancel_download(&self) {
+        self.download_cancel.store(true, Ordering::SeqCst);
     }
 
     /// The queue's turn. A test run holds it from start to end.

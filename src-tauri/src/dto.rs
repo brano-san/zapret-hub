@@ -127,3 +127,11 @@ pub struct StateChanged;
 /// `take_notices` has something.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type, tauri_specta::Event)]
 pub struct NoticesChanged;
+
+/// A release download from the window: bytes so far and the zip's size (0 when GitHub gave none).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type, tauri_specta::Event)]
+pub struct DownloadProgress {
+    pub engine: zapret::release::Engine,
+    pub received: u32,
+    pub total: u32,
+}

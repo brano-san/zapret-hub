@@ -372,11 +372,15 @@ mod tests {
     }
 
     /// Window commands the CLI leaves out (spec 6).
-    const WINDOW_ONLY: [&str; 8] = [
+    const WINDOW_ONLY: [&str; 11] = [
         "detect_folders",
         "check_folder",
         "check_zapret2_folder",
         "pick_folder",
+        // Downloads make a new engine folder: window only, like the folders (cli.md).
+        "default_download_parent",
+        "download_engine",
+        "cancel_download",
         "open_url",
         "open_folder",
         "test_live",

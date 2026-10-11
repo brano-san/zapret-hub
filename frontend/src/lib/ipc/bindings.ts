@@ -52,6 +52,14 @@ export const commands = {
 	deleteZapret2: (name: string) => typedError<null, string>(__TAURI_INVOKE("delete_zapret2", { name })),
 	startTests: (request: Request) => typedError<null, string>(__TAURI_INVOKE("start_tests", { request })),
 	cancelTests: () => __TAURI_INVOKE<void>("cancel_tests"),
+	/**  Window only, like the folders themselves: the pipe has no download (cli.md). */
+	defaultDownloadParent: () => __TAURI_INVOKE<string>("default_download_parent"),
+	/**
+	 *  The latest release of `engine` unpacked into a new folder under `parent`; the page follows
+	 *  `DownloadProgress` and puts the folder into its field.
+	 */
+	downloadEngine: (engine: Engine, parent: string) => typedError<Downloaded, string>(__TAURI_INVOKE("download_engine", { engine, parent })),
+	cancelDownload: () => __TAURI_INVOKE<void>("cancel_download"),
 	testLive: () => __TAURI_INVOKE<{
 	request: Request,
 	/**  The strategy under test; `None` before the first and while restoring. */
@@ -91,6 +99,7 @@ export const commands = {
 
 /** Events */
 export const events = {
+	downloadProgress: makeEvent<DownloadProgress>("download-progress"),
 	noticesChanged: makeEvent<NoticesChanged>("notices-changed"),
 	stateChanged: makeEvent<StateChanged>("state-changed"),
 	testProgress: makeEvent<TestProgress>("test-progress"),
@@ -157,6 +166,21 @@ export type Detected = {
 	zapret2: string | null,
 };
 
+/**  A release download from the window: bytes so far and the zip's size (0 when GitHub gave none). */
+export type DownloadProgress = {
+	engine: Engine,
+	received: number,
+	total: number,
+};
+
+/**  What a finished download left. */
+export type Downloaded = {
+	dir: string,
+	tag: string,
+	/**  SHA-256 of the zip as downloaded. */
+	sha256: string,
+};
+
 export type DpiResult = {
 	kind: CheckKind,
 	status: DpiStatus,
@@ -177,6 +201,8 @@ export type DpiTargetResult = {
 	host: string,
 	checks: DpiResult[],
 };
+
+export type Engine = "Flowseal" | "Zapret2";
 
 export type FakeKind = "Discord" | "Game";
 
