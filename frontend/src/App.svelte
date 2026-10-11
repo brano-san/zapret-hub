@@ -6,6 +6,7 @@
   import Settings from "./tabs/Settings.svelte";
   import Strategies from "./tabs/Strategies.svelte";
   import Tests from "./tabs/Tests.svelte";
+  import Zapret from "./tabs/Zapret.svelte";
   import Wizard from "./Wizard.svelte";
   import { app, start, type Tab } from "$lib/app.svelte";
   import { S } from "$lib/strings";
@@ -14,7 +15,7 @@
     { id: "overview", label: S.tabs.overview, view: Overview },
     { id: "strategies", label: S.tabs.strategies, view: Strategies },
     { id: "tests", label: S.tabs.tests, view: Tests },
-    // Tasks 18–20 add Strategies, Tests and Zapret here, in that order.
+    { id: "zapret", label: S.tabs.zapret, view: Zapret },
     { id: "settings", label: S.tabs.settings, view: Settings },
   ] satisfies { id: Tab; label: string; view: unknown }[];
 
