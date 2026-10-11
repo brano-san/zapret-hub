@@ -61,7 +61,12 @@ pub fn get_settings(state: State<'_, AppState>) -> Settings {
 #[tauri::command]
 #[specta::specta]
 pub async fn save_settings(handle: AppHandle, settings: Settings) -> Answer<()> {
-    blocking(move || actions::save_settings(&handle, settings)).await
+    blocking(move || actions::save_settings(&handle, settings, false)).await
+}
+
+/// `save_settings` for zapret-hub-cli (`cli.rs`), not a window command: it never turns the CLI on.
+pub async fn save_settings_from_pipe(handle: AppHandle, settings: Settings) -> Answer<()> {
+    blocking(move || actions::save_settings(&handle, settings, true)).await
 }
 
 #[tauri::command]

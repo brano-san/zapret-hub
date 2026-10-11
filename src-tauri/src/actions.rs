@@ -98,9 +98,16 @@ pub fn check_flowseal_update(app: &AppHandle) -> anyhow::Result<Option<String>> 
     Ok(newer)
 }
 
-pub fn save_settings(app: &AppHandle, mut settings: Settings) -> anyhow::Result<()> {
+/// One save at a time, from reading the settings in force to setting the new ones: otherwise the
+/// file, the memory and the scheduled task could disagree. A save from the `pipe` never turns the
+/// CLI on (CLI spec 7.2).
+pub fn save_settings(app: &AppHandle, mut settings: Settings, pipe: bool) -> anyhow::Result<()> {
     let state = state(app);
+    let _saving = state.saving();
     let old = state.settings();
+    if pipe {
+        settings = crate::settings::from_pipe(&old, settings);
+    }
     settings.socks5 =
         crate::settings::validate_socks(settings.socks5.as_deref().unwrap_or_default())?;
     let folder_changed = settings.zapret_dir != old.zapret_dir;

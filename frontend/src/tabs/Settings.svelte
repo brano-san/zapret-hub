@@ -43,10 +43,12 @@
       zapret_dir: draft.zapret_dir?.trim() || null,
       socks5: draft.socks5?.trim() || null,
     };
+    // The draft as sent: anything typed while the save runs stays an edit.
+    const sent = $state.snapshot(draft);
     saved = false;
     if ((await change(S.failed.settings, () => commands.saveSettings(settings))) !== undefined) {
-      // Saved: the copy counts as unedited again, so the settings read back replace it.
-      from = $state.snapshot(draft);
+      // Saved: the draft as sent counts as unedited, so the settings read back replace it.
+      from = sent;
       await loadSettings();
       saved = true;
     }
@@ -59,6 +61,8 @@
     untrack(() => {
       const copy = follow(draft, from, next);
       if (copy === draft) return;
+      // A «Проверить» result belongs to the address it checked.
+      if (copy.socks5 !== draft?.socks5) proxy = null;
       draft = copy;
       from = next;
       void checkFolder();

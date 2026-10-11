@@ -88,7 +88,9 @@ fn dispatch(app: &AppHandle, request: Request) -> Result<Value, String> {
         Request::SaveSettings { settings } => {
             let settings = serde_json::from_value(settings)
                 .map_err(|err| format!("the settings do not parse: {err}"))?;
-            json(block_on(commands::save_settings(handle, settings))?)
+            json(block_on(commands::save_settings_from_pipe(
+                handle, settings,
+            ))?)
         }
         Request::GetOverview => json(block_on(commands::get_overview(handle))?),
         Request::CheckProxy { addr } => json(block_on(commands::check_proxy(addr))?),

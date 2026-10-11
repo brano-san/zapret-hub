@@ -58,6 +58,9 @@ const TESTING: &str = "a test run is going: wait for it or cancel it";
 pub struct AppState {
     pub paths: Paths,
     settings: Mutex<Settings>,
+    /// Held by a whole save of the settings: the window and zapret-hub-cli save one at a time.
+    /// Not `queue`: a test run holds that for minutes.
+    saving: Mutex<()>,
     /// Held by every change to zapret and by a whole test run: one at a time (spec 10).
     queue: Mutex<()>,
     testing: AtomicBool,
@@ -78,6 +81,7 @@ impl AppState {
         Self {
             paths,
             settings: Mutex::new(settings),
+            saving: Mutex::new(()),
             queue: Mutex::new(()),
             testing: AtomicBool::new(false),
             cancel: AtomicBool::new(false),
@@ -96,6 +100,11 @@ impl AppState {
 
     pub fn set_settings(&self, settings: Settings) {
         *lock(&self.settings) = settings;
+    }
+
+    /// The settings' own turn: one save at a time (`actions::save_settings`).
+    pub fn saving(&self) -> MutexGuard<'_, ()> {
+        lock(&self.saving)
     }
 
     pub fn socks5(&self) -> Option<String> {

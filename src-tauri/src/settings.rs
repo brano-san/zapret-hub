@@ -76,6 +76,14 @@ pub fn load_or_default(path: &Path) -> (Settings, Option<String>) {
     (Settings::default(), Some(format!("{kept}\n\n{err:#}")))
 }
 
+/// What a save from zapret-hub-cli leaves of `sent` against the settings in force: everything but
+/// turning the CLI on. A save that passed the gate just before the user turned the CLI off must not
+/// turn it back on (CLI spec 7.2).
+pub fn from_pipe(current: &Settings, mut sent: Settings) -> Settings {
+    sent.cli_enabled &= current.cli_enabled;
+    sent
+}
+
 /// A SOCKS5 address the way local clients listen: `IP:port`. Blank means none.
 pub fn validate_socks(text: &str) -> anyhow::Result<Option<String>> {
     let text = text.trim();
@@ -138,6 +146,25 @@ mod tests {
         assert!(notice.unwrap().contains("zapret-hub.toml.broken"));
         assert!(dir.path().join("zapret-hub.toml.broken").exists());
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_save_from_the_pipe_never_turns_the_cli_on() {
+        let on = Settings {
+            cli_enabled: true,
+            ..Settings::default()
+        };
+        let off = Settings::default();
+        assert!(
+            !from_pipe(&off, on.clone()).cli_enabled,
+            "the user turned it off while the save was on its way"
+        );
+        assert_eq!(from_pipe(&on, off.clone()), off, "it may turn itself off");
+        let dark = Settings {
+            theme: Theme::Dark,
+            ..on.clone()
+        };
+        assert_eq!(from_pipe(&on, dark.clone()), dark, "the rest goes as sent");
     }
 
     #[test]
