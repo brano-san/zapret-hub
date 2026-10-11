@@ -100,6 +100,43 @@ fn a_client_that_leaves_before_its_answer_does_not_stop_the_server() {
 }
 
 #[test]
+fn a_line_its_client_never_finished_reaches_no_handler() {
+    use std::io::Write as _;
+    use std::sync::mpsc;
+
+    let name = unique();
+    let (ran, lines) = mpsc::channel();
+    serve(&name, move |line| {
+        let _ = ran.send(line.to_vec());
+        String::new()
+    });
+    // The server waits in ConnectNamedPipe by now, so it does read what the client wrote.
+    std::thread::sleep(Duration::from_millis(300));
+    let mut gone = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&name)
+        .unwrap();
+    gone.write_all(b"x").unwrap();
+    drop(gone);
+    assert_eq!(
+        lines.recv_timeout(Duration::from_millis(500)),
+        Err(mpsc::RecvTimeoutError::Timeout),
+        "a line without its \\n ran"
+    );
+    pipe::request(&name, b"y", BUSY).unwrap();
+    assert_eq!(lines.recv().unwrap(), b"y", "a whole line still runs");
+}
+
+#[test]
+fn an_app_that_closes_without_an_answer_is_an_unexpected_eof() {
+    let name = unique();
+    serve(&name, |_| panic!("the handler fails"));
+    let err = pipe::request(&name, b"{}", BUSY).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof, "{err}");
+}
+
+#[test]
 fn an_oversized_line_is_cut_and_still_answered() {
     let name = unique();
     serve(&name, |line| line.len().to_string());
@@ -116,7 +153,7 @@ fn the_descriptor_names_this_user() {
     assert!(sid.starts_with("S-1-5-"), "{sid}");
     assert_eq!(
         pipe::sddl(&sid),
-        format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;{sid})S:(ML;;NW;;;ME)")
+        format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;{sid})S:(ML;;NWNR;;;ME)")
     );
 }
 
@@ -173,5 +210,78 @@ fn the_pipe_lets_in_system_administrators_and_this_user_only() {
     assert!(sddl.contains(&format!(";;;{sid})")), "{sddl}");
     assert!(sddl.contains(";;;SY)") && sddl.contains(";;;BA)"), "{sddl}");
     assert_eq!(sddl.matches("(A;").count(), 3, "nobody else: {sddl}");
-    assert!(sddl.contains("(ML;;NW;;;ME)"), "{sddl}");
+    assert!(sddl.contains("(ML;;NWNR;;;ME)"), "{sddl}");
+}
+
+#[test]
+fn the_app_can_identify_the_cli_but_not_act_as_it() {
+    use std::fs::File;
+    use std::io::{BufRead as _, BufReader, Write as _};
+    use std::os::windows::io::{FromRawHandle as _, OwnedHandle};
+
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Security::{
+        GetTokenInformation, RevertToSelf, SECURITY_IMPERSONATION_LEVEL, SecurityIdentification,
+        TOKEN_QUERY, TokenImpersonationLevel,
+    };
+    use windows::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
+    use windows::Win32::System::Pipes::{
+        ConnectNamedPipe, CreateNamedPipeW, ImpersonateNamedPipeClient, PIPE_WAIT,
+    };
+    use windows::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
+    use windows::core::HSTRING;
+
+    let name = unique();
+    // SAFETY: a plain pipe with the default descriptor; the `File` owns and closes it.
+    let pipe = unsafe {
+        let raw = CreateNamedPipeW(
+            &HSTRING::from(&name),
+            PIPE_ACCESS_DUPLEX,
+            PIPE_WAIT,
+            1,
+            4096,
+            4096,
+            0,
+            None,
+        );
+        assert!(!raw.is_invalid(), "{}", std::io::Error::last_os_error());
+        File::from(OwnedHandle::from_raw_handle(raw.0))
+    };
+    let app = std::thread::spawn(move || {
+        let handle = HANDLE(pipe.as_raw_handle());
+        // ERROR_PIPE_CONNECTED when the client came first; a real failure fails the read below.
+        // SAFETY: a valid pipe handle, used synchronously.
+        let _ = unsafe { ConnectNamedPipe(handle, None) };
+        // Impersonating needs a read first.
+        BufReader::new(&pipe)
+            .read_until(b'\n', &mut Vec::new())
+            .unwrap();
+        // SAFETY: this thread impersonates only to open its token and reverts before anything
+        // else; the token is closed by its `OwnedHandle`.
+        let level = unsafe {
+            ImpersonateNamedPipeClient(handle).unwrap();
+            let mut token = HANDLE::default();
+            // As self: an identification token cannot open itself.
+            let opened = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, true, &mut token);
+            RevertToSelf().unwrap();
+            opened.unwrap();
+            let token = OwnedHandle::from_raw_handle(token.0);
+            let mut level = SECURITY_IMPERSONATION_LEVEL::default();
+            let mut size = 0;
+            GetTokenInformation(
+                HANDLE(token.as_raw_handle()),
+                TokenImpersonationLevel,
+                Some((&raw mut level).cast()),
+                size_of_val(&level) as u32,
+                &mut size,
+            )
+            .unwrap();
+            level
+        };
+        (&pipe).write_all(b"\n").unwrap();
+        pipe.sync_all().unwrap();
+        level
+    });
+    pipe::request(&name, b"who", BUSY).unwrap();
+    assert_eq!(app.join().unwrap(), SecurityIdentification);
 }

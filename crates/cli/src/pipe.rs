@@ -34,9 +34,9 @@ use crate::MAX_REQUEST;
 pub const NAME: &str = r"\\.\pipe\zapret-hub-cli";
 
 /// SYSTEM and Administrators may do anything, `user` may read and write, nobody else may open it;
-/// Medium integrity keeps sandboxed (Low) programs from writing (spec 5).
+/// Medium integrity with no-write-up and no-read-up keeps sandboxed (Low) programs out (spec 5).
 pub fn sddl(user: &str) -> String {
-    format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;{user})S:(ML;;NW;;;ME)")
+    format!("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;{user})S:(ML;;NWNR;;;ME)")
 }
 
 /// `S-1-5-21-…` of the user this process runs as: from its token, so an elevated app still names
@@ -155,7 +155,9 @@ impl Server {
                 continue;
             }
             let handler = Arc::clone(&handler);
-            std::thread::spawn(move || {
+            // No thread to be had: the closure is dropped and closes this client's handle; the
+            // next client may get one.
+            let _ = std::thread::Builder::new().spawn(move || {
                 // An error here means the client went away: nobody to tell.
                 let _ = answer(File::from(client), &*handler);
             });
@@ -164,7 +166,7 @@ impl Server {
 }
 
 /// Reads one line, keeping at most `MAX_REQUEST + 1` bytes of it, writes the handler's answer and
-/// waits until the client has read it.
+/// waits until the client has read it. A line the client never finished reaches no handler.
 fn answer(pipe: File, handler: &impl Fn(&[u8]) -> String) -> io::Result<()> {
     let mut reader = BufReader::new(&pipe);
     let mut line = Vec::new();
@@ -176,6 +178,9 @@ fn answer(pipe: File, handler: &impl Fn(&[u8]) -> String) -> io::Result<()> {
     } else if line.len() > MAX_REQUEST {
         // The client writes the rest before it reads: drain it, or both ends wait forever.
         reader.skip_until(b'\n')?;
+    } else {
+        // The client closed before its `\n`: nobody would read the answer, so nothing runs.
+        return Ok(());
     }
     let mut response = handler(&line);
     response.push('\n');
@@ -185,7 +190,7 @@ fn answer(pipe: File, handler: &impl Fn(&[u8]) -> String) -> io::Result<()> {
 }
 
 /// The CLI's end: sends `line` and returns the answer line. While every instance is taken the
-/// pipe is busy; that is retried for up to `busy`.
+/// pipe is busy; that is retried for up to `busy`. An answer without its `\n` is UnexpectedEof.
 pub fn request(name: &str, line: &[u8], busy: Duration) -> io::Result<Vec<u8>> {
     let since = Instant::now();
     let pipe = loop {
@@ -210,8 +215,12 @@ pub fn request(name: &str, line: &[u8], busy: Duration) -> io::Result<Vec<u8>> {
     (&pipe).write_all(&message)?;
     let mut answer = Vec::new();
     BufReader::new(&pipe).read_until(b'\n', &mut answer)?;
-    if answer.last() == Some(&b'\n') {
-        answer.pop();
+    if answer.pop() != Some(b'\n') {
+        // The handler failed, or whatever holds the name is not the app.
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "the app closed the connection without an answer",
+        ));
     }
     Ok(answer)
 }
