@@ -317,13 +317,16 @@ pub fn restart_if_running(name: &str) -> anyhow::Result<()> {
 }
 
 /// The arguments live in the service: after a game filter change the active strategy is
-/// installed again.
+/// installed again. A service without a recorded strategy cannot be: that is an error, so the
+/// change is undone instead of reported as done.
 pub fn reinstall_active(folder: &Folder) -> anyhow::Result<()> {
     if state(SERVICE) == SvcState::NotInstalled {
         return Ok(());
     }
     let Some(name) = strategy() else {
-        return Ok(());
+        anyhow::bail!(
+            "the zapret service has no strategy name in the registry, so it cannot be installed again with the new game filter: apply a strategy first"
+        );
     };
     let file = crate::strategies::find(folder, &name)?;
     install(
