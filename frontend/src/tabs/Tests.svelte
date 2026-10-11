@@ -5,10 +5,12 @@
   import { estimateMinutes, ms, runDate, zapret2Name } from "$lib/format";
   import { S } from "$lib/strings";
   import CopyButton from "../components/CopyButton.svelte";
+  import RepeatsSelect from "../components/RepeatsSelect.svelte";
   import ResultsTable from "../components/ResultsTable.svelte";
 
   let rows = $state<StrategyRow[]>([]);
   let suite = $state<Suite>("Standard");
+  let repeats = $state(1);
   let chosen = $state<string[]>([]);
   let runs = $state<RunSummary[]>([]);
   let shown = $state<TestRun | null>(null);
@@ -55,7 +57,7 @@
   async function start(): Promise<void> {
     // In the menu's order, whatever order they were ticked in.
     const strategies = rows.filter((row) => chosen.includes(row.name)).map((row) => row.name);
-    if ((await change(S.failed.startTests, () => commands.startTests({ suite, strategies }))) !== undefined) {
+    if ((await change(S.failed.startTests, () => commands.startTests({ suite, strategies, repeats }))) !== undefined) {
       await refreshLive();
     }
   }
@@ -68,16 +70,17 @@
 {#if app.live}
   {@const live = app.live}
   {@const total = live.request.strategies.length}
+  {@const passes = live.request.repeats ?? 1}
   <section class="card">
     <h2>{suiteName(live.request.suite)}</h2>
     {#if live.restoring}
       <p>{S.tests.restoring}</p>
     {:else if live.current !== null}
-      <p>{S.tests.progress(live.current + 1, total, live.request.strategies[live.current] ?? "")}</p>
+      <p>{S.tests.progress(live.current + 1, total, live.request.strategies[live.current] ?? "", live.pass + 1, passes)}</p>
     {:else}
       <p>{S.tests.preparing}</p>
     {/if}
-    <progress class="wide" max={total} value={live.results.length}></progress>
+    <progress class="wide" max={total * passes} value={live.restoring ? total * passes : live.pass * total + (live.current ?? 0)}></progress>
     <div class="buttons">
       <button class="danger" disabled={live.restoring} onclick={() => commands.cancelTests()}>{S.common.cancel}</button>
     </div>
@@ -97,7 +100,8 @@
     {#if zapret2.length > 0}{@render group(S.tests.groupZapret2, zapret2)}{/if}
     <div class="buttons">
       <button class="primary" disabled={app.busy || chosen.length === 0} onclick={start}>{S.tests.start}</button>
-      <span class="muted">{S.tests.estimate(chosen.length, estimateMinutes(chosen.length, suite))}</span>
+      <RepeatsSelect bind:value={repeats} />
+      <span class="muted">{S.tests.estimate(chosen.length, estimateMinutes(chosen.length, suite, repeats), repeats)}</span>
     </div>
   </section>
 

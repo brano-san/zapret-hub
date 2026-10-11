@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { StrategyResult, Suite } from "$lib/ipc/bindings";
-  import { ms } from "$lib/format";
+  import { latencySpread, ms } from "$lib/format";
   import { sortBy, type Direction } from "$lib/sort";
   import { S } from "$lib/strings";
   import TargetChecks from "./TargetChecks.svelte";
@@ -115,9 +115,20 @@
   {:else if result.launch_error !== null}
     {#if column === "errors" || column === "blocked"}<span class="bad">{S.results.launch}</span>{/if}
   {:else if column === "errors"}
-    <span class={failed(s) === 0 ? "ok" : "bad"} title={S.results.breakdown(s)}>{failed(s)} / {s.total}</span>
+    {@const passes = result.passes ?? []}
+    <span
+      class={failed(s) === 0 ? "ok" : "bad"}
+      title={S.results.breakdown(s) + (passes.length > 1 ? `\n${S.results.perPass(passes.map((p) => failed(p.score)))}` : "")}
+      >{failed(s)} / {s.total}</span
+    >
   {:else if column === "latency"}
+    {@const spread = latencySpread(result)}
     {ms(s.median_ms)}
+    {#if spread}
+      <span class="muted spread" title={S.results.spreadHint(result.passes?.length ?? 0, spread.min, spread.max)}
+        >{S.results.spread(spread.min, spread.max)}</span
+      >
+    {/if}
   {:else if column === "ping"}
     <span class="pair"><span>{ms(s.ping_median_ms)}</span><span class="muted">{s.ping_ok}/{s.ping_total}</span></span>
   {:else if column === "discord"}
@@ -155,6 +166,12 @@
     grid-template-columns: 7ch 5ch;
     column-gap: 8px;
     justify-items: end;
+  }
+
+  /* The passes' spread under the median: smaller, so the median still reads first. */
+  .spread {
+    display: block;
+    font-size: 0.85em;
   }
 
   .head {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { blockSummary, foldersReady, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
+import type { StrategyResult } from "./ipc/bindings";
+import { blockSummary, estimateMinutes, foldersReady, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
 import { S } from "./strings";
 
 describe("blockSummary", () => {
@@ -106,5 +107,22 @@ describe("localizeError", () => {
     const raw = "a name is 1-40 Latin letters, digits, spaces, '-', '_' or '.', starting with a letter or digit: general (ALT11)";
     expect(localizeError(raw)).toBe(`${S.names.invalid}\n\n${raw}`);
     expect(localizeError("something else")).toBe("something else");
+  });
+});
+
+describe("repeats", () => {
+  const score = (median_ms: number | null) => ({ median_ms }) as StrategyResult["score"];
+  const result = (medians: (number | null)[]) =>
+    ({ score: score(null), passes: medians.map((m) => ({ score: score(m) })) }) as StrategyResult;
+
+  it("spreads the passes' medians, ignoring passes without one", () => {
+    expect(latencySpread(result([180, 120, null, 240]))).toEqual({ min: 120, max: 240 });
+    expect(latencySpread(result([180, null]))).toBeNull();
+    expect(latencySpread({ score: score(100) } as StrategyResult)).toBeNull();
+  });
+
+  it("multiplies the estimate by the passes", () => {
+    expect(estimateMinutes(8, "Standard")).toBe(2);
+    expect(estimateMinutes(8, "Standard", 3)).toBe(6);
   });
 });

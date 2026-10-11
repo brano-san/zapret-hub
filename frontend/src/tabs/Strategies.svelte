@@ -5,6 +5,7 @@
   import { confirmation } from "$lib/confirm.svelte";
   import { ZAPRET2_TEMPLATE, blockSummary, hubStem, ms, nameError, ownName, runDate, uniqueName, zapret2Name } from "$lib/format";
   import { S } from "$lib/strings";
+  import RepeatsSelect from "../components/RepeatsSelect.svelte";
   import TargetChecks from "../components/TargetChecks.svelte";
   import StrategyEditor from "./StrategyEditor.svelte";
   import Zapret2Editor from "./Zapret2Editor.svelte";
@@ -20,6 +21,7 @@
   let creating = $state<{ engine: "flowseal" | "zapret2"; name: string } | null>(null);
   let createError = $state("");
   let cloneName = $state("");
+  let repeats = $state(1);
 
   const visible = $derived(rows.filter((row) => row.name.toLowerCase().includes(query.trim().toLowerCase())));
   const locked = $derived(app.busy || (app.overview?.testing ?? false));
@@ -88,7 +90,7 @@
 
   /** A standard run of this one strategy; its progress is on the «Тесты» tab, as for any run. */
   async function test(name: string): Promise<void> {
-    const started = await change(S.failed.startTests, () => commands.startTests({ suite: "Standard", strategies: [name] }));
+    const started = await change(S.failed.startTests, () => commands.startTests({ suite: "Standard", strategies: [name], repeats }));
     if (started === undefined) return;
     await refreshLive();
     app.tab = "tests";
@@ -254,6 +256,7 @@
           <button disabled={app.busy || testing || d.row.error !== null} onclick={() => test(d.row.name)}>
             {S.strategies.runTest}
           </button>
+          <RepeatsSelect bind:value={repeats} disabled={app.busy || testing || d.row.error !== null} />
           {#if testing}
             <span class="muted">{S.strategies.runTestBusy}</span>
           {:else if d.row.error !== null}

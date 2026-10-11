@@ -1,4 +1,4 @@
-import type { CheckLevel, CheckStatus, DpiStatus, FolderCheck, Info, QuickCheck, Suite } from "./ipc/bindings";
+import type { CheckLevel, CheckStatus, DpiStatus, FolderCheck, Info, QuickCheck, StrategyResult, Suite } from "./ipc/bindings";
 import { S } from "./strings";
 
 export function ms(value: number | null | undefined): string {
@@ -55,9 +55,18 @@ export function quickSummary(check: QuickCheck): string {
     .join("\n");
 }
 
-/** About 15 s a strategy for the standard suite (spec 14), a little more for DPI. */
-export function estimateMinutes(count: number, suite: Suite): number {
-  return Math.max(1, Math.round((count * (suite === "Standard" ? 15 : 20)) / 60));
+/** About 15 s a strategy and pass for the standard suite (spec 14), a little more for DPI. */
+export function estimateMinutes(count: number, suite: Suite, repeats = 1): number {
+  return Math.max(1, Math.round((count * repeats * (suite === "Standard" ? 15 : 20)) / 60));
+}
+
+/** The choices of «Повторов» (`tester::run::MAX_REPEATS`). */
+export const REPEATS = [1, 2, 3, 4, 5] as const;
+
+/** The lowest and highest of the passes' median latencies; `null` unless two passes had one. */
+export function latencySpread(result: StrategyResult): { min: number; max: number } | null {
+  const values = (result.passes ?? []).map((pass) => pass.score.median_ms).filter((value) => value !== null);
+  return values.length < 2 ? null : { min: Math.min(...values), max: Math.max(...values) };
 }
 
 export const statusClass: Record<CheckStatus, string> = { Ok: "ok", Ssl: "bad", Unsup: "warn", Error: "bad" };

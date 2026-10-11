@@ -292,6 +292,10 @@ export const S = {
     extra: "(доп.)",
     kinds: { Http: "HTTP", Tls12: "TLS 1.2", Tls13: "TLS 1.3" },
     breakdown: (score: Score) => `ERROR ${score.errors}, SSL ${score.ssl}, UNSUP ${score.unsup}`,
+    perPass: (failed: number[]) => `По проходам: ${failed.join(", ")}`,
+    spread: (min: number, max: number) => `${min}–${max}`,
+    spreadHint: (passes: number, min: number, max: number) =>
+      `Медиана ${passes} проходов. Медианы отдельных проходов — от ${min} до ${max} мс: чем шире разброс, тем меньше значит разница с соседними стратегиями.`,
   },
   tests: {
     newRun: "Новый прогон",
@@ -305,9 +309,14 @@ export const S = {
     all: "Выбрать все",
     none: "Снять",
     start: "Запустить",
-    estimate: (n: number, minutes: number) => `${strategies(n)}, около ${minutes} мин; zapret на это время остановится`,
+    estimate: (n: number, minutes: number, repeats = 1) =>
+      `${strategies(n)}${repeats > 1 ? ` × ${repeats} прох.` : ""}, около ${minutes} мин; zapret на это время остановится`,
+    repeats: "Повторов",
+    repeatsHint:
+      "Сколько раз проверить каждую стратегию: столько полных проходов по списку, чтобы колебания сети легли на все стратегии поровну. Ошибки складываются, задержка — медиана проходов.",
     preparing: "Подготовка…",
-    progress: (index: number, total: number, name: string) => `Стратегия ${index} из ${total}: ${name}`,
+    progress: (index: number, total: number, name: string, pass = 1, passes = 1) =>
+      `${passes > 1 ? `Проход ${pass} из ${passes} · ` : ""}Стратегия ${index} из ${total}: ${name}`,
     restoring: "Возвращаю службу, ipset и winws как было…",
     runTitle: (date: string, suite: string) => `Прогон ${date} · ${suite}`,
     versions: (flowseal: string | null, zapret2?: string | null) =>
