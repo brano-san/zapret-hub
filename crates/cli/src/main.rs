@@ -136,7 +136,8 @@ enum Command {
 enum SettingsCommand {
     /// All settings.
     Get,
-    /// Change one setting; an empty value clears zapret_dir and socks5.
+    /// Change one setting; an empty value clears zapret_dir and socks5, and a relative zapret_dir
+    /// is made absolute from the current directory.
     Set { key: Key, value: String },
 }
 
