@@ -194,8 +194,13 @@ pub fn gate(line: &[u8], enabled: bool) -> Result<Request, Response> {
     struct Version {
         v: u32,
     }
-    let unparsable =
-        |err: serde_json::Error| Response::refused(format!("the request does not parse: {err}"));
+    // serde quotes the request (an unknown `cmd` as sent): one line, so the journal's
+    // `cli: refused: …` cannot carry a forged line of its own.
+    let unparsable = |err: serde_json::Error| {
+        Response::refused(
+            format!("the request does not parse: {err}").replace(char::is_control, " "),
+        )
+    };
     // The version first: a newer CLI's unknown command must read as a version mismatch.
     let Version { v } = serde_json::from_slice(line).map_err(unparsable)?;
     if v != PROTOCOL {
@@ -453,6 +458,14 @@ mod tests {
             refusal(br#"{"v":2,"cmd":"format_disk"}"#, true),
             "protocol v2 is not supported: update zapret-hub-cli.exe and Zapret Hub together"
         );
+    }
+
+    #[test]
+    fn a_refusal_is_one_line_whatever_the_request_holds() {
+        // serde names an unknown `cmd` as sent; the app journals the reason as `cli: refused: …`.
+        let reason = refusal(br#"{"v":1,"cmd":"x\ncli: apply_best: ok"}"#, true);
+        assert!(!reason.contains(char::is_control), "{reason:?}");
+        assert!(reason.contains("x cli: apply_best: ok"), "{reason}");
     }
 
     #[test]

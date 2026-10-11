@@ -72,6 +72,8 @@ export async function start(): Promise<void> {
   try {
     await events.stateChanged.listen(() => {
       app.revision++;
+      // zapret-hub-cli saves settings too: the window reads them again (CLI spec 8).
+      void loadSettings();
       void refreshOverview();
     });
     await events.noticesChanged.listen(() => void pullNotices());

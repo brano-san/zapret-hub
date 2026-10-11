@@ -5,7 +5,8 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-pub const TASK: &str = "Zapret Hub";
+/// `zapret-hub-cli start` runs it by this name.
+pub const TASK: &str = cli::AUTOSTART_TASK;
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 fn escape(text: &str) -> String {

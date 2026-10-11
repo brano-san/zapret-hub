@@ -328,6 +328,8 @@ export type Settings = {
 	start_minimized?: boolean,
 	theme?: Theme,
 	wizard_done?: boolean,
+	/**  The pipe of `zapret-hub-cli` runs commands (CLI spec 5). */
+	cli_enabled?: boolean,
 };
 
 /**  zapret, the settings or the history changed: the page reads what it shows again. */

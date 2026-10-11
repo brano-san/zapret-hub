@@ -80,7 +80,7 @@ fn on_progress(app: &AppHandle, progress: Progress) {
 
 fn finish(app: &AppHandle, outcome: anyhow::Result<TestRun>) {
     let state = state(app);
-    let run_id = match outcome {
+    let (run_id, last) = match outcome {
         Ok(run) => {
             if let Some(err) = &run.restore_error {
                 actions::notice(
@@ -100,17 +100,16 @@ fn finish(app: &AppHandle, outcome: anyhow::Result<TestRun>) {
             if run.suite == Suite::Standard && !run.canceled {
                 state.set_ranking(Some(run));
             }
-            Some(id)
+            (Some(id.clone()), cli::Outcome::Run { run_id: id })
         }
         Err(err) => {
             let text = format!("{err:#}");
             notify::show(app, texts::TESTS_FAILED, &text);
-            actions::notice(app, NoticeLevel::Error, texts::TESTS_FAILED, text);
-            None
+            actions::notice(app, NoticeLevel::Error, texts::TESTS_FAILED, text.clone());
+            (None, cli::Outcome::Failed { error: text })
         }
     };
-    state.set_live(None);
-    state.end_testing();
+    state.end_testing(last);
     if let Err(err) = (TestsFinished { run_id }).emit(app) {
         log::warn!("cannot report the end of a test run: {err}");
     }

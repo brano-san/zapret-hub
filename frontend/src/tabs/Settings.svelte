@@ -1,15 +1,17 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { commands, type FolderCheck, type ProxyStatus, type Settings, type Theme } from "$lib/ipc/bindings";
   import { call } from "$lib/api";
   import { app, change, loadSettings } from "$lib/app.svelte";
+  import { follow } from "$lib/draft";
   import { ms } from "$lib/format";
   import { S } from "$lib/strings";
 
   const THEMES: Theme[] = ["system", "light", "dark"];
 
-  // A copy to edit, saved as a whole.
+  // A copy to edit, saved as a whole, and the settings it was last copied from.
   let draft = $state<Settings | null>(null);
+  let from: Settings | null = null;
   let folder = $state<FolderCheck | null>(null);
   let proxy = $state<ProxyStatus | null>(null);
   let saved = $state(false);
@@ -43,16 +45,27 @@
     };
     saved = false;
     if ((await change(S.failed.settings, () => commands.saveSettings(settings))) !== undefined) {
+      // Saved: the copy counts as unedited again, so the settings read back replace it.
+      from = $state.snapshot(draft);
       await loadSettings();
       saved = true;
     }
   }
 
-  onMount(() => {
-    if (app.settings) draft = { ...app.settings };
-    void checkFolder();
-    void commands.appVersion().then((v) => (version = v));
+  // Each read of the settings: the first, after a save, after every StateChanged.
+  $effect(() => {
+    const next = app.settings;
+    if (!next) return;
+    untrack(() => {
+      const copy = follow(draft, from, next);
+      if (copy === draft) return;
+      draft = copy;
+      from = next;
+      void checkFolder();
+    });
   });
+
+  onMount(() => void commands.appVersion().then((v) => (version = v)));
 </script>
 
 {#if draft}
@@ -94,7 +107,13 @@
     </div>
   </section>
 
-  <!-- One button for the three cards above: they are saved together. -->
+  <section class="card">
+    <h2>{S.settings.cli}</h2>
+    <label class="inline"><input type="checkbox" bind:checked={draft.cli_enabled} /> {S.settings.cliEnabled}</label>
+    <p class="muted">{S.settings.cliHint}</p>
+  </section>
+
+  <!-- One button for the four cards above: they are saved together. -->
   <div class="buttons">
     <button class="primary" disabled={app.busy} onclick={save}>{S.common.save}</button>
     {#if saved}<span class="ok">{S.settings.saved}</span>{/if}

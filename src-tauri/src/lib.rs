@@ -2,6 +2,7 @@
 
 mod actions;
 mod autostart;
+mod cli;
 mod commands;
 mod dto;
 mod jobs;
@@ -170,6 +171,7 @@ pub fn run() -> anyhow::Result<()> {
                 window::show(app.handle());
             }
             jobs::start(app.handle());
+            cli::start(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())?

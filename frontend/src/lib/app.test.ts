@@ -1,7 +1,7 @@
 import { beforeEach, expect, test, vi } from "vitest";
 import { notices } from "./notices.svelte";
 import { S } from "./strings";
-import { start } from "./app.svelte";
+import { app, start } from "./app.svelte";
 
 // `app.svelte` asks for `matchMedia` when it is imported and `applyTheme` writes to `document`: Node has neither.
 const ipc = vi.hoisted(() => {
@@ -9,7 +9,7 @@ const ipc = vi.hoisted(() => {
     matchMedia: () => ({ matches: false, addEventListener: () => {} }),
     document: { documentElement: { dataset: {} } },
   });
-  return { log: [] as string[], failing: "" };
+  return { log: [] as string[], failing: "", settings: {} as object, stateChanged: () => {} };
 });
 
 vi.mock("./ipc/bindings", () => {
@@ -17,18 +17,28 @@ vi.mock("./ipc/bindings", () => {
     ipc.log.push("listen");
     return () => {};
   };
-  const read = (name: string, value: unknown) => async () => {
+  const read = (name: string, value: () => unknown) => async () => {
     ipc.log.push(name);
     if (name === ipc.failing) throw new Error(`${name} is down`);
-    return value;
+    return value();
   };
   return {
-    events: { stateChanged: { listen }, noticesChanged: { listen }, testProgress: { listen }, testsFinished: { listen } },
+    events: {
+      stateChanged: {
+        listen: async (handler: () => void) => {
+          ipc.stateChanged = handler;
+          return listen();
+        },
+      },
+      noticesChanged: { listen },
+      testProgress: { listen },
+      testsFinished: { listen },
+    },
     commands: {
-      getSettings: read("getSettings", {}),
-      takeNotices: read("takeNotices", []),
-      testLive: read("testLive", null),
-      getOverview: read("getOverview", { status: "ok", data: {} }),
+      getSettings: read("getSettings", () => ipc.settings),
+      takeNotices: read("takeNotices", () => []),
+      testLive: read("testLive", () => null),
+      getOverview: read("getOverview", () => ({ status: "ok", data: {} })),
     },
   };
 });
@@ -36,6 +46,7 @@ vi.mock("./ipc/bindings", () => {
 beforeEach(() => {
   ipc.log.length = 0;
   ipc.failing = "";
+  ipc.settings = {};
   notices.items = [];
 });
 
@@ -49,4 +60,13 @@ test.each(["getSettings", "takeNotices", "testLive"])("a rejected %s becomes an 
   ipc.failing = name;
   await start();
   expect(notices.items).toEqual([{ level: "Error", title: S.failed.start, text: `Error: ${name} is down` }]);
+});
+
+test("a StateChanged reads the settings again: zapret-hub-cli saves them too", async () => {
+  await start();
+  ipc.settings = { theme: "dark", cli_enabled: false };
+  ipc.log.length = 0;
+  ipc.stateChanged();
+  expect(ipc.log).toEqual(["getSettings", "getOverview"]);
+  await vi.waitFor(() => expect(app.settings).toEqual({ theme: "dark", cli_enabled: false }));
 });

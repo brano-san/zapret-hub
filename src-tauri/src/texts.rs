@@ -65,6 +65,10 @@ pub const AUTOSTART_FAILED: &str = "Автозапуск не обновлён";
 pub const HISTORY_FAILED: &str = "История тестов не прочитана";
 pub const RESTORE_AFTER_TESTS: &str = "После тестов не всё вернулось на место";
 
+pub const CLI_PIPE_BUSY: &str = "Канал CLI занят другой программой";
+pub const CLI_PIPE_FAILED: &str = "Канал CLI не открыт";
+pub const CLI_PIPE_STOPPED: &str = "Канал CLI остановлен";
+
 pub const TESTS_DONE: &str = "Тесты завершены";
 pub const TESTS_CANCELED: &str = "Тесты отменены";
 pub const TESTS_FAILED: &str = "Тесты не выполнены";

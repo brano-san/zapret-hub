@@ -27,6 +27,8 @@ pub struct Settings {
     pub start_minimized: bool,
     pub theme: Theme,
     pub wizard_done: bool,
+    /// The pipe of `zapret-hub-cli` runs commands (CLI spec 5).
+    pub cli_enabled: bool,
 }
 
 impl Default for Settings {
@@ -38,6 +40,7 @@ impl Default for Settings {
             start_minimized: true,
             theme: Theme::System,
             wizard_done: false,
+            cli_enabled: false,
         }
     }
 }
@@ -97,6 +100,10 @@ mod tests {
             Settings::default()
         );
         assert!(Settings::default().start_minimized);
+        assert!(
+            !Settings::default().cli_enabled,
+            "off until the user turns it on"
+        );
     }
 
     #[test]
@@ -110,6 +117,7 @@ mod tests {
             start_minimized: false,
             theme: Theme::Dark,
             wizard_done: true,
+            cli_enabled: true,
         };
         save(&path, &settings).unwrap();
         assert_eq!(load(&path).unwrap(), settings);

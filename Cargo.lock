@@ -4985,10 +4985,12 @@ name = "zapret-hub"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cli",
  "exec",
  "log",
  "probe",
  "serde",
+ "serde_json",
  "specta",
  "specta-typescript",
  "tauri",

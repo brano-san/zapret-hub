@@ -69,6 +69,8 @@ pub struct AppState {
     /// A Flowseal version newer than the folder's.
     update: Mutex<Option<String>>,
     notices: Mutex<Vec<Notice>>,
+    /// How the newest run since the start ended: `tests_status` (CLI spec 7.1).
+    last_outcome: Mutex<Option<cli::Outcome>>,
 }
 
 impl AppState {
@@ -84,6 +86,7 @@ impl AppState {
             ranking: Mutex::new(None),
             update: Mutex::new(None),
             notices: Mutex::new(Vec::new()),
+            last_outcome: Mutex::new(None),
         }
     }
 
@@ -127,8 +130,16 @@ impl AppState {
         began
     }
 
-    pub fn end_testing(&self) {
+    /// The outcome is in place before `testing` turns false: whoever polls `tests_status` never
+    /// sees a finished run with the previous run's outcome (CLI spec 7.1).
+    pub fn end_testing(&self, outcome: cli::Outcome) {
+        *lock(&self.last_outcome) = Some(outcome);
+        self.set_live(None);
         self.testing.store(false, Ordering::SeqCst);
+    }
+
+    pub fn last_outcome(&self) -> Option<cli::Outcome> {
+        lock(&self.last_outcome).clone()
     }
 
     pub fn cancel_tests(&self) {
@@ -288,7 +299,35 @@ mod tests {
         assert!(!state.begin_testing(), "a second run must not start");
         let err = state.change(|_| Ok(())).unwrap_err();
         assert!(format!("{err:#}").contains("test run"), "{err:#}");
-        state.end_testing();
+        state.end_testing(cli::Outcome::Failed {
+            error: "canceled".into(),
+        });
         assert!(!state.testing());
+    }
+
+    #[test]
+    fn a_run_ends_with_its_outcome_in_place() {
+        use tester::model::Suite;
+        use tester::run::Request;
+
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path());
+        assert!(state.begin_testing());
+        state.set_live(Some(LiveRun {
+            request: Request {
+                suite: Suite::Standard,
+                strategies: vec!["general".into()],
+            },
+            current: Some(0),
+            restoring: false,
+            results: Vec::new(),
+        }));
+        let saved = cli::Outcome::Run {
+            run_id: "2026-10-11_10-00-00".into(),
+        };
+        state.end_testing(saved.clone());
+        assert!(!state.testing());
+        assert_eq!(state.live(), None);
+        assert_eq!(state.last_outcome(), Some(saved));
     }
 }
