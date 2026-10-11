@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StrategyResult } from "./ipc/bindings";
-import { blockSummary, estimateMinutes, foldersReady, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
+import { blockSummary, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, foldersReady, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
 import { S } from "./strings";
 
 describe("blockSummary", () => {
@@ -129,5 +129,32 @@ describe("repeats", () => {
   it("multiplies the estimate by the passes", () => {
     expect(estimateMinutes(8, "Standard")).toBe(2);
     expect(estimateMinutes(8, "Standard", 3)).toBe(6);
+  });
+});
+
+describe("circular labels", () => {
+  it("say what each instance does, not its arguments", () => {
+    expect(desyncLabel("fake:blob=tls_google:tcp_ts=-600000:repeats=8")).toBe("fake tls_google ×8");
+    expect(desyncLabel("multisplit:pos=1:seqovl=681:seqovl_pattern=tls_google")).toBe("multisplit 1 seqovl");
+    expect(desyncLabel("multidisorder:pos=midsld")).toBe("multidisorder midsld");
+    expect(variantLabel("--payload=tls_client_hello\n--lua-desync=fake:blob=tls_google:repeats=8\n# a note\n--lua-desync=multisplit")).toBe(
+      "fake tls_google ×8 + multisplit",
+    );
+    expect(variantLabel("# nothing yet")).toBe(S.circular.emptyVariant);
+  });
+
+  it("offer the usual lists and the strategy's own, once each", () => {
+    const choices = listChoices(['--filter-tcp=443 --hostlist="%LISTS%list-google.txt" --hostlist-exclude="%LISTS%x.txt"', "--ipset=my.txt"]);
+    expect(choices.map(([, label]) => label)).toEqual(["list-general.txt", "list-google.txt", "ipset-all.txt", "my.txt"]);
+    expect(circularFilter(" 80, 443", "tls,http", choices[0]![0])).toBe('--filter-tcp=80,443 --filter-l7=tls,http --hostlist="%LISTS%list-general.txt"');
+    expect(circularFilter("443", "", "")).toBe("--filter-tcp=443");
+  });
+
+  it("explain each merged profile", () => {
+    const note = { kind: "Missing", number: 3, filter: "--filter-tcp=443 --hostlist-domains=discord.media", names: ["mine"], variants: 0 } as const;
+    expect(mergeNote({ ...note, names: [...note.names] }, "ALT11")).toBe("Профиль 3 · TCP 443 · discord.media: нет в mine — взят из ALT11");
+    expect(mergeNote({ ...note, kind: "Rotates", names: ["ALT11", "mine"], variants: 2 }, "ALT11")).toBe(
+      "Профиль 3 · TCP 443 · discord.media: circular из 2 вариантов (ALT11, mine)",
+    );
   });
 });

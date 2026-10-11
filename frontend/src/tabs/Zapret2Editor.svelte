@@ -5,6 +5,7 @@
   import { app, change } from "$lib/app.svelte";
   import { ZAPRET2, nameError, quickSummary } from "$lib/format";
   import { S } from "$lib/strings";
+  import CircularBuilder from "../components/CircularBuilder.svelte";
 
   interface Props {
     /** Without the prefix: `mine` for `zapret2:mine`. */
@@ -28,6 +29,8 @@
   let text = $state<string | null>(null);
   let status = $state("");
   let loaded = $state(false);
+  /** The circular builder is open over the text. */
+  let circular = $state(false);
 
   onMount(async () => {
     if (initial !== undefined) {
@@ -68,7 +71,13 @@
     </div>
     {#if currentError}<p class="bad">{currentError}</p>{/if}
   {/if}
-  <p class="muted">{S.zapret2.hint}</p>
+  <div class="row">
+    <p class="muted grow">{S.zapret2.hint}</p>
+    <button onclick={() => (circular = !circular)}>{circular ? S.circular.hide : S.circular.open}</button>
+  </div>
+  {#if circular}
+    <CircularBuilder bind:text={() => text ?? "", (value) => (text = value)} />
+  {/if}
   <textarea rows="24" spellcheck="false" bind:value={text} aria-label={S.zapret2.text}></textarea>
   <div class="buttons">
     <span class="grow"></span>

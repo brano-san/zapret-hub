@@ -1,4 +1,4 @@
-import type { CheckLevel, CheckStatus, DpiStatus, FolderCheck, Info, QuickCheck, StrategyResult, Suite } from "./ipc/bindings";
+import type { CheckLevel, CheckStatus, DpiStatus, FolderCheck, Info, MergeNote, QuickCheck, StrategyResult, Suite } from "./ipc/bindings";
 import { S } from "./strings";
 
 export function ms(value: number | null | undefined): string {
@@ -24,13 +24,17 @@ export function zapret2Name(name: string): string | null {
   return name.startsWith(ZAPRET2) ? name.slice(ZAPRET2.length) : null;
 }
 
+/** `"%LISTS%list-general.txt"` → `list-general.txt`. */
+function file(path: string): string {
+  return path.replace(/"/g, "").replace(/^%\w+%/, "").split(/[\\/]/).pop() ?? path;
+}
+
 /** A block's card header (spec 6): protocol and ports, l7, the list or domains it is limited to. */
 export function blockSummary(block: string): string {
   const pick = (flag: string): string | undefined => {
     const match = new RegExp(`--${flag}=(?:"([^"]*)"|(\\S+))`).exec(block);
     return match?.[1] ?? match?.[2];
   };
-  const file = (path: string) => path.replace(/^%\w+%/, "").split(/[\\/]/).pop() ?? path;
   const parts: string[] = [];
   const tcp = pick("filter-tcp");
   const udp = pick("filter-udp");
@@ -145,4 +149,75 @@ export function localizeError(text: string): string {
   // `zapret::release::DEFENDER`.
   if (text.includes("blocked or removed by Windows Defender")) return `${S.download.defender}\n\n${text}`;
   return text;
+}
+
+/** `fake:blob=tls_google:tcp_ts=-600000:repeats=8` → `fake tls_google ×8`: the function, its blob, the cut and how many times. */
+export function desyncLabel(call: string): string {
+  const [name = "", ...args] = call.split(":");
+  const value = (key: string) => args.find((arg) => arg.startsWith(`${key}=`))?.slice(key.length + 1);
+  const parts = [name];
+  const blob = value("blob");
+  if (blob) parts.push(blob);
+  const pos = value("pos");
+  if (pos && /split|disorder/.test(name)) parts.push(pos);
+  if (value("seqovl")) parts.push("seqovl");
+  const repeats = value("repeats");
+  if (repeats) parts.push(`×${repeats}`);
+  return parts.join(" ");
+}
+
+/** A circular variant's text (`--payload=` and `--lua-desync=` lines) as `fake tls_google ×8 + multisplit 1 seqovl`. */
+export function variantLabel(text: string): string {
+  const calls = text
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("#"))
+    .flatMap((line) => line.trim().split(/\s+/))
+    .map((token) => token.replace(/"/g, ""))
+    .filter((token) => token.startsWith("--lua-desync="))
+    .map((token) => desyncLabel(token.slice("--lua-desync=".length)));
+  return calls.length > 0 ? calls.join(" + ") : S.circular.emptyVariant;
+}
+
+/** The builder's ready instances. The blobs tls_google and stun2 are added to a text that lacks them. */
+export const CIRCULAR_PRESETS = [
+  { label: "fake TLS google", line: "--lua-desync=fake:blob=tls_google:tcp_ts=-600000:repeats=8" },
+  { label: "fake stun2", line: "--lua-desync=fake:blob=stun2:tcp_ts=-600000:repeats=8" },
+  { label: "multisplit seqovl", line: "--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_google" },
+  { label: "multidisorder midsld", line: "--lua-desync=multidisorder:pos=midsld" },
+  { label: "fakedsplit", line: "--lua-desync=fakedsplit:pos=midsld:tcp_md5" },
+] as const;
+
+/** What a new circular profile starts with: ALT11's TLS desync, then multidisorder. */
+export const CIRCULAR_START = [`${CIRCULAR_PRESETS[0].line}\n${CIRCULAR_PRESETS[2].line}`, CIRCULAR_PRESETS[3].line];
+
+/** The lists a new profile can be limited to: Flowseal's usual ones and every `--hostlist=`/`--ipset=` the profiles use, as `[token, label]`. */
+export function listChoices(filters: string[]): [string, string][] {
+  const tokens = [
+    '--hostlist="%LISTS%list-general.txt"',
+    '--hostlist="%LISTS%list-google.txt"',
+    '--ipset="%LISTS%ipset-all.txt"',
+    ...filters.flatMap((filter) => filter.split(/\s+/).filter((token) => /^--(hostlist|ipset)=/.test(token))),
+  ];
+  return [...new Set(tokens)].map((token) => [token, file(token.slice(token.indexOf("=") + 1))]);
+}
+
+/** The filter of a new circular profile: TCP `ports`, `l7` (empty for any) and a list token. */
+export function circularFilter(ports: string, l7: string, list: string): string {
+  return [`--filter-tcp=${ports.replace(/\s+/g, "")}`, l7 ? `--filter-l7=${l7}` : "", list].filter(Boolean).join(" ");
+}
+
+/** A merge note in words; `first` is the strategy the rest comes from. */
+export function mergeNote(note: MergeNote, first: string): string {
+  const where = S.circular.profile(note.number, blockSummary(note.filter));
+  const text = S.circular.notes;
+  switch (note.kind) {
+    case "Rotates":
+      return text.Rotates(where, note.names, note.variants);
+    case "Same":
+      return text.Same(where);
+    case "BlobConflict":
+      return text.BlobConflict(note.filter, note.names, first);
+    default:
+      return text[note.kind](where, note.names, first);
+  }
 }
