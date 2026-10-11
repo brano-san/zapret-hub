@@ -40,7 +40,7 @@
 {#if app.overview}
   {@const o = app.overview}
   {@const locked = app.busy || o.testing}
-  {#if o.folder_error}
+  {#if o.folder_error && (o.folder || !o.zapret2.dir)}
     <section class="card">
       <h2 class="bad">{S.overview.folderProblem}</h2>
       <pre>{o.folder_error}</pre>
