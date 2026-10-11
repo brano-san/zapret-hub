@@ -368,8 +368,9 @@ mod tests {
     }
 
     /// Window commands the CLI leaves out (spec 6).
-    const WINDOW_ONLY: [&str; 6] = [
+    const WINDOW_ONLY: [&str; 7] = [
         "check_folder",
+        "check_zapret2_folder",
         "pick_folder",
         "open_url",
         "open_folder",

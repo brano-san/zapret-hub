@@ -56,6 +56,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::save_custom,
             commands::delete_custom,
             commands::zapret2_info,
+            commands::check_zapret2_folder,
             commands::validate_zapret2,
             commands::save_zapret2,
             commands::delete_zapret2,

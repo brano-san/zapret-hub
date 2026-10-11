@@ -33,6 +33,11 @@ export const commands = {
 	deleteCustom: (name: string) => typedError<null, string>(__TAURI_INVOKE("delete_custom", { name })),
 	/**  The zapret2 folder, its version and Lua compatibility, or why it cannot be used. */
 	zapret2Info: () => typedError<Info, string>(__TAURI_INVOKE("zapret2_info")),
+	/**
+	 *  A zapret2 folder the first-run wizard was given, before it is saved: the same check as
+	 *  `zapret2_info`. Window only: the pipe cannot choose the folder (zapret2 spec 10).
+	 */
+	checkZapret2Folder: (path: string) => typedError<Info, string>(__TAURI_INVOKE("check_zapret2_folder", { path })),
 	/**  The zapret2 editor's «Проверить»: the whole check of zapret2 spec 5.3, nothing saved. */
 	validateZapret2: (text: string) => typedError<null, string>(__TAURI_INVOKE("validate_zapret2", { text })),
 	/**  `name` without the prefix: `mine` for `zapret2:mine`. */

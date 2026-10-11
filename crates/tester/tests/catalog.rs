@@ -92,7 +92,8 @@ fn rows_carry_custom_active_errors_and_stale_results() {
     };
     history::save(&history::dir(data.path()), &run).unwrap();
 
-    let rows = tester::catalog::rows(&folder, None, &store, data.path(), Some("GENERAL")).unwrap();
+    let rows =
+        tester::catalog::rows(Some(&folder), None, &store, data.path(), Some("GENERAL")).unwrap();
     let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
     assert_eq!(
         names,
@@ -112,7 +113,7 @@ fn rows_carry_custom_active_errors_and_stale_results() {
     assert!(helper.error.as_deref().unwrap().contains("no winws.exe"));
 
     let detail = tester::catalog::detail(
-        &folder,
+        Some(&folder),
         None,
         &store,
         data.path(),
@@ -150,10 +151,10 @@ fn zapret2_rows_follow_flowseals_with_their_checks_and_results() {
     };
     history::save(&history::dir(data.path()), &run).unwrap();
 
-    let without = tester::catalog::rows(&folder, None, &store, data.path(), None).unwrap();
+    let without = tester::catalog::rows(Some(&folder), None, &store, data.path(), None).unwrap();
     assert!(without.iter().all(|row| !row.name.starts_with("zapret2:")));
     let rows = tester::catalog::rows(
-        &folder,
+        Some(&folder),
         Some(&engine),
         &store,
         data.path(),
@@ -185,7 +186,7 @@ fn zapret2_rows_follow_flowseals_with_their_checks_and_results() {
     assert!(!mine.last.as_ref().unwrap().stale);
 
     let detail = tester::catalog::detail(
-        &folder,
+        Some(&folder),
         Some(&engine),
         &store,
         data.path(),
@@ -210,9 +211,50 @@ fn zapret2_rows_follow_flowseals_with_their_checks_and_results() {
     assert!(detail.result.is_some());
 
     zapret2::strategies::write(data.path(), "mine", &text.replace("udp=443", "udp=80")).unwrap();
-    let rows = tester::catalog::rows(&folder, Some(&engine), &store, data.path(), None).unwrap();
+    let rows =
+        tester::catalog::rows(Some(&folder), Some(&engine), &store, data.path(), None).unwrap();
     assert!(
         rows[4].last.as_ref().unwrap().stale,
         "an edit makes the result stale"
+    );
+}
+
+#[test]
+fn zapret2_alone_lists_its_strategies_and_names_what_needs_flowseal() {
+    let engine_dir = fake_zapret2();
+    let engine = zapret2::Engine::open(engine_dir.path()).unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let store = Store::new(data.path().join("strategies"));
+    let text = "--wf-tcp-out=443 --lua-init=@\"%LUA%zapret-lib.lua\"\n\
+                --filter-tcp=443 --lua-desync=fake:blob=fake_default_tls\n";
+    zapret2::strategies::write(data.path(), "mine", text).unwrap();
+    let rows = tester::catalog::rows(None, Some(&engine), &store, data.path(), None).unwrap();
+    let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["zapret2:general", "zapret2:general-sni", "zapret2:mine"]
+    );
+    // The built-in ones run on Flowseal's lists.
+    assert!(
+        rows[0].error.as_deref().unwrap().contains("%LISTS%"),
+        "{:?}",
+        rows[0]
+    );
+    assert_eq!(rows[2].error, None);
+    let detail = tester::catalog::detail(
+        None,
+        Some(&engine),
+        &store,
+        data.path(),
+        None,
+        "zapret2:mine",
+    )
+    .unwrap();
+    assert!(detail.final_args.is_some());
+    let err = tester::catalog::detail(None, Some(&engine), &store, data.path(), None, "general")
+        .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("zapret folder is not set"),
+        "{err:#}"
     );
 }

@@ -37,11 +37,13 @@ pub struct Snapshot {
     /// zapret2, whose restore leaves zapret2 alone.
     #[serde(default)]
     pub zapret2: bool,
-    pub ipset: IpsetMode,
+    /// The Flowseal files below: `None` (and `false`) when no Flowseal folder was set, as when
+    /// zapret2 runs alone.
+    pub ipset: Option<IpsetMode>,
     pub ipset_backup: bool,
     /// The flag file `utils\game_filter.enabled`, which the `game_filter` operation writes
     /// before it reinstalls the service.
-    pub game_filter: GameFilter,
+    pub game_filter: Option<GameFilter>,
 }
 
 /// `data/state/pending.json`
@@ -52,7 +54,7 @@ pub fn pending_path(data_dir: &Path) -> PathBuf {
 /// Starts a mutating operation (spec 10). A `pending` file an earlier operation left is restored
 /// first; when that fails, or the file cannot be read, nothing starts and the file stays. After a
 /// successful restore the file is removed; then the state is taken and written to `pending`.
-pub fn begin(folder: &Folder, operation: &str, pending: &Path) -> anyhow::Result<Snapshot> {
+pub fn begin(folder: Option<&Folder>, operation: &str, pending: &Path) -> anyhow::Result<Snapshot> {
     let file = pending.display();
     let earlier = Snapshot::load(pending).map_err(|err| {
         anyhow::anyhow!(
@@ -83,7 +85,8 @@ pub fn begin(folder: &Folder, operation: &str, pending: &Path) -> anyhow::Result
 impl Snapshot {
     /// Fails closed: what it cannot read would be restored as something else, so an operation
     /// does not start on it.
-    pub fn take(folder: &Folder, operation: &str) -> anyhow::Result<Self> {
+    /// Without a Flowseal `folder` only the services and processes are recorded.
+    pub fn take(folder: Option<&Folder>, operation: &str) -> anyhow::Result<Self> {
         let (service, strategy, manual_winws) = engine(SERVICE, "winws.exe", operation)?;
         let (service2, strategy2, manual_winws2) = engine(SERVICE2, WINWS2, operation)?;
         Ok(Self {
@@ -95,9 +98,9 @@ impl Snapshot {
             strategy2,
             manual_winws2,
             zapret2: true,
-            ipset: ipset::try_mode(folder)?,
-            ipset_backup: ipset::has_backup(folder),
-            game_filter: game_filter::try_read(folder)?,
+            ipset: folder.map(ipset::try_mode).transpose()?,
+            ipset_backup: folder.is_some_and(ipset::has_backup),
+            game_filter: folder.map(game_filter::try_read).transpose()?,
         })
     }
 
@@ -141,18 +144,29 @@ impl Snapshot {
 
     /// The files: the DPI test switch undone, the ipset mode and the game filter as they were. The
     /// game filter is written only when it reads differently, so a file edited by hand stays.
-    pub fn restore_files(&self, folder: &Folder) -> anyhow::Result<()> {
+    /// Nothing to do when the snapshot recorded no Flowseal files; an error when it did and there
+    /// is no folder to put them back in.
+    pub fn restore_files(&self, folder: Option<&Folder>) -> anyhow::Result<()> {
+        let (Some(mode), Some(filter)) = (self.ipset, &self.game_filter) else {
+            return Ok(());
+        };
+        let folder = folder.ok_or_else(|| {
+            anyhow::anyhow!(
+                "the ipset mode and the game filter cannot be put back: {}",
+                crate::folder::NOT_SET
+            )
+        })?;
         ipset::leave_test_any(folder)?;
-        ipset::set_mode(folder, self.ipset)?;
-        if game_filter::read(folder) != self.game_filter {
-            game_filter::write(folder, &self.game_filter)?;
+        ipset::set_mode(folder, mode)?;
+        if game_filter::read(folder) != *filter {
+            game_filter::write(folder, filter)?;
         }
         Ok(())
     }
 
     /// Everything. Every step is tried even after one fails; the failures come back together.
     /// zapret2 is part of it only when the snapshot recorded it.
-    pub fn restore(&self, folder: &Folder) -> anyhow::Result<()> {
+    pub fn restore(&self, folder: Option<&Folder>) -> anyhow::Result<()> {
         let mut errors: Vec<String> = Vec::new();
         let mut note = |step: &str, result: anyhow::Result<()>| {
             if let Err(err) = result {

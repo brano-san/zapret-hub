@@ -122,7 +122,7 @@ fn live_every_built_in_strategy_passes_the_whole_check() {
 #[ignore = "needs admin rights, a zapret2 release in ZAPRET2_DIR and E:\\Zapret; replaces the zapret and zapret2 services"]
 fn live_apply_zapret2_then_flowseal_back() {
     let (engine, folder, data) = live();
-    let check = zapret2::service::apply(&engine, &folder, data.path(), "general").unwrap();
+    let check = zapret2::service::apply(&engine, Some(&folder), data.path(), "general").unwrap();
     eprintln!("zapret2: {check:?}");
     assert_eq!(active(), (SERVICE2, zapret::service::WINWS2));
     assert_eq!(strategy().as_deref(), Some("zapret2:general"));
@@ -146,7 +146,7 @@ fn live_a_game_filter_change_reinstalls_zapret2() {
         ),
     )
     .unwrap();
-    zapret2::service::apply(&engine, &folder, data.path(), "game").unwrap();
+    zapret2::service::apply(&engine, Some(&folder), data.path(), "game").unwrap();
     zapret2::service::reinstall_active(Some(&engine), &folder, data.path()).unwrap();
     let image = zapret::service::config(SERVICE2).unwrap().image_path;
     let filter = zapret::game_filter::read(&folder).vars();

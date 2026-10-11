@@ -2,6 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
+/// What every operation that needs the Flowseal folder says without one.
+pub const NOT_SET: &str = "the zapret folder is not set: choose it in Settings";
+
 /// A Flowseal folder that has what `service.bat` needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Folder {

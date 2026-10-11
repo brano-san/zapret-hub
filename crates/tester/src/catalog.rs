@@ -51,10 +51,10 @@ pub struct StrategyDetail {
     pub source: String,
 }
 
-/// Every strategy file in `service.bat`'s order, then zapret2's (with `engine2`); `active` is the
-/// registry's strategy name.
+/// Every strategy file in `service.bat`'s order (with a Flowseal `folder`), then zapret2's (with
+/// `engine2`); `active` is the registry's strategy name.
 pub fn rows(
-    folder: &Folder,
+    folder: Option<&Folder>,
     engine2: Option<&Engine>,
     store: &Store,
     data_dir: &Path,
@@ -62,10 +62,12 @@ pub fn rows(
 ) -> anyhow::Result<Vec<StrategyRow>> {
     let records = store.list()?;
     let latest = crate::history::latest_results(&crate::history::dir(data_dir))?;
-    let mut rows: Vec<StrategyRow> = zapret::strategies::list(folder)?
-        .iter()
-        .map(|file| flowseal_row(folder, &records, &latest, active, file))
-        .collect();
+    let mut rows: Vec<StrategyRow> = Vec::new();
+    if let Some(folder) = folder {
+        for file in zapret::strategies::list(folder)? {
+            rows.push(flowseal_row(folder, &records, &latest, active, &file));
+        }
+    }
     if let Some(engine) = engine2 {
         for strategy in zapret2::strategies::list(data_dir)? {
             rows.push(zapret2_row(engine, folder, &latest, active, &strategy).0);
@@ -76,7 +78,7 @@ pub fn rows(
 
 /// Flowseal's or zapret2's card, by the name's prefix (zapret2 spec 3.1).
 pub fn detail(
-    folder: &Folder,
+    folder: Option<&Folder>,
     engine2: Option<&Engine>,
     store: &Store,
     data_dir: &Path,
@@ -104,6 +106,7 @@ pub fn detail(
             source: strategy.text,
         });
     }
+    let folder = folder.ok_or_else(|| anyhow::anyhow!(zapret::folder::NOT_SET))?;
     let file = zapret::strategies::find(folder, name)?;
     let records = store.list()?;
     let row = flowseal_row(folder, &records, &latest, active, &file);
@@ -141,12 +144,12 @@ fn flowseal_row(
 /// The row and, when the placeholders could be filled, the command line.
 fn zapret2_row(
     engine: &Engine,
-    folder: &Folder,
+    folder: Option<&Folder>,
     latest: &HashMap<String, Latest>,
     active: Option<&str>,
     strategy: &Strategy,
 ) -> (StrategyRow, Option<String>) {
-    let tail = zapret2::strategies::tail(engine, Some(folder), &strategy.text);
+    let tail = zapret2::strategies::tail(engine, folder, &strategy.text);
     let sha256 = match &tail {
         Ok(tail) => {
             zapret2::strategies::check(engine, tail).map(|()| zapret::sha256_hex(tail.as_bytes()))

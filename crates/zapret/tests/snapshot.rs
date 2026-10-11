@@ -42,9 +42,9 @@ fn sample(ipset: IpsetMode) -> Snapshot {
             args: vec!["--wf-tcp-out=443".into()],
         }],
         zapret2: true,
-        ipset,
+        ipset: Some(ipset),
         ipset_backup: false,
-        game_filter: filter(GameFilterMode::Tcp, "2000-2100", "1024-65535"),
+        game_filter: Some(filter(GameFilterMode::Tcp, "2000-2100", "1024-65535")),
     }
 }
 
@@ -126,7 +126,7 @@ fn begin_with_nothing_pending_takes_and_saves_a_snapshot() {
     let data = tempfile::tempdir().unwrap();
     let pending = pending_path(data.path());
 
-    let snap = snapshot::begin(&folder, "tests", &pending).unwrap();
+    let snap = snapshot::begin(Some(&folder), "tests", &pending).unwrap();
     assert_eq!(snap.operation, "tests");
     assert!(snap.zapret2, "a snapshot taken now records zapret2");
     assert_eq!(Snapshot::load(&pending).unwrap(), Some(snap));
@@ -141,7 +141,7 @@ fn begin_does_not_start_over_a_damaged_pending_json() {
     fs::create_dir_all(pending.parent().unwrap()).unwrap();
     fs::write(&pending, "{").unwrap();
 
-    let err = snapshot::begin(&folder, "tests", &pending)
+    let err = snapshot::begin(Some(&folder), "tests", &pending)
         .unwrap_err()
         .to_string();
     assert!(err.contains("pending.json"), "{err}");
@@ -161,7 +161,7 @@ fn begin_says_how_to_get_past_a_pending_json_it_cannot_read() {
     fs::create_dir_all(&pending).unwrap(); // reading it fails with Access denied
     let err = format!(
         "{:#}",
-        snapshot::begin(&folder, "tests", &pending).unwrap_err()
+        snapshot::begin(Some(&folder), "tests", &pending).unwrap_err()
     );
     for part in ["pending.json", "did not start", "Deleting"] {
         assert!(err.contains(part), "{part}: {err}");
@@ -181,7 +181,7 @@ fn begin_does_not_start_without_the_whole_state() {
     for (file, text) in [(&ipset, "1.1.1.0/24\r\n"), (&filter, "mode=all\r\n")] {
         fs::write(file, text).unwrap();
         let lock = common::lock_reads(file);
-        let began = snapshot::begin(&folder, "ipset", &pending);
+        let began = snapshot::begin(Some(&folder), "ipset", &pending);
         drop(lock);
         let err = format!("{:#}", began.unwrap_err());
         assert!(err.contains(&file.display().to_string()), "{err}");
@@ -198,11 +198,11 @@ fn restore_files_returns_the_ipset_after_a_killed_run() {
     let snap = sample(IpsetMode::Loaded);
 
     zapret::ipset::enter_test_any(&folder).unwrap(); // the app was killed during the DPI suite
-    snap.restore_files(&folder).unwrap();
+    snap.restore_files(Some(&folder)).unwrap();
     assert_eq!(fs::read_to_string(&list).unwrap(), "1.1.1.0/24\r\n");
 
     zapret::ipset::set_mode(&folder, IpsetMode::None).unwrap(); // a mode switch that failed later
-    snap.restore_files(&folder).unwrap();
+    snap.restore_files(Some(&folder)).unwrap();
     assert_eq!(fs::read_to_string(&list).unwrap(), "1.1.1.0/24\r\n");
 }
 
@@ -212,13 +212,35 @@ fn restore_files_returns_the_game_filter_a_failed_change_left_behind() {
     let folder = common::folder(&dir);
     let before = filter(GameFilterMode::Tcp, "2000-2100", "1024-65535");
     game_filter::write(&folder, &before).unwrap();
-    let snap = Snapshot::take(&folder, "game_filter").unwrap();
-    assert_eq!(snap.game_filter, before);
+    let snap = Snapshot::take(Some(&folder), "game_filter").unwrap();
+    assert_eq!(snap.game_filter.as_ref(), Some(&before));
 
     // The change writes the file first and reinstalls the service after it, which failed.
     game_filter::write(&folder, &filter(GameFilterMode::Udp, "1024-65535", "3000")).unwrap();
-    snap.restore_files(&folder).unwrap();
+    snap.restore_files(Some(&folder)).unwrap();
     assert_eq!(game_filter::read(&folder), before);
+}
+
+#[test]
+fn without_a_flowseal_folder_only_recorded_files_need_one() {
+    let alone = Snapshot {
+        ipset: None,
+        ipset_backup: false,
+        game_filter: None,
+        ..sample(IpsetMode::Loaded)
+    };
+    alone.restore_files(None).unwrap();
+    let err = sample(IpsetMode::Loaded).restore_files(None).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("zapret folder is not set"),
+        "{err:#}"
+    );
+    // A folder chosen since is left alone: the snapshot holds nothing of it.
+    let dir = common::fake_zapret();
+    let folder = common::folder(&dir);
+    zapret::ipset::set_mode(&folder, IpsetMode::None).unwrap();
+    alone.restore_files(Some(&folder)).unwrap();
+    assert_eq!(zapret::ipset::mode(&folder), IpsetMode::None);
 }
 
 #[test]
@@ -228,9 +250,9 @@ fn restore_files_leaves_a_game_filter_file_that_reads_the_same() {
     let file = dir.path().join("utils").join("game_filter.enabled");
     let by_hand = "; my ports\r\nmode=all\r\ntcp=2000\r\n";
     fs::write(&file, by_hand).unwrap();
-    let snap = Snapshot::take(&folder, "tests").unwrap();
+    let snap = Snapshot::take(Some(&folder), "tests").unwrap();
 
-    snap.restore_files(&folder).unwrap();
+    snap.restore_files(Some(&folder)).unwrap();
     assert_eq!(fs::read_to_string(&file).unwrap(), by_hand);
 }
 
@@ -241,10 +263,10 @@ fn live_begin_restores_a_pending_json_first() {
     let data = tempfile::tempdir().unwrap();
     let pending = pending_path(data.path());
     // What an interrupted operation would have left: this machine's state as it is now.
-    let earlier = Snapshot::take(&folder, "apply").unwrap();
+    let earlier = Snapshot::take(Some(&folder), "apply").unwrap();
     earlier.save(&pending).unwrap();
 
-    let snap = snapshot::begin(&folder, "tests", &pending).unwrap();
+    let snap = snapshot::begin(Some(&folder), "tests", &pending).unwrap();
     assert_eq!(snap.operation, "tests");
     assert_eq!(
         snap.service, earlier.service,
@@ -261,7 +283,7 @@ fn live_begin_restores_a_pending_json_first() {
 #[ignore = "needs admin rights and the zapret service installed from E:\\Zapret"]
 fn live_snapshot_of_this_machine() {
     let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
-    let snap = Snapshot::take(&folder, "probe").unwrap();
+    let snap = Snapshot::take(Some(&folder), "probe").unwrap();
     eprintln!("{snap:#?}");
     assert_eq!(snap.operation, "probe");
     let service = snap

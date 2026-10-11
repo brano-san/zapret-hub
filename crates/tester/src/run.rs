@@ -59,9 +59,10 @@ const LUA_SETTLE: Duration = Duration::from_secs(2);
 
 /// What can fail is checked and fetched first, while zapret still works; then the state is saved,
 /// zapret stopped and the strategies run. The state is put back even when something panics (the
-/// panic goes on afterwards). `engine2` runs the `zapret2:` strategies.
+/// panic goes on afterwards). `folder` runs Flowseal's strategies, `engine2` the `zapret2:` ones:
+/// a run with only zapret2 strategies needs no Flowseal folder.
 pub fn run(
-    folder: &Folder,
+    folder: Option<&Folder>,
     engine2: Option<&Engine>,
     data_dir: &Path,
     request: &Request,
@@ -70,6 +71,7 @@ pub fn run(
     progress: &(dyn Fn(Progress) + Sync),
 ) -> anyhow::Result<TestRun> {
     request.check()?;
+    needs_flowseal(folder, request)?;
     let zapret2_version = zapret2_version(engine2, request)?;
     anyhow::ensure!(
         probe::curl::available(),
@@ -129,7 +131,7 @@ pub fn run(
     let run = TestRun {
         id,
         suite: request.suite,
-        flowseal_version: folder.version(),
+        flowseal_version: folder.and_then(Folder::version),
         zapret2_version,
         canceled,
         restore_error,
@@ -157,6 +159,18 @@ pub fn zapret2_version(
     Ok(Some(engine.version()?.text))
 }
 
+/// A Flowseal strategy without the Flowseal folder stops the run here, before anything changes.
+pub fn needs_flowseal(folder: Option<&Folder>, request: &Request) -> anyhow::Result<()> {
+    let flowseal = request
+        .strategies
+        .iter()
+        .find(|name| zapret2::strip_prefix(name).is_none());
+    if let (None, Some(name)) = (folder, flowseal) {
+        anyhow::bail!("{name} is a Flowseal strategy: {}", zapret::folder::NOT_SET);
+    }
+    Ok(())
+}
+
 /// What every strategy is checked against.
 enum Work {
     /// Targets with their `extra` flag.
@@ -167,14 +181,14 @@ enum Work {
 /// Reads or downloads what the checks need. The DPI suite takes up to a minute to fetch and needs
 /// the bypass, so this runs before zapret is stopped, and a failure leaves nothing to restore.
 fn prepare(
-    folder: &Folder,
+    folder: Option<&Folder>,
     data_dir: &Path,
     request: &Request,
     socks5: Option<&str>,
 ) -> anyhow::Result<Work> {
     Ok(match request.suite {
         Suite::Standard => {
-            let targets = zapret::targets::load(folder);
+            let targets = folder.map_or_else(zapret::targets::defaults, zapret::targets::load);
             let extra = crate::rank::extra_targets(&targets);
             Work::Standard(
                 targets
@@ -195,7 +209,7 @@ fn prepare(
 }
 
 fn run_strategies(
-    folder: &Folder,
+    folder: Option<&Folder>,
     engine2: Option<&Engine>,
     data_dir: &Path,
     request: &Request,
@@ -208,7 +222,8 @@ fn run_strategies(
         zapret::service::stop(service)?;
         zapret::procs::kill_all(image)?;
     }
-    if matches!(work, Work::Dpi(..)) {
+    // Every address through the ipset profiles; without Flowseal there are none.
+    if let (Work::Dpi(..), Some(folder)) = (work, folder) {
         zapret::ipset::enter_test_any(folder)?;
     }
     let total = request.strategies.len() as u32;
@@ -245,12 +260,13 @@ struct Launch {
 
 /// The one place a test run tells the engines apart (zapret2 spec 3.1): by the name's prefix.
 fn launch(
-    folder: &Folder,
+    folder: Option<&Folder>,
     engine2: Option<&Engine>,
     data_dir: &Path,
     name: &str,
 ) -> anyhow::Result<Launch> {
     let Some(name) = zapret2::strip_prefix(name) else {
+        let folder = folder.ok_or_else(|| anyhow::anyhow!(zapret::folder::NOT_SET))?;
         let file = zapret::strategies::find(folder, name)?;
         let parsed = zapret::batparse::parse_file(folder, &file.path)?;
         return Ok(Launch {
@@ -264,7 +280,7 @@ fn launch(
     let engine = engine2
         .ok_or_else(|| anyhow::anyhow!("the zapret2 folder is not set: choose it in Settings"))?;
     let strategy = zapret2::strategies::find(data_dir, name)?;
-    let tail = zapret2::strategies::tail(engine, Some(folder), &strategy.text)?;
+    let tail = zapret2::strategies::tail(engine, folder, &strategy.text)?;
     zapret2::strategies::check(engine, &tail)?;
     Ok(Launch {
         exe: engine.exe().to_path_buf(),
@@ -278,7 +294,7 @@ fn launch(
 }
 
 fn run_one(
-    folder: &Folder,
+    folder: Option<&Folder>,
     engine2: Option<&Engine>,
     data_dir: &Path,
     name: &str,

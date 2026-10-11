@@ -130,7 +130,7 @@ pub async fn list_strategies(handle: AppHandle) -> Answer<Vec<StrategyRow>> {
         let state = app(&handle);
         let active = zapret::service::strategy();
         tester::catalog::rows(
-            &state.folder()?,
+            state.folder_if_set()?.as_ref(),
             state.engine2().ok().flatten().as_ref(),
             &state.store(),
             &state.paths.data(),
@@ -153,7 +153,7 @@ pub async fn get_strategy(handle: AppHandle, name: String) -> Answer<StrategyDet
             state.engine2().ok().flatten()
         };
         tester::catalog::detail(
-            &state.folder()?,
+            state.folder_if_set()?.as_ref(),
             engine2.as_ref(),
             &state.store(),
             &state.paths.data(),
@@ -247,6 +247,14 @@ pub async fn zapret2_info(handle: AppHandle) -> Answer<zapret2::Info> {
     .await
 }
 
+/// A zapret2 folder the first-run wizard was given, before it is saved: the same check as
+/// `zapret2_info`. Window only: the pipe cannot choose the folder (zapret2 spec 10).
+#[tauri::command]
+#[specta::specta]
+pub async fn check_zapret2_folder(path: String) -> Answer<zapret2::Info> {
+    blocking(move || Ok(zapret2::info(Some(&path)))).await
+}
+
 /// The zapret2 editor's «Проверить»: the whole check of zapret2 spec 5.3, nothing saved.
 #[tauri::command]
 #[specta::specta]
@@ -254,8 +262,8 @@ pub async fn validate_zapret2(handle: AppHandle, text: String) -> Answer<()> {
     blocking(move || {
         let state = app(&handle);
         let engine = state.engine2_required()?;
-        state.change(|folder| {
-            let tail = zapret2::strategies::tail(&engine, Some(folder), &text)?;
+        state.change_any(|folder| {
+            let tail = zapret2::strategies::tail(&engine, folder, &text)?;
             zapret2::service::validate(&engine, &tail)
         })
     })
@@ -281,8 +289,9 @@ pub async fn delete_zapret2(handle: AppHandle, name: String) -> Answer<()> {
     blocking(move || {
         let state = app(&handle);
         let active = zapret::service::strategy();
-        let deleted = state
-            .change(|_| zapret2::strategies::delete(&state.paths.data(), &name, active.as_deref()));
+        let deleted = state.change_any(|_| {
+            zapret2::strategies::delete(&state.paths.data(), &name, active.as_deref())
+        });
         actions::changed(&handle);
         deleted
     })
@@ -484,7 +493,7 @@ pub async fn clear_discord_cache() -> Answer<Vec<CacheReport>> {
 #[specta::specta]
 pub async fn remove_service(handle: AppHandle) -> Answer<()> {
     blocking(move || {
-        let done = app(&handle).change_safely("remove_service", |_| zapret::service::remove());
+        let done = app(&handle).change_any_safely("remove_service", |_| zapret::service::remove());
         actions::changed(&handle);
         done
     })

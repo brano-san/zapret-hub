@@ -20,7 +20,8 @@ pub fn start_tests(app: &AppHandle, request: Request) -> anyhow::Result<()> {
         "choose at least one strategy"
     );
     let state = state(app);
-    let folder = state.folder()?;
+    // A run of zapret2 strategies alone needs no Flowseal folder (`tester::run::needs_flowseal`).
+    let folder = state.folder_if_set()?;
     // Only a run with zapret2 strategies needs zapret2: then a folder that opens, or the reason.
     let engine2 = if request
         .strategies
@@ -48,7 +49,7 @@ pub fn start_tests(app: &AppHandle, request: Request) -> anyhow::Result<()> {
             // `run` puts zapret back before it passes a panic on: here the run only has to end.
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 tester::run::run(
-                    &folder,
+                    folder.as_ref(),
                     engine2.as_ref(),
                     &state.paths.data(),
                     &request,
@@ -253,7 +254,9 @@ fn recover(app: &AppHandle) {
         "unfinished operation {} found, restoring",
         snapshot.operation
     );
-    let restored = state.folder().and_then(|folder| snapshot.restore(&folder));
+    let restored = state
+        .folder_if_set()
+        .and_then(|folder| snapshot.restore(folder.as_ref()));
     match restored.and_then(|()| Snapshot::clear(&pending)) {
         Ok(()) => actions::notice(
             app,

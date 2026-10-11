@@ -414,11 +414,14 @@ pub struct QuickCheck {
 }
 
 /// 5.4: the active engine's process runs and the first two URL targets answer `HTTP:OK`.
-pub fn quick_check(folder: &Folder) -> QuickCheck {
+/// The first two targets of the Flowseal folder's `targets.txt`, or of the built-in list without
+/// one (zapret2 alone).
+pub fn quick_check(folder: Option<&Folder>) -> QuickCheck {
     let (service, image) = active();
     let service = state(service);
     let winws_running = crate::procs::is_running(image);
-    let checks: Vec<QuickItem> = crate::targets::load(folder)
+    let checks: Vec<QuickItem> = folder
+        .map_or_else(crate::targets::defaults, crate::targets::load)
         .into_iter()
         .filter_map(|target| Some((target.name, target.url?)))
         .take(2)
@@ -447,5 +450,5 @@ pub fn apply(folder: &Folder, name: &str) -> anyhow::Result<QuickCheck> {
     let parsed = crate::batparse::parse_file(folder, &file.path)?;
     install(folder, &file.name, &parsed)?;
     std::thread::sleep(Duration::from_secs(2));
-    Ok(quick_check(folder))
+    Ok(quick_check(Some(folder)))
 }

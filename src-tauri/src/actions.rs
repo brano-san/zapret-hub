@@ -58,16 +58,16 @@ fn finish_with_check(
 }
 
 /// «Применить» (spec 5.4). A `zapret2:` name goes to zapret2 (zapret2 spec 3.1, 6); its folder
-/// is opened first, so a broken one changes nothing.
+/// is opened first, so a broken one changes nothing. zapret2 needs no Flowseal folder.
 pub fn apply(app: &AppHandle, name: &str) -> anyhow::Result<QuickCheck> {
     let state = state(app);
     let result = match zapret2::strip_prefix(name) {
         Some(name) => state.engine2_required().and_then(|engine| {
             let data = state.paths.data();
             // The check runs first: a failure changes nothing, no snapshot, no restart (spec 6).
-            let (strategy, tail) =
-                state.change(|folder| zapret2::service::prepare(&engine, folder, &data, name))?;
-            state.change_safely("apply", |folder| {
+            let (strategy, tail) = state
+                .change_any(|folder| zapret2::service::prepare(&engine, folder, &data, name))?;
+            state.change_any_safely("apply", |folder| {
                 zapret2::service::install_checked(&engine, folder, &strategy, &tail)
             })
         }),
@@ -86,7 +86,7 @@ pub fn apply_best(app: &AppHandle) -> anyhow::Result<QuickCheck> {
 }
 
 pub fn restart(app: &AppHandle) -> anyhow::Result<QuickCheck> {
-    let result = state(app).change(|folder| {
+    let result = state(app).change_any(|folder| {
         zapret::service::restart(active().0)?;
         // winws needs a moment before it intercepts anything (spec 5.4).
         std::thread::sleep(Duration::from_secs(2));
@@ -99,7 +99,7 @@ pub fn restart(app: &AppHandle) -> anyhow::Result<QuickCheck> {
 /// and during a test run (`change` refuses it) it would check the strategy under test. A refusal
 /// changes nothing, so it is not announced.
 pub fn quick_check(app: &AppHandle) -> anyhow::Result<QuickCheck> {
-    let check = state(app).change(|folder| Ok(zapret::service::quick_check(folder)))?;
+    let check = state(app).change_any(|folder| Ok(zapret::service::quick_check(folder)))?;
     finish_with_check(app, Ok(check))
 }
 
@@ -188,15 +188,15 @@ pub fn save_zapret2(
     let active = zapret::service::strategy();
     if !create && active.is_some_and(|active| active.eq_ignore_ascii_case(&full)) {
         // The check runs first: a failure changes nothing (spec 6).
-        let (claimed, tail) = state.change(|folder| {
-            zapret2::service::check_save(&engine, Some(folder), &data, name, text, false)
+        let (claimed, tail) = state.change_any(|folder| {
+            zapret2::service::check_save(&engine, folder, &data, name, text, false)
         })?;
         let saved = zapret2::strategies::Strategy {
             name: claimed,
             text: text.to_owned(),
             builtin: false,
         };
-        let result = state.change_safely("custom", |folder| {
+        let result = state.change_any_safely("custom", |folder| {
             zapret2::strategies::write(&data, &saved.name, text)?;
             zapret2::service::install(&engine, &saved, &tail)?;
             // winws2 needs a moment before it intercepts anything (spec 5.4).
@@ -206,7 +206,7 @@ pub fn save_zapret2(
         return finish_with_check(app, result).map(Some);
     }
     let result = state
-        .change(|folder| zapret2::service::save(&engine, Some(folder), &data, name, text, create));
+        .change_any(|folder| zapret2::service::save(&engine, folder, &data, name, text, create));
     changed(app);
     result.map(|_| None)
 }
@@ -243,13 +243,13 @@ pub fn prepare_folder(app: &AppHandle) {
 
 pub fn overview(app: &AppHandle) -> Overview {
     let state = state(app);
-    let folder = state.folder();
+    let folder = state.folder_if_set();
     let settings = state.settings();
     let (service, image) = active();
     Overview {
+        folder_error: folder_error(&folder, settings.zapret2_dir.is_some()),
         folder: settings.zapret_dir,
-        folder_error: folder.as_ref().err().map(|err| format!("{err:#}")),
-        version: folder.as_ref().ok().and_then(Folder::version),
+        version: folder.ok().flatten().as_ref().and_then(Folder::version),
         update: state.update(),
         service_name: service.to_owned(),
         service: zapret::service::state(service),
@@ -260,6 +260,16 @@ pub fn overview(app: &AppHandle) -> Overview {
         quick: state.quick(),
         last_run: state.last_run(),
         testing: state.testing(),
+    }
+}
+
+/// A Flowseal folder that does not open, or none at all while zapret2 is off too: zapret2 alone
+/// needs no Flowseal folder.
+fn folder_error(folder: &anyhow::Result<Option<Folder>>, zapret2: bool) -> Option<String> {
+    match folder {
+        Err(err) => Some(format!("{err:#}")),
+        Ok(None) if !zapret2 => Some(zapret::folder::NOT_SET.to_owned()),
+        Ok(_) => None,
     }
 }
 
@@ -364,6 +374,21 @@ pub fn open_folder(app: &AppHandle, kind: FolderKind) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_overview_wants_a_flowseal_folder_only_without_zapret2() {
+        assert_eq!(
+            folder_error(&Ok(None), false).as_deref(),
+            Some(zapret::folder::NOT_SET)
+        );
+        assert_eq!(folder_error(&Ok(None), true), None);
+        let broken = Err(anyhow::anyhow!(r"E:\Zapret is not a zapret folder"));
+        assert!(
+            folder_error(&broken, true)
+                .unwrap()
+                .contains("not a zapret folder")
+        );
+    }
 
     #[test]
     fn the_zapret2_folder_is_data_zapret2_and_is_created() {

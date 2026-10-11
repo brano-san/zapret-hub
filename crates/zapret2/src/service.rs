@@ -79,12 +79,12 @@ pub fn install(engine: &Engine, strategy: &Strategy, tail: &str) -> anyhow::Resu
 /// The check of «Применить» (spec 6), run before any snapshot so that a failure changes nothing.
 pub fn prepare(
     engine: &Engine,
-    folder: &Folder,
+    folder: Option<&Folder>,
     data_dir: &Path,
     name: &str,
 ) -> anyhow::Result<(Strategy, String)> {
     let strategy = strategies::find(data_dir, name)?;
-    let tail = strategies::tail(engine, Some(folder), &strategy.text)?;
+    let tail = strategies::tail(engine, folder, &strategy.text)?;
     validate(engine, &tail)?;
     Ok((strategy, tail))
 }
@@ -92,7 +92,7 @@ pub fn prepare(
 /// «Применить» after `prepare`: the service, and after 2 s the quick check (spec 6).
 pub fn install_checked(
     engine: &Engine,
-    folder: &Folder,
+    folder: Option<&Folder>,
     strategy: &Strategy,
     tail: &str,
 ) -> anyhow::Result<QuickCheck> {
@@ -104,7 +104,7 @@ pub fn install_checked(
 /// «Применить» for `zapret2:<name>`: the check while nothing has changed yet, then the service.
 pub fn apply(
     engine: &Engine,
-    folder: &Folder,
+    folder: Option<&Folder>,
     data_dir: &Path,
     name: &str,
 ) -> anyhow::Result<QuickCheck> {
