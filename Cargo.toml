@@ -14,6 +14,7 @@ exec = { path = "crates/exec" }
 probe = { path = "crates/probe" }
 zapret = { path = "crates/zapret" }
 tester = { path = "crates/tester" }
+cli = { path = "crates/cli" }
 
 anyhow = "1.0"
 log = "0.4"
