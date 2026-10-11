@@ -63,3 +63,11 @@ export function estimateMinutes(count: number, suite: Suite): number {
 export const statusClass: Record<CheckStatus, string> = { Ok: "ok", Ssl: "bad", Unsup: "warn", Error: "bad" };
 export const dpiClass: Record<DpiStatus, string> = { Ok: "ok", Fail: "warn", Unsupported: "muted", LikelyBlocked: "bad" };
 export const levelClass: Record<CheckLevel, string> = { Ok: "ok", Warn: "warn", Problem: "bad" };
+
+/** The newest run of each suite, Standard first. `runs` come newest first, as `listRuns` returns them. */
+export function latestPerSuite<T extends { suite: Suite }>(runs: T[]): T[] {
+  return (["Standard", "Dpi"] as const).flatMap((suite) => {
+    const run = runs.find((item) => item.suite === suite);
+    return run ? [run] : [];
+  });
+}

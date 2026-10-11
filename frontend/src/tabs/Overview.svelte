@@ -1,14 +1,23 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { commands, type ProxyStatus } from "$lib/ipc/bindings";
+  import { commands, type ProxyStatus, type RunSummary } from "$lib/ipc/bindings";
   import { call } from "$lib/api";
   import { app, change, refreshOverview } from "$lib/app.svelte";
-  import { ms, runDate } from "$lib/format";
+  import { latestPerSuite, ms, runDate } from "$lib/format";
   import { LINKS, S } from "$lib/strings";
 
   let proxy = $state<ProxyStatus | null>(null);
   let proxyBusy = $state(false);
   let upToDate = $state(false);
+  let runs = $state<RunSummary[]>([]);
+
+  // The newest run of each kind: a DPI run does not hide the last standard one.
+  const latest = $derived(latestPerSuite(runs));
+
+  $effect(() => {
+    void app.overview?.last_run?.id;
+    void call(S.failed.runs, commands.listRuns()).then((list) => (runs = list ?? []));
+  });
 
   async function checkProxy(): Promise<void> {
     const addr = app.settings?.socks5;
@@ -110,14 +119,21 @@
 
     <section class="card">
       <h2>{S.overview.lastTest}</h2>
-      {#if o.last_run?.best && o.last_run.best_score}
-        {@const score = o.last_run.best_score}
-        <p>{S.overview.best}: <strong>{o.last_run.best}</strong></p>
-        <p>{S.overview.errors(score.total - score.ok, score.total, ms(score.median_ms))}</p>
-        <p class="muted">{runDate(o.last_run.id)}</p>
+      {#each latest as run (run.id)}
+        <h3>{run.suite === "Standard" ? S.tests.standard : S.tests.dpi}</h3>
+        {#if run.best && run.best_score}
+          {@const score = run.best_score}
+          <p>{S.overview.best}: <strong>{run.best}</strong></p>
+          <p>
+            {run.suite === "Standard"
+              ? S.overview.errors(score.total - score.ok, score.total, ms(score.median_ms))
+              : S.strategies.dpiScore(score.likely_blocked, score.fail)}
+          </p>
+        {/if}
+        <p class="muted">{runDate(run.id)}</p>
       {:else}
         <p class="muted">{S.overview.noTests}</p>
-      {/if}
+      {/each}
       <div class="buttons">
         <button
           class="primary"

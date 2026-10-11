@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockSummary, runDate, zapret2Name } from "./format";
+import { blockSummary, latestPerSuite, runDate, zapret2Name } from "./format";
 
 describe("blockSummary", () => {
   it("names the protocol, the ports and what the block is limited to", () => {
@@ -27,5 +27,18 @@ describe("runDate", () => {
   it("turns a run id into a date and a time", () => {
     expect(runDate("2026-10-10_05-03-34")).toBe("10.10.2026 05:03");
     expect(runDate("odd")).toBe("odd");
+  });
+});
+
+describe("latestPerSuite", () => {
+  it("keeps the newest run of each suite, whichever ran last", () => {
+    const runs = [
+      { id: "c", suite: "Dpi" as const },
+      { id: "b", suite: "Standard" as const },
+      { id: "a", suite: "Dpi" as const },
+    ];
+    expect(latestPerSuite(runs).map((run) => run.id)).toEqual(["b", "c"]);
+    expect(latestPerSuite(runs.slice(0, 1)).map((run) => run.id)).toEqual(["c"]);
+    expect(latestPerSuite([])).toEqual([]);
   });
 });
