@@ -66,6 +66,13 @@ pub struct Candidates {
     pub proxies: Vec<String>,
 }
 
+/// What the wizard finds before the user picks anything: one folder per engine.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct Detected {
+    pub flowseal: Option<FolderCheck>,
+    pub zapret2: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub enum NoticeLevel {
     Error,

@@ -11,6 +11,7 @@ export const commands = {
 	getOverview: () => typedError<Overview, string>(__TAURI_INVOKE("get_overview")),
 	checkProxy: (addr: string) => typedError<ProxyStatus, string>(__TAURI_INVOKE("check_proxy", { addr })),
 	wizardCandidates: () => typedError<Candidates, string>(__TAURI_INVOKE("wizard_candidates")),
+	detectFolders: () => typedError<Detected, string>(__TAURI_INVOKE("detect_folders")),
 	checkFolder: (path: string) => typedError<FolderCheck, string>(__TAURI_INVOKE("check_folder", { path })),
 	pickFolder: () => typedError<string | null, string>(__TAURI_INVOKE("pick_folder")),
 	openUrl: (url: string) => typedError<null, string>(__TAURI_INVOKE("open_url", { url })),
@@ -148,6 +149,12 @@ export type CustomStrategy = {
 	wf: string,
 	/**  One entry per `--new` block, as the `.bat` has it (`%BIN%`, `%LISTS%`, `%GameFilter…%` kept). */
 	blocks: string[],
+};
+
+/**  What the wizard finds before the user picks anything: one folder per engine. */
+export type Detected = {
+	flowseal: FolderCheck | null,
+	zapret2: string | null,
 };
 
 export type DpiResult = {

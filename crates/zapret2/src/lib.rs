@@ -223,6 +223,24 @@ pub struct Info {
     pub error: Option<String>,
 }
 
+/// Whether `dir` (or its `zapret-winws`) has `winws2.exe` and `lua\zapret-lib.lua`: the cheap
+/// half of `Engine::open`, for searching.
+pub fn looks_like_zapret2(dir: &Path) -> bool {
+    [dir.to_path_buf(), dir.join("zapret-winws")]
+        .iter()
+        .any(|root| {
+            root.join("lua").join("zapret-lib.lua").is_file()
+                && EXE_DIRS
+                    .iter()
+                    .any(|sub| root.join(sub).join("winws2.exe").is_file())
+        })
+}
+
+/// The first of `dirs` that looks like an unpacked zapret2 release.
+pub fn find_zapret2(dirs: &[PathBuf]) -> Option<PathBuf> {
+    dirs.iter().find(|dir| looks_like_zapret2(dir)).cloned()
+}
+
 pub fn info(dir: Option<&str>) -> Info {
     let Some(dir) = dir else {
         return Info::default();
@@ -241,6 +259,29 @@ mod tests {
     use std::cell::Cell;
 
     use super::*;
+
+    #[test]
+    fn a_release_is_found_by_its_exe_and_lua() {
+        let tmp = tempfile::tempdir().unwrap();
+        let touch = |path: &Path| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        };
+        let release = tmp.path().join("zapret2");
+        let bundle = tmp.path().join("bundle");
+        let empty = tmp.path().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        touch(&release.join(r"binaries\windows-x86_64\winws2.exe"));
+        touch(&release.join(r"lua\zapret-lib.lua"));
+        touch(&bundle.join(r"zapret-winws\winws2.exe"));
+        touch(&bundle.join(r"zapret-winws\lua\zapret-lib.lua"));
+        assert!(looks_like_zapret2(&release) && looks_like_zapret2(&bundle));
+        assert!(!looks_like_zapret2(&empty));
+        assert_eq!(
+            find_zapret2(&[empty, bundle.clone(), release]),
+            Some(bundle)
+        );
+    }
 
     const LIB: &str = r"D:\zapret2\lua\zapret-lib.lua";
     const REQUIRES_6: &str = "NFQWS2_COMPAT_VER_REQUIRED=6\n";

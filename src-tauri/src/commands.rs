@@ -20,7 +20,9 @@ use zapret::service::{QuickCheck, active};
 use zapret::user_lists::UserList;
 
 use crate::actions::{self, state as app};
-use crate::dto::{Candidates, FlowsealState, FolderCheck, FolderKind, LiveRun, Notice, Overview};
+use crate::dto::{
+    Candidates, Detected, FlowsealState, FolderCheck, FolderKind, LiveRun, Notice, Overview,
+};
 use crate::settings::Settings;
 use crate::state::AppState;
 use crate::{texts, window};
@@ -86,6 +88,12 @@ pub async fn check_proxy(addr: String) -> Answer<ProxyStatus> {
 #[specta::specta]
 pub async fn wizard_candidates() -> Answer<Candidates> {
     blocking(|| Ok(actions::candidates())).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn detect_folders() -> Answer<Detected> {
+    blocking(|| Ok(actions::detect_folders())).await
 }
 
 #[tauri::command]

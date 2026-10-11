@@ -43,6 +43,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::get_overview,
             commands::check_proxy,
             commands::wizard_candidates,
+            commands::detect_folders,
             commands::check_folder,
             commands::pick_folder,
             commands::open_url,

@@ -12,7 +12,7 @@ use zapret::service::{QuickCheck, active};
 use zapret::user_lists::UserList;
 
 use crate::dto::{
-    Candidates, FlowsealState, FolderCheck, FolderKind, ListState, Notice, NoticeLevel,
+    Candidates, Detected, FlowsealState, FolderCheck, FolderKind, ListState, Notice, NoticeLevel,
     NoticesChanged, Overview, StateChanged,
 };
 use crate::settings::Settings;
@@ -301,6 +301,19 @@ pub fn check_folder(path: &Path) -> FolderCheck {
             .map(str::to_owned)
             .collect(),
         version: Folder::open(path).ok().and_then(|folder| folder.version()),
+    }
+}
+
+/// Where each engine's folder is, from the service, running processes and the cheap places a
+/// release is unpacked to (about a second at most).
+pub fn detect_folders() -> Detected {
+    let mut dirs = zapret::folder::candidates();
+    dirs.extend(zapret::folder::nearby_dirs(
+        std::time::Duration::from_millis(800),
+    ));
+    Detected {
+        flowseal: zapret::folder::find_flowseal(&dirs).map(|path| check_folder(&path)),
+        zapret2: zapret2::find_zapret2(&dirs).map(|path| path.display().to_string()),
     }
 }
 

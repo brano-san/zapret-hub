@@ -1,6 +1,7 @@
 //! Where the Flowseal folder is, whether it is complete, which version it is.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// What every operation that needs the Flowseal folder says without one.
 pub const NOT_SET: &str = "the zapret folder is not set: choose it in Settings";
@@ -120,4 +121,116 @@ pub fn candidates() -> Vec<PathBuf> {
         }
     }
     roots
+}
+
+/// The first of `dirs` that holds a usable Flowseal folder.
+pub fn find_flowseal(dirs: &[PathBuf]) -> Option<PathBuf> {
+    dirs.iter()
+        .find(|dir| dir.join("service.bat").is_file() && missing_parts(dir).is_empty())
+        .cloned()
+}
+
+/// The cheap places a release is unpacked to, each with its direct subfolders and nothing
+/// deeper: next to the app, Downloads, Desktop, Documents, Program Files, then drive roots.
+/// Stops listing when `budget` is spent; the order is the order of preference.
+pub fn nearby_dirs(budget: Duration) -> Vec<PathBuf> {
+    let deadline = Instant::now() + budget;
+    let var = |name: &str| std::env::var_os(name).map(PathBuf::from);
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(app) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+    {
+        roots.extend(app.parent().map(Path::to_path_buf));
+        roots.push(app);
+    }
+    if let Some(home) = var("USERPROFILE") {
+        roots.extend(["Downloads", "Desktop", "Documents"].map(|name| home.join(name)));
+    }
+    roots.extend(
+        ["ProgramFiles", "ProgramFiles(x86)"]
+            .iter()
+            .filter_map(|name| var(name)),
+    );
+    // SAFETY: no arguments, no pointers: a bit mask of the drives that exist.
+    let mask = unsafe { windows::Win32::Storage::FileSystem::GetLogicalDrives() };
+    roots.extend(
+        (0..26u8)
+            .filter(|bit| mask >> bit & 1 == 1)
+            .map(|bit| PathBuf::from(format!("{}:\\", char::from(b'A' + bit)))),
+    );
+    expand(&roots, deadline)
+}
+
+/// Each root, then its subfolders; a root that cannot be listed counts for itself only.
+fn expand(roots: &[PathBuf], deadline: Instant) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for root in roots {
+        if Instant::now() > deadline {
+            break;
+        }
+        if !root.is_dir() || dirs.contains(root) {
+            continue;
+        }
+        dirs.push(root.clone());
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if Instant::now() > deadline {
+                break;
+            }
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                dirs.push(entry.path());
+            }
+        }
+    }
+    dirs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flowseal(root: &Path) {
+        for file in ["service.bat", r"bin\winws.exe", r"bin\WinDivert64.sys"] {
+            let path = root.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        std::fs::create_dir_all(root.join("lists")).unwrap();
+    }
+
+    #[test]
+    fn a_subfolder_of_a_root_is_a_candidate_but_not_deeper() {
+        let tmp = tempfile::tempdir().unwrap();
+        let near = tmp.path().join("zapret-1.9");
+        let deep = tmp.path().join("a").join("b");
+        flowseal(&near);
+        flowseal(&deep);
+        let dirs = expand(
+            &[tmp.path().to_path_buf()],
+            Instant::now() + Duration::from_secs(5),
+        );
+        assert!(dirs.contains(&near) && !dirs.contains(&deep));
+        assert_eq!(find_flowseal(&dirs), Some(near));
+        assert_eq!(
+            find_flowseal(&[tmp.path().join("a")]),
+            None,
+            "an incomplete folder is skipped"
+        );
+    }
+
+    #[test]
+    fn a_spent_budget_lists_nothing_more() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("x")).unwrap();
+        assert!(
+            expand(
+                &[tmp.path().to_path_buf()],
+                Instant::now() - Duration::from_secs(1)
+            )
+            .is_empty()
+        );
+    }
 }
