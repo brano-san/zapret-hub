@@ -39,9 +39,12 @@
     flowseal = next;
   }
 
+  // zapret2 alone: the Flowseal settings and checks have no folder to read.
+  const hasFolder = $derived(Boolean(app.settings?.zapret_dir));
+
   $effect(() => {
     void app.revision;
-    void load();
+    if (hasFolder) void load();
   });
 
   async function applyFilter(): Promise<void> {
@@ -109,7 +112,40 @@
   }
 </script>
 
-{#if flowseal && filter}
+{#snippet engineCards()}
+  <section class="card">
+    <h2>{S.zapret.service}</h2>
+    <p class="muted">{S.zapret.serviceHint}</p>
+    <div class="buttons"><button class="danger" disabled={locked} onclick={removeService}>{S.zapret.remove}</button></div>
+  </section>
+
+  <section class="card">
+    <h2>{S.zapret.cache}</h2>
+    <div class="buttons"><button disabled={app.busy} onclick={clearCache}>{S.zapret.cacheButton}</button></div>
+    {#if cache}
+      {#if cache.length === 0}<p class="muted">{S.zapret.cacheNone}</p>{/if}
+      {#each cache as report (report.install)}
+        <h3>{report.install} {#if report.closed}<span class="muted">{S.zapret.cacheClosed}</span>{/if}</h3>
+        {#each report.dirs as dir (dir.path)}
+          <p class={dir.outcome === "Failed" ? "bad" : "muted"}>
+            {dir.path} — {S.zapret.cacheOutcome[dir.outcome]}{dir.error ? `: ${dir.error}` : ""}
+          </p>
+        {/each}
+      {/each}
+    {/if}
+  </section>
+{/snippet}
+
+{#if !hasFolder}
+  <div class="cards">
+    <section class="card">
+      <h2>{S.zapret.noFolder}</h2>
+      <p class="muted">{S.zapret.noFolderText}</p>
+      <div class="buttons"><button onclick={() => (app.tab = "settings")}>{S.overview.chooseFolder}</button></div>
+    </section>
+    {@render engineCards()}
+  </div>
+{:else if flowseal && filter}
   {@const f = flowseal}
   {#key rebuilt}
     <div class="cards">
@@ -186,27 +222,7 @@
         {/each}
       </section>
 
-      <section class="card">
-        <h2>{S.zapret.service}</h2>
-        <p class="muted">{S.zapret.serviceHint}</p>
-        <div class="buttons"><button class="danger" disabled={locked} onclick={removeService}>{S.zapret.remove}</button></div>
-      </section>
-
-      <section class="card">
-        <h2>{S.zapret.cache}</h2>
-        <div class="buttons"><button disabled={app.busy} onclick={clearCache}>{S.zapret.cacheButton}</button></div>
-        {#if cache}
-          {#if cache.length === 0}<p class="muted">{S.zapret.cacheNone}</p>{/if}
-          {#each cache as report (report.install)}
-            <h3>{report.install} {#if report.closed}<span class="muted">{S.zapret.cacheClosed}</span>{/if}</h3>
-            {#each report.dirs as dir (dir.path)}
-              <p class={dir.outcome === "Failed" ? "bad" : "muted"}>
-                {dir.path} — {S.zapret.cacheOutcome[dir.outcome]}{dir.error ? `: ${dir.error}` : ""}
-              </p>
-            {/each}
-          {/each}
-        {/if}
-      </section>
+      {@render engineCards()}
     </div>
   {/key}
 
@@ -222,33 +238,35 @@
   <p class="muted">{S.common.loading}</p>
 {/if}
 
-<section class="card">
-  <h2>{S.checks.title}</h2>
-  <div class="buttons"><button disabled={app.busy} onclick={runChecks}>{S.checks.run}</button></div>
-  {#if checks}
-    {#each checks as check (check.id)}
-      <div class="check">
-        <span class={levelClass[check.level]}>●</span>
-        <strong>{S.checks.names[check.id]}</strong>
-        <span class="muted">— {S.checks.level[check.level]}</span>
-        {#if check.level !== "Ok"}
-          <p class="hint">{S.checks.hints[check.id]}</p>
-          {#if check.detail}<pre>{check.detail}</pre>{/if}
-          <div class="buttons">
-            {#if S.checks.links[check.id]}
-              {@const url = S.checks.links[check.id] ?? ""}
-              <button class="link" onclick={() => call(S.failed.open, commands.openUrl(url))}>{S.checks.issue}</button>
-            {/if}
-            {#if check.action}
-              {@const action = check.action}
-              <button disabled={locked} onclick={() => fix(check, action)}>{S.checks.actions[action]}</button>
-            {/if}
-          </div>
-        {/if}
-      </div>
-    {/each}
-  {/if}
-</section>
+{#if hasFolder}
+  <section class="card">
+    <h2>{S.checks.title}</h2>
+    <div class="buttons"><button disabled={app.busy} onclick={runChecks}>{S.checks.run}</button></div>
+    {#if checks}
+      {#each checks as check (check.id)}
+        <div class="check">
+          <span class={levelClass[check.level]}>●</span>
+          <strong>{S.checks.names[check.id]}</strong>
+          <span class="muted">— {S.checks.level[check.level]}</span>
+          {#if check.level !== "Ok"}
+            <p class="hint">{S.checks.hints[check.id]}</p>
+            {#if check.detail}<pre>{check.detail}</pre>{/if}
+            <div class="buttons">
+              {#if S.checks.links[check.id]}
+                {@const url = S.checks.links[check.id] ?? ""}
+                <button class="link" onclick={() => call(S.failed.open, commands.openUrl(url))}>{S.checks.issue}</button>
+              {/if}
+              {#if check.action}
+                {@const action = check.action}
+                <button disabled={locked} onclick={() => fix(check, action)}>{S.checks.actions[action]}</button>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/each}
+    {/if}
+  </section>
+{/if}
 
 <style>
   .check {

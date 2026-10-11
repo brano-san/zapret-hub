@@ -101,7 +101,7 @@
       <label class="inline"><input type="radio" bind:group={suite} value="Dpi" /> {S.tests.dpi}</label>
     </div>
     <p class="muted">{suite === "Standard" ? S.tests.standardHint : S.tests.dpiHint}</p>
-    {@render group(S.tests.groupFlowseal, flowseal)}
+    {#if app.settings?.zapret_dir}{@render group(S.tests.groupFlowseal, flowseal)}{/if}
     {#if zapret2.length > 0}{@render group(S.tests.groupZapret2, zapret2)}{/if}
     <div class="buttons">
       <button class="primary" disabled={app.busy || chosen.length === 0} onclick={start}>{S.tests.start}</button>

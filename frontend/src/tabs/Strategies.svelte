@@ -116,7 +116,7 @@
           editing = null;
           editing2 = null;
           createError = "";
-          creating = { engine: "flowseal", name: "" };
+          creating = { engine: app.settings?.zapret_dir ? "flowseal" : "zapret2", name: "" };
         }}>{S.strategies.newStrategy}</button
       >
     </div>
@@ -179,7 +179,9 @@
     {:else if creating}
       <h2>{S.strategies.newTitle}</h2>
       <div class="row">
-        <label class="inline"><input type="radio" bind:group={creating.engine} value="flowseal" /> {S.strategies.engineFlowseal}</label>
+        {#if app.settings?.zapret_dir}
+          <label class="inline"><input type="radio" bind:group={creating.engine} value="flowseal" /> {S.strategies.engineFlowseal}</label>
+        {/if}
         {#if app.overview?.zapret2.dir}
           <label class="inline"><input type="radio" bind:group={creating.engine} value="zapret2" /> {S.strategies.engineZapret2}</label>
         {/if}

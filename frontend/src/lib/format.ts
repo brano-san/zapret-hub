@@ -1,4 +1,4 @@
-import type { CheckLevel, CheckStatus, DpiStatus, QuickCheck, Suite } from "./ipc/bindings";
+import type { CheckLevel, CheckStatus, DpiStatus, FolderCheck, Info, QuickCheck, Suite } from "./ipc/bindings";
 import { S } from "./strings";
 
 export function ms(value: number | null | undefined): string {
@@ -87,3 +87,12 @@ export const ZAPRET2_TEMPLATE = [
   "--lua-desync=multidisorder:pos=midsld",
   "",
 ].join("\n");
+
+/** The wizard's first step: at least one engine's folder works, and none chosen fails its check. */
+export function foldersReady(flowseal: FolderCheck | null, zapret2: Info | null): boolean {
+  const flowsealOk = flowseal !== null && flowseal.missing.length === 0;
+  const zapret2Ok = zapret2?.dir != null && zapret2.error === null;
+  const flowsealBad = flowseal !== null && !flowsealOk;
+  const zapret2Bad = zapret2?.dir != null && !zapret2Ok;
+  return (flowsealOk || zapret2Ok) && !flowsealBad && !zapret2Bad;
+}

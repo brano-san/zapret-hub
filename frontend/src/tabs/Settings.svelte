@@ -88,6 +88,7 @@
 {#if draft}
   <section class="card">
     <h2>{S.settings.folder}</h2>
+    <p class="muted">{S.settings.folderOptional}</p>
     <div class="row">
       <input class="grow" bind:value={draft.zapret_dir} onchange={checkFolder} placeholder={S.settings.folderHint} />
       <button onclick={pick}>{S.settings.pick}</button>

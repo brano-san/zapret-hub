@@ -142,12 +142,13 @@ export const S = {
   settings: {
     folder: "Папка zapret",
     folderHint: "Например, E:\\Zapret",
+    folderOptional: "Flowseal zapret-discord-youtube. Можно оставить пустой, если выбрана папка zapret2 ниже.",
     pick: "Выбрать…",
     missing: (parts: string[]) => `не хватает: ${parts.join(", ")}`,
     folderOk: (version: string | null) => (version ? `Flowseal ${version}` : "папка подходит"),
     zapret2: "Папка zapret2",
     zapret2Hint:
-      "Необязательно. Распакованный релиз bol-van/zapret2: его стратегии появятся рядом со стратегиями Flowseal. Пусто — zapret2 выключен. Нужна и папка zapret выше: списки и фейки берутся из неё.",
+      "Необязательно. Распакованный релиз bol-van/zapret2: его стратегии появятся рядом со стратегиями Flowseal. Пусто — zapret2 выключен. Без папки zapret выше работают только стратегии zapret2 без %LISTS%, %BIN% и %GameFilter%: встроенные берут списки и фейки из неё.",
     zapret2Example: "Например, D:\\zapret2",
     zapret2Ok: (version: string | null, compat: number | null) =>
       `zapret2 ${version ?? "?"}, совместимость Lua ${compat ?? "?"}`,
@@ -172,8 +173,16 @@ export const S = {
   wizard: {
     title: "Первый запуск",
     step: (n: number, total: number) => `Шаг ${n} из ${total}`,
-    folderTitle: "Где лежит zapret?",
-    folderText: "Папка Flowseal zapret-discord-youtube: в ней service.bat и папки bin и lists.",
+    folderTitle: "Где лежат zapret и zapret2?",
+    folderText: "Укажите хотя бы одну папку, вторую можно добавить позже в настройках.",
+    flowsealTitle: "zapret (Flowseal)",
+    flowsealText: "Папка Flowseal zapret-discord-youtube: в ней service.bat и папки bin и lists.",
+    noFlowseal: "Без zapret",
+    zapret2Title: "zapret2",
+    zapret2Text: "Распакованный релиз bol-van/zapret2: в нём winws2.exe и папка lua.",
+    zapret2Alone:
+      "Без папки zapret встроенные стратегии zapret2 не запустятся: они берут списки и фейки из Flowseal. Работают свои стратегии без %LISTS%, %BIN% и %GameFilter%.",
+    needOne: "Укажите хотя бы одну рабочую папку.",
     searching: "Ищу…",
     pickOther: "Выбрать другую…",
     later: "Настроить позже",
@@ -306,6 +315,8 @@ export const S = {
     runScore: (bad: number, total: number, latency: string) => `ошибок ${bad}/${total}, ${latency}`,
   },
   zapret: {
+    noFolder: "Папка zapret не выбрана",
+    noFolderText: "Game Filter, ipset, фейки, списки, hosts и проверки системы — настройки Flowseal: они появятся после выбора его папки. zapret2 работает и без неё.",
     service: "Служба",
     serviceHint: "Как «Remove Services» в service.bat: служба zapret или zapret2, процессы winws, затем WinDivert.",
     remove: "Удалить службу",

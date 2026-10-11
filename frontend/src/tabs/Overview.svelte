@@ -75,20 +75,23 @@
       </div>
     </section>
 
-    <section class="card">
-      <h2>{S.overview.flowseal}</h2>
-      <p>{S.overview.version(o.version)}</p>
-      {#if o.update}
-        {@const version = o.update}
-        <p class="warn">{S.overview.updateAvailable(version)}</p>
-        <button class="link" onclick={() => call(S.failed.open, commands.openUrl(LINKS.release(version)))}>
-          {S.overview.release}
-        </button>
-      {:else if upToDate}
-        <p class="ok">{S.overview.upToDate}</p>
-      {/if}
-      <div class="buttons"><button disabled={app.busy} onclick={checkUpdate}>{S.overview.checkUpdate}</button></div>
-    </section>
+    <!-- zapret2 alone: no Flowseal folder, nothing of it to show. -->
+    {#if o.folder}
+      <section class="card">
+        <h2>{S.overview.flowseal}</h2>
+        <p>{S.overview.version(o.version)}</p>
+        {#if o.update}
+          {@const version = o.update}
+          <p class="warn">{S.overview.updateAvailable(version)}</p>
+          <button class="link" onclick={() => call(S.failed.open, commands.openUrl(LINKS.release(version)))}>
+            {S.overview.release}
+          </button>
+        {:else if upToDate}
+          <p class="ok">{S.overview.upToDate}</p>
+        {/if}
+        <div class="buttons"><button disabled={app.busy} onclick={checkUpdate}>{S.overview.checkUpdate}</button></div>
+      </section>
+    {/if}
 
     <section class="card">
       <h2>{o.zapret2.dir ? S.overview.zapret2 : S.overview.zapret2Off}</h2>
