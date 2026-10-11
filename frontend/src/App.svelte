@@ -29,7 +29,6 @@
 {:else if app.settings}
   <div class="shell">
     <nav>
-      <span class="brand">{S.app}</span>
       {#each TABS as tab (tab.id)}
         <button class="tab" class:active={tab.id === current.id} onclick={() => (app.tab = tab.id)}>{tab.label}</button>
       {/each}
@@ -60,10 +59,6 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .brand {
-    margin-right: 16px;
-    font-weight: 600;
-  }
 
   .tab {
     border: none;

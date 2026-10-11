@@ -33,7 +33,6 @@ export const LINKS = {
 };
 
 export const S = {
-  app: "Zapret Hub",
   common: {
     cancel: "Отмена",
     close: "Закрыть",
