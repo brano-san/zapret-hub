@@ -92,3 +92,54 @@ fn shutdown_ends_a_waiting_recv() {
     );
     assert!(t.elapsed() < Duration::from_secs(1));
 }
+
+#[test]
+#[ignore = "opens WinDivert: run elevated with WINDIVERT_DLL and ROUTER_SOCKS5 (a working proxy) set"]
+fn a_running_router_relays_a_flow_through_the_proxy() {
+    use router::flows::Via;
+    use router::rules::{self, Protocol, Rule};
+    use router::{Router, RouterState, Setup, parse_proxy};
+
+    let dir = tempfile::tempdir().unwrap();
+    let r = Router::new(dir.path().join("routes.toml"));
+    let rule = Rule {
+        name: "dns".into(),
+        enabled: true,
+        protocol: Protocol::Udp,
+        ports: vec!["53".into()],
+        ips: vec!["1.1.1.1/32".into()],
+    };
+    r.edit(|list| rules::add(list, rule)).unwrap();
+    let proxy = parse_proxy(std::env::var("ROUTER_SOCKS5").ok().as_deref()).unwrap();
+    let dll = PathBuf::from(std::env::var("WINDIVERT_DLL").expect("set WINDIVERT_DLL"));
+    r.start(Setup { dll, proxy }).unwrap();
+    assert_eq!(r.status().state, RouterState::Running);
+
+    // A DNS query for example.com, type A.
+    let mut query = vec![0x12, 0x34, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+    for label in ["example", "com"] {
+        query.push(label.len() as u8);
+        query.extend_from_slice(label.as_bytes());
+    }
+    query.extend_from_slice(&[0, 0, 1, 0, 1]);
+    let s = UdpSocket::bind("0.0.0.0:0").unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    s.send_to(&query, "1.1.1.1:53").unwrap();
+    let mut buf = [0u8; 1500];
+    let (n, from) = s
+        .recv_from(&mut buf)
+        .expect("no DNS answer through the proxy");
+    assert_eq!(from.to_string(), "1.1.1.1:53");
+    assert!(n > 12 && buf[..2] == [0x12, 0x34], "not our answer");
+
+    let port = s.local_addr().unwrap().port();
+    let rows = r.flows(false);
+    let row = rows
+        .iter()
+        .find(|f| f.local_port == port && f.destination == "1.1.1.1:53")
+        .unwrap_or_else(|| panic!("no flow row: {rows:?}"));
+    assert_eq!(row.via, Via::Proxy, "{row:?}");
+    assert!(row.down > 0.0, "{row:?}");
+    r.stop();
+    assert_eq!(r.status().state, RouterState::Off);
+}
