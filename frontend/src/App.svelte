@@ -3,6 +3,7 @@
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
   import Notices from "./components/Notices.svelte";
   import Overview from "./tabs/Overview.svelte";
+  import Routes from "./tabs/Routes.svelte";
   import Settings from "./tabs/Settings.svelte";
   import Strategies from "./tabs/Strategies.svelte";
   import Tests from "./tabs/Tests.svelte";
@@ -16,6 +17,7 @@
     { id: "strategies", label: S.tabs.strategies, view: Strategies },
     { id: "tests", label: S.tabs.tests, view: Tests },
     { id: "zapret", label: S.tabs.zapret, view: Zapret },
+    { id: "routes", label: S.tabs.routes, view: Routes },
     { id: "settings", label: S.tabs.settings, view: Settings },
   ] satisfies { id: Tab; label: string; view: unknown }[];
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StrategyResult } from "./ipc/bindings";
-import { blockSummary, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, foldersReady, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
+import { blockSummary, bytes, proxyLabel, routeSummary, viaLabel,circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, foldersReady, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
 import { S } from "./strings";
 
 describe("blockSummary", () => {
@@ -156,5 +156,30 @@ describe("circular labels", () => {
     expect(mergeNote({ ...note, kind: "Rotates", names: ["ALT11", "mine"], variants: 2 }, "ALT11")).toBe(
       "Профиль 3 · TCP 443 · discord.media: circular из 2 вариантов (ALT11, mine)",
     );
+  });
+});
+
+describe("routes", () => {
+  const voice = { name: "Discord голос", enabled: true, protocol: "udp", ports: ["19294-19344", "50000-65535"], ips: ["104.29.0.0/16", "35.217.0.0/16"] } as const;
+  it("sums a rule up by protocol and subnets", () => {
+    expect(routeSummary({ ...voice, ports: [...voice.ports], ips: [...voice.ips] })).toBe("UDP · 2 подсети");
+    expect(routeSummary({ ...voice, ports: [], ips: ["1.1.1.1"] })).toBe("UDP · 1 подсеть");
+    expect(routeSummary({ ...voice, ports: [], ips: ["1", "2", "3", "4", "5"] })).toBe("UDP · 5 подсетей");
+  });
+  it("counts bytes the Russian way", () => {
+    expect(bytes(512)).toBe("512 Б");
+    expect(bytes(1536)).toBe("1,5 КБ");
+    expect(bytes(3 * 1024 * 1024)).toBe("3,0 МБ");
+    expect(bytes(2 * 1024 ** 3)).toBe("2,0 ГБ");
+  });
+  it("says how a flow goes", () => {
+    expect(viaLabel({ via: "Proxy" })).toBe("прокси");
+    expect(viaLabel({ via: "Opening" })).toBe("открывается");
+    expect(viaLabel({ via: "Direct", reason: { kind: "ProxyDown" } })).toBe("напрямую: прокси недоступен");
+    expect(viaLabel({ via: "Direct", reason: { kind: "Failed", error: "connection reset" } })).toBe("напрямую: connection reset");
+  });
+  it("says how the proxy is", () => {
+    expect(proxyLabel({ state: "Ok", latency_ms: 4 })).toBe("прокси отвечает · 4 мс");
+    expect(proxyLabel({ state: "Down", error: "refused" })).toBe("прокси недоступен, трафик идёт напрямую");
   });
 });

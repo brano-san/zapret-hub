@@ -3,7 +3,7 @@ import { call, type Answer } from "./api";
 import { notices } from "./notices.svelte";
 import { S } from "./strings";
 
-export type Tab = "overview" | "strategies" | "tests" | "zapret" | "settings";
+export type Tab = "overview" | "strategies" | "tests" | "zapret" | "routes" | "settings";
 
 class App {
   tab = $state<Tab>("overview");

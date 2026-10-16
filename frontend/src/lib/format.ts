@@ -1,5 +1,5 @@
-import type { CheckLevel, CheckStatus, DpiStatus, FolderCheck, Info, MergeNote, QuickCheck, StrategyResult, Suite } from "./ipc/bindings";
-import { S } from "./strings";
+import type { CheckLevel, CheckStatus, DpiStatus, FolderCheck, Info, MergeNote, ProxyState, QuickCheck, Rule, StrategyResult, Suite, Traffic, Via } from "./ipc/bindings";
+import { plural, S } from "./strings";
 
 export function ms(value: number | null | undefined): string {
   return value == null ? "—" : `${value} мс`;
@@ -220,4 +220,38 @@ export function mergeNote(note: MergeNote, first: string): string {
     default:
       return text[note.kind](where, note.names, first);
   }
+}
+
+/** A rule's line in the list: `UDP · 2 подсети`. */
+export function routeSummary(rule: Rule): string {
+  const protocol = rule.protocol === "both" ? "TCP/UDP" : rule.protocol.toUpperCase();
+  const n = rule.ips.length;
+  return `${protocol} · ${n} ${plural(n, ["подсеть", "подсети", "подсетей"])}`;
+}
+
+/** `1536` → `1,5 КБ`. */
+export function bytes(n: number): string {
+  const units = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
+  let unit = 0;
+  while (n >= 1024 && unit < units.length - 1) {
+    n /= 1024;
+    unit++;
+  }
+  return unit === 0 ? `${n} ${units[0]}` : `${n.toFixed(1).replace(".", ",")} ${units[unit]}`;
+}
+
+/** `3 потока · ↑ 1,5 КБ ↓ 2,0 МБ`. */
+export function trafficLabel(traffic: Traffic): string {
+  return `${S.routes.flowCount(traffic.flows)} · ↑ ${bytes(traffic.up ?? 0)} ↓ ${bytes(traffic.down ?? 0)}`;
+}
+
+export function viaLabel(via: Via): string {
+  if (via.via === "Proxy") return S.routes.viaProxy;
+  if (via.via === "Opening") return S.routes.viaOpening;
+  const reason = via.reason;
+  return S.routes.viaDirect(reason.kind === "Failed" ? reason.error : S.routes.reasons[reason.kind]);
+}
+
+export function proxyLabel(proxy: ProxyState): string {
+  return proxy.state === "Ok" ? S.routes.proxy.Ok(proxy.latency_ms) : S.routes.proxy[proxy.state];
 }
