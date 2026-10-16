@@ -131,6 +131,16 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `checks fix <action>` | исправление: `enable-tcp-timestamps`; `remove-windivert` и `remove-conflicts` — с `--yes` | `fix_check` |
 | `discord clear-cache --yes` | закрывает Discord и чистит его кэш | `clear_discord_cache` |
 | `service remove --yes` | удаляет службу zapret или zapret2 и WinDivert | `remove_service` |
+| `router on\|off` | включает или выключает маршрутизацию; пишет `router_enabled` | `set_router_enabled` |
+| `router status` | идёт ли маршрутизация, состояние прокси, счётчики | `router_status` |
+| `routes list` | правила, их состояние и ошибка файла `routes.toml` | `list_routes` |
+| `routes show <name>` | одно правило | `get_route` |
+| `routes add <name> --file <file\|->` | добавляет правило из файла с таблицей `[rule]` | `save_route` |
+| `routes edit <name> --file <file\|->` | заменяет правило из файла с таблицей `[rule]` | `save_route` |
+| `routes enable <name>`, `routes disable <name>` | включает и выключает правило | `set_route_enabled` |
+| `routes remove <name> --yes` | удаляет правило | `delete_route` |
+| `routes preset discord-voice` | добавляет готовое правило «Discord голос» | `add_route_preset` |
+| `routes flows [--all]` | открытые потоки; `--all` — и закрытые за последние 30 с | `route_flows` |
 
 `--yes` повторяет подтверждения окна и ставится в любом месте команды. Без него эти команды не отправляются:
 код 2.
@@ -140,7 +150,8 @@ PowerShell читает вывод программ в кодировке `[Cons
 - `check_folder`, `check_zapret2_folder` — открыли бы путь, переданный клиентом (второй ещё и запустил бы из него
   `winws2.exe`), а папки zapret и zapret2 CLI не меняет (раздел «Настройки»);
 - `take_notices` — забрал бы уведомления у окна;
-- `test_live` — его заменяет `tests status`.
+- `test_live` — его заменяет `tests status`;
+- `validate_route`, `import_route_lines` — проверка и импорт строк в редакторе правила окна.
 
 ## Настройки
 
@@ -184,6 +195,24 @@ Windows PowerShell 5.1 не передаёт программам пустой �
 ```
 zapret-hub-cli settings set socks5 '""'
 ```
+
+## Маршруты
+
+Правила маршрутизации через SOCKS5 (`data\routes.toml`). `routes add` и `routes edit` берут файл с таблицей
+`[rule]` без `name`: имя — аргумент команды. `-` — stdin.
+
+```toml
+[rule]
+enabled = true
+protocol = "udp"
+ports = ["19294-19344", "50000-65535"]
+ips = ["104.29.0.0/16", "35.217.0.0/16"]
+```
+
+`routes add mine --file rule.toml`. CLI проверяет файл до отправки (поля, подсети, порты; `domains` и `apps`
+пока не поддерживаются) и при ошибке выходит с кодом 2 и текстом с номером строки; приложению такой файл не уходит.
+`routes remove` без `--yes` — код 2. Битый `routes.toml` правка из CLI не перезаписывает: она отказывает, пока
+файл не исправлен. Включённость самой маршрутизации — `router on|off`; `settings set` её не трогает.
 
 ## Тесты
 
@@ -341,7 +370,7 @@ zapret-hub-cli apply zapret2:mine
 
 `zapret-hub-cli start` запускает задачу Планировщика «Zapret Hub». Её создаёт автозапуск приложения, и она
 запускает приложение с правами администратора без запроса UAC. Потом `start` до 30 с ждёт, пока приложение
-ответит, и печатает `{"app": "0.3.0"}`. Если приложение уже работает, задача не запускается: с включённым CLI
+ответит, и печатает `{"app": "0.4.0"}`. Если приложение уже работает, задача не запускается: с включённым CLI
 ответ приходит сразу, с выключенным — код 3 и отказ `the CLI is off: enable it in Zapret Hub → Settings`.
 
 Если автозапуск выключен, задачи нет: `start` выходит с кодом 3 и советует запустить `zapret-hub.exe` вручную
@@ -374,7 +403,7 @@ zapret-hub-cli apply zapret2:mine
    `cli: refused: the CLI is off…`.
 2. Флажок «Управление из командной строки» включён и сохранён: `status` → код 0, обзор; в журнале
    `cli: get_overview: ok`.
-3. `version` → `{"app": "0.3.0", "cli": "0.3.0", "protocol": 1}`, код 0.
+3. `version` → `{"app": "0.4.0", "cli": "0.4.0", "protocol": 1}`, код 0.
 4. `apply "general (ALT2)"` → код 0; окно и иконка трея сами показывают новую стратегию.
 5. `service remove` → код 2, служба на месте. `service remove --yes` → код 0, `sc query zapret` службу не
    находит. `apply "general (ALT2)"` возвращает её.
@@ -390,7 +419,7 @@ zapret-hub-cli apply zapret2:mine
    `status` и `start` → код 3, `the CLI is off…`. Включите флажок на вкладке снова и сохраните:
    `status` → код 0.
 10. Выход из приложения через трей: `status` → код 3, `Zapret Hub is not running…`. С включённым автозапуском
-    `start` → `{"app": "0.3.0"}` не позже чем через 30 с, приложение в трее; с выключенным — код 3 и совет.
+    `start` → `{"app": "0.4.0"}` не позже чем через 30 с, приложение в трее; с выключенным — код 3 и совет.
 11. Занятое имя: выйти из приложения, в обычном PowerShell выполнить
     `$p = [System.IO.Pipes.NamedPipeServerStream]::new('zapret-hub-cli')`, запустить приложение → уведомление
     «Канал CLI занят другой программой», в журнале `cli: \\.\pipe\zapret-hub-cli is not open: …`. Затем
@@ -402,3 +431,22 @@ zapret-hub-cli apply zapret2:mine
     код 0; `zapret2 save mine <файл> --create` → `{"ok": true}`; `apply zapret2:mine` → `sc query zapret2` — RUNNING,
     `sc query zapret` службу не находит; `apply general` → наоборот. `zapret2 delete mine` → код 2, с `--yes` →
     код 0.
+13. NekoBox с mixed inbound запущен, скрипт `discord-udp-proxy.ps1` закрыт. «Маршруты» → «Добавить из профиля» →
+    «Discord голос», переключатель «Маршрутизация» → в шапке «прокси отвечает», голосовой канал Discord соединяется,
+    в «Потоках» строки «прокси» с растущими ↑/↓; в журнале NekoBox — UDP к `104.29.*`/`35.217.*`.
+14. Приоритет: служба zapret запущена со стратегией; `winws.exe --debug=1` той же стратегии вручную (служба
+    остановлена) при включённой маршрутизации не печатает пакетов к подсетям правила (спецификация 3.1, риск 11).
+15. Закрыть NekoBox посреди звонка: не позже чем через 10 с в шапке «прокси недоступен, трафик идёт напрямую», на
+    значке трея красная точка; новый звонок идёт напрямую (если zapret это пропускает); запустить NekoBox —
+    новые потоки снова «прокси».
+16. «Тесты» → прогон двух стратегий: в шапке «пауза: идёт тест», после прогона — «включена».
+17. `apply zapret2:general` (и обратно `apply general`) при включённой маршрутизации: служба другого движка
+    стартует, маршрутизация снова «включена» (DLL нового движка), звонок работает.
+18. CLI: `router status` → JSON; `routes add mine --file rule.toml` с `domains` → код 2 и
+    `` `domains` is not supported yet``; `routes remove mine` → код 2, с `--yes` → код 0; `router off` → вкладка
+    показывает «выключена», `zapret-hub.toml` — `router_enabled = false`.
+19. Живые тесты WinDivert из повышенного терминала: `$env:WINDIVERT_DLL = '<путь к WinDivert.dll движка>'`; для
+    сквозного теста ещё `$env:ROUTER_SOCKS5 = '127.0.0.1:2080'` (работающий прокси);
+    `cargo test -p router --test live -- --ignored` → все тесты проходят.
+20. Пункт трея «Маршрутизация» переключает её так же, как переключатель вкладки; вкладка и значок сразу
+    показывают новое состояние.
