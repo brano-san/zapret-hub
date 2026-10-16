@@ -8,6 +8,11 @@ pub struct Udp<'a> {
     pub payload: &'a [u8],
 }
 
+/// Multicast, broadcast and DHCP (from 0.0.0.0) packets are never relayed: they go out unchanged.
+pub fn unicast(src: Ipv4Addr, dst: Ipv4Addr) -> bool {
+    !(dst.is_multicast() || dst.is_broadcast() || src.is_unspecified())
+}
+
 fn be16(b: &[u8], at: usize) -> u16 {
     u16::from_be_bytes([b[at], b[at + 1]])
 }

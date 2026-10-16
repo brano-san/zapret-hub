@@ -545,7 +545,9 @@ impl Live {
 
     fn on_packet(self: &Arc<Self>, handle: &Handle, packet: &[u8], addr: Address) {
         // Stopped: the old handle drains its queue unchanged, no new flows open.
-        let Some(udp) = parse_udp(packet).filter(|_| !self.is_stopped()) else {
+        let Some(udp) = parse_udp(packet)
+            .filter(|u| !self.is_stopped() && packet::unicast(*u.src.ip(), *u.dst.ip()))
+        else {
             let _ = handle.send(packet, &addr);
             return;
         };

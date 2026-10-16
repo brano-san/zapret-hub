@@ -89,3 +89,15 @@ fn an_outbound_address_turns_inbound_and_socket_fields_read() {
         (4, 1234, 50001, 17)
     );
 }
+
+#[test]
+fn only_unicast_packets_are_routed() {
+    use router::packet::unicast;
+    let ip = |s: &str| s.parse::<std::net::Ipv4Addr>().unwrap();
+    assert!(unicast(ip("192.168.1.5"), ip("104.29.1.1")));
+    assert!(!unicast(ip("192.168.1.5"), ip("224.0.0.251")), "mDNS");
+    assert!(!unicast(ip("192.168.1.5"), ip("239.255.255.250")), "SSDP");
+    assert!(!unicast(ip("192.168.1.5"), ip("255.255.255.255")));
+    assert!(!unicast(ip("0.0.0.0"), ip("255.255.255.255")), "DHCP");
+    assert!(!unicast(ip("0.0.0.0"), ip("104.29.1.1")));
+}
