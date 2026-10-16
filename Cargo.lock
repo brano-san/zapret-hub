@@ -2998,6 +2998,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "router"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "serde",
+ "specta",
+ "tempfile",
+ "toml 1.1.8+spec-1.1.0",
+ "windows",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -16,6 +16,7 @@ zapret = { path = "crates/zapret" }
 zapret2 = { path = "crates/zapret2" }
 tester = { path = "crates/tester" }
 cli = { path = "crates/cli" }
+router = { path = "crates/router" }
 
 anyhow = "1.0"
 clap = { version = "4.6", features = ["derive"] }
