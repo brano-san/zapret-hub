@@ -133,6 +133,12 @@ fn the_proxy_is_an_ipv4_address_from_the_settings() {
     assert!(format!("{:#}", parse_proxy(None).unwrap_err()).contains("SOCKS5"));
     assert!(format!("{:#}", parse_proxy(Some(" ")).unwrap_err()).contains("SOCKS5"));
     assert!(format!("{:#}", parse_proxy(Some("[::1]:2080")).unwrap_err()).contains("IPv4"));
+    let lan = format!("{:#}", parse_proxy(Some("192.168.1.2:2080")).unwrap_err());
+    assert!(
+        lan.contains("local") && lan.contains("192.168.1.2:2080"),
+        "{lan}"
+    );
+    assert!(parse_proxy(Some("127.0.0.2:2080")).is_ok());
 }
 
 #[test]

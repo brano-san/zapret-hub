@@ -40,8 +40,14 @@ pub fn parse_proxy(socks5: Option<&str>) -> Result<SocketAddrV4> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow!("set the SOCKS5 proxy in Settings first"))?;
-    text.parse()
-        .map_err(|_| anyhow!("the router needs an IPv4 SOCKS5 address like 127.0.0.1:2080: {text}"))
+    let addr: SocketAddrV4 = text.parse().map_err(|_| {
+        anyhow!("the router needs an IPv4 SOCKS5 address like 127.0.0.1:2080: {text}")
+    })?;
+    // The relay sockets are bound to loopback (spec 1: a local proxy).
+    if !addr.ip().is_loopback() {
+        bail!("the router needs a local SOCKS5 proxy like 127.0.0.1:2080: {text}");
+    }
+    Ok(addr)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
