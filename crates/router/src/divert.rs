@@ -163,7 +163,8 @@ pub struct Dll {
 pub const PRIORITY: i16 = 1000;
 pub const FLAG_SNIFF: u64 = 0x1;
 pub const FLAG_RECV_ONLY: u64 = 0x4;
-const SHUTDOWN_BOTH: i32 = 3;
+/// Receive only: queued packets still drain and the handle can still send until it is closed.
+const SHUTDOWN_RECV: i32 = 1;
 /// The largest packet WinDivert delivers; size receive buffers with it.
 pub const MAX_PACKET: usize = 0xFFFF;
 
@@ -278,10 +279,10 @@ impl Handle {
         Ok(())
     }
 
-    /// Makes a waiting `recv` return an error.
+    /// Stops receiving: `recv` returns the queued packets, then an error; `send` keeps working.
     pub fn shutdown(&self) {
         // SAFETY: `raw` is a live handle until Drop.
-        unsafe { (self.dll.shutdown)(self.raw, SHUTDOWN_BOTH) };
+        unsafe { (self.dll.shutdown)(self.raw, SHUTDOWN_RECV) };
     }
 }
 

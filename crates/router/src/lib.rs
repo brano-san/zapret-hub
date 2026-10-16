@@ -83,6 +83,8 @@ struct Inner {
     on_change: Mutex<Option<Callback>>,
     ctl: Mutex<Ctl>,
     rules: Mutex<RulesFile>,
+    /// The table in force; a launch starts from it.
+    table: Mutex<Table>,
 }
 
 struct Ctl {
@@ -142,7 +144,9 @@ impl Router {
             filter_error: None,
         };
         reload(&routes, &mut file, true);
+        let table = Mutex::new(Table::new(&file.list));
         Router(Arc::new(Inner {
+            table,
             path: routes,
             on_change: Mutex::new(None),
             ctl: Mutex::new(Ctl {
@@ -272,9 +276,23 @@ impl Router {
         }
     }
 
+    /// The match table in force (what the capture uses).
+    #[doc(hidden)]
+    pub fn table(&self) -> Table {
+        self.0.table.lock().unwrap().clone()
+    }
+
     pub fn edit<T>(&self, f: impl FnOnce(&mut Vec<Rule>) -> Result<T>) -> Result<T> {
+        // An outside change takes effect even if this edit then fails.
+        self.0.refresh();
         let mut file = self.0.rules.lock().unwrap();
-        reload(&self.0.path, &mut file, false);
+        if reload(&self.0.path, &mut file, false) {
+            // Changed again since `refresh`: apply it too (not under the rules lock).
+            let table = Table::new(&file.list);
+            drop(file);
+            self.0.apply(table);
+            file = self.0.rules.lock().unwrap();
+        }
         if let Some(e) = &file.file_error {
             bail!("routes.toml has an error, fix or delete it first: {e}");
         }
@@ -304,7 +322,7 @@ fn halt(ctl: &mut Ctl) {
 /// Counters start from zero: every launch is a new `Live`.
 fn launch(inner: &Arc<Inner>, ctl: &mut Ctl, setup: &Setup) -> Result<()> {
     halt(ctl);
-    let table = Table::new(&inner.rules.lock().unwrap().list);
+    let table = inner.table.lock().unwrap().clone();
     match Live::open(inner, setup, table) {
         Ok(live) => {
             ctl.live = Some(live);
@@ -343,6 +361,7 @@ impl Inner {
     }
 
     fn apply(&self, table: Table) {
+        *self.table.lock().unwrap() = table.clone();
         let Some(live) = self.live() else { return };
         let error = live
             .apply(table)
@@ -476,7 +495,7 @@ impl Live {
     }
 
     /// New table now; a changed filter opens a new handle (at most once a second) before the old
-    /// one closes. `None` filter (no rules) closes the capture handle.
+    /// one stops receiving. No rules: a `false` filter, which captures nothing but still injects.
     fn apply(self: &Arc<Self>, table: Table) -> std::io::Result<()> {
         let mut filter = self.filter.lock().unwrap();
         let text = divert::filter(&table);
@@ -487,25 +506,23 @@ impl Live {
         if let Some(at) = filter.opened {
             std::thread::sleep(REOPEN_GAP.saturating_sub(at.elapsed()));
         }
-        let new = match &text {
-            Some(t) => Some(Arc::new(Handle::open(&self.dll, t, Layer::Network, 0)?)),
-            None => None,
-        };
+        let new = Arc::new(Handle::open(
+            &self.dll,
+            text.as_deref().unwrap_or("false"),
+            Layer::Network,
+            0,
+        )?);
         filter.text = text;
         filter.opened = Some(Instant::now());
-        if let Some(h) = &new {
-            let (l, h) = (self.clone(), h.clone());
-            spawn(move || l.capture_loop(&h));
-        }
+        let (l, h) = (self.clone(), new.clone());
+        spawn(move || l.capture_loop(&h));
         let old = {
             let mut cap = self.capture.write().unwrap();
             if self.is_stopped() {
-                if let Some(h) = &new {
-                    h.shutdown();
-                }
+                new.shutdown();
                 return Ok(());
             }
-            std::mem::replace(&mut *cap, new)
+            cap.replace(new)
         };
         if let Some(old) = old {
             old.shutdown();
@@ -521,7 +538,8 @@ impl Live {
     }
 
     fn on_packet(self: &Arc<Self>, handle: &Handle, packet: &[u8], addr: Address) {
-        let Some(udp) = parse_udp(packet) else {
+        // Stopped: the old handle drains its queue unchanged, no new flows open.
+        let Some(udp) = parse_udp(packet).filter(|_| !self.is_stopped()) else {
             let _ = handle.send(packet, &addr);
             return;
         };
@@ -588,8 +606,9 @@ impl Live {
         }
     }
 
-    // ponytail: a control TCP that drops after the flow opened is not watched; the flow closes
-    // when idle.
+    // ponytail: a control TCP that drops after the flow opened is not watched; proxied flows close
+    // when the 10 s check sees the proxy fail (`set_proxy`), so a dead proxy black-holes up to 10 s;
+    // upgrade: watch `control` for EOF.
     fn open_flow(self: Arc<Self>, key: FlowKey, local: SocketAddrV4, inbound: Address) {
         let started = Instant::now();
         let opened = socks::udp_associate(self.proxy, key.dst, OPEN_TIMEOUT).and_then(|assoc| {
@@ -699,8 +718,27 @@ impl Live {
     fn set_proxy(&self, new: ProxyState) {
         let mut state = self.proxy_state.lock().unwrap();
         let changed = discriminant(&*state) != discriminant(&new);
+        let failing = matches!(
+            new,
+            ProxyState::Down { .. } | ProxyState::AuthRequired | ProxyState::NoUdp
+        );
         *state = new;
         drop(state);
+        if failing {
+            // Their next packets open new flows, which go direct (spec 4.2, 6).
+            let proxied: Vec<FlowKey> = self
+                .flows
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, f)| matches!(f, FlowState::Proxy(_)))
+                .map(|(k, _)| *k)
+                .collect();
+            let now = Instant::now();
+            for key in proxied {
+                self.close_flow(key, now);
+            }
+        }
         if changed
             && !self.is_stopped()
             && let Some(inner) = self.inner.upgrade()

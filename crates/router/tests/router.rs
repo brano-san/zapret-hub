@@ -177,3 +177,31 @@ fn on_change_fires_when_the_state_changes() {
     r.stop();
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
+
+#[test]
+fn a_failed_edit_still_applies_an_outside_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("routes.toml");
+    let r = router(dir.path());
+    assert!(r.table().is_empty());
+    rules::save(&path, &[rules::preset(Preset::DiscordVoice)]).unwrap();
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    let bad = r.edit(|list| {
+        list[0].ports = vec!["0".into()];
+        Ok(())
+    });
+    assert!(bad.is_err());
+    let voice = "104.29.1.1:50000".parse().unwrap();
+    assert_eq!(
+        r.table().match_udp(voice),
+        Some("Discord голос"),
+        "the outside change is in force"
+    );
+    assert_eq!(r.rules().rules.len(), 1);
+}
