@@ -10,7 +10,7 @@ use std::mem::discriminant;
 use std::net::{SocketAddr, SocketAddrV4, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
-use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Result, anyhow, bail};
@@ -482,15 +482,29 @@ impl Live {
         self.stopped.load(Ordering::SeqCst)
     }
 
+    /// Works after a panic poisoned the locks (`capture_loop`).
     fn shut(&self) {
         self.stopped.store(true, Ordering::SeqCst);
-        if let Some(h) = self.sockets.lock().unwrap().take() {
+        if let Some(h) = self
+            .sockets
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
             h.shutdown();
         }
-        if let Some(h) = self.capture.write().unwrap().take() {
+        if let Some(h) = self
+            .capture
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
             h.shutdown();
         }
-        self.flows.lock().unwrap().clear();
+        self.flows
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
     }
 
     fn inject(&self, packet: &[u8], addr: &Address) {
@@ -536,10 +550,40 @@ impl Live {
         Ok(())
     }
 
-    fn capture_loop(self: &Arc<Self>, handle: &Handle) {
-        let mut buf = vec![0u8; MAX_PACKET];
-        while let Ok((n, addr)) = handle.recv(&mut buf) {
-            self.on_packet(handle, &buf[..n], addr);
+    /// Ends when its handle shuts down. Any other end (a panic, a recv error) while the handle is
+    /// still the capture would black-hole matched traffic: the session fails instead.
+    fn capture_loop(self: &Arc<Self>, handle: &Arc<Handle>) {
+        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut buf = vec![0u8; MAX_PACKET];
+            loop {
+                match handle.recv(&mut buf) {
+                    Ok((n, addr)) => self.on_packet(handle, &buf[..n], addr),
+                    Err(e) => return format!("WinDivert stopped capturing: {e}"),
+                }
+            }
+        }));
+        let reason = run.unwrap_or_else(|_| "the capture thread panicked".to_owned());
+        let current = self
+            .capture
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|h| Arc::ptr_eq(h, handle));
+        if !current || self.is_stopped() {
+            return;
+        }
+        if let Some(inner) = self.inner.upgrade() {
+            Router(inner).control(|_, ctl| {
+                if ctl
+                    .live
+                    .as_ref()
+                    .is_some_and(|l| std::ptr::eq(&**l, &**self))
+                {
+                    halt(ctl);
+                    ctl.setup = None;
+                    ctl.state = RouterState::Unavailable { reason };
+                }
+            });
         }
     }
 
