@@ -26,6 +26,7 @@ tauri-build.workspace = true
 exec.workspace = true
 cli.workspace = true
 probe.workspace = true
+router.workspace = true
 tester.workspace = true
 zapret.workspace = true
 zapret2.workspace = true

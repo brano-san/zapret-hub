@@ -140,18 +140,28 @@ pub fn strategy(name: Option<&str>) -> String {
     format!("Стратегия: {}", name.unwrap_or("не выбрана"))
 }
 
-/// Windows cuts a tray tooltip at 127 characters: two short lines.
-pub fn tooltip(light: crate::tray::Light, strategy: Option<&str>) -> String {
+pub const ROUTER_ON: &str = "Маршрутизация: вкл";
+pub const ROUTER_OFF: &str = "Маршрутизация: выкл";
+pub const ROUTER_FAILED: &str = "Маршрутизация не включилась";
+pub const PROXY_DOWN: &str = "Прокси недоступен, трафик идёт напрямую";
+
+/// Windows cuts a tray tooltip at 127 characters: short lines, the strategy's name last, so a long
+/// one is what gets cut.
+pub fn tooltip(light: crate::tray::Light, strategy: Option<&str>, proxy_down: bool) -> String {
     use crate::tray::Light;
     let status = match light {
         Light::Green => "работает",
         Light::Yellow => "работает, проверка не пройдена",
         Light::Gray => "служба не запущена",
     };
-    match strategy {
-        Some(name) if light != Light::Gray => format!("{APP}: {status}\n{name}"),
-        _ => format!("{APP}: {status}"),
+    let mut text = format!("{APP}: {status}");
+    if proxy_down {
+        text = format!("{text}\n{PROXY_DOWN}");
     }
+    if let Some(name) = strategy.filter(|_| light != Light::Gray) {
+        text = format!("{text}\n{name}");
+    }
+    text.chars().take(127).collect()
 }
 
 #[cfg(test)]
@@ -203,5 +213,22 @@ mod tests {
             tests_done(&run(Vec::new())),
             "Ни одна стратегия не проверена"
         );
+    }
+
+    #[test]
+    fn the_tooltip_names_a_proxy_that_is_down_and_fits_windows() {
+        use crate::tray::Light;
+        assert_eq!(
+            tooltip(Light::Green, Some("general"), true),
+            format!("Zapret Hub: работает\n{PROXY_DOWN}\ngeneral")
+        );
+        assert_eq!(
+            tooltip(Light::Gray, Some("general"), false),
+            "Zapret Hub: служба не запущена"
+        );
+        let long = "x".repeat(200);
+        let cut = tooltip(Light::Yellow, Some(&long), true);
+        assert_eq!(cut.chars().count(), 127);
+        assert!(cut.contains(PROXY_DOWN));
     }
 }

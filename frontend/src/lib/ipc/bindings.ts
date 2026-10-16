@@ -98,12 +98,28 @@ export const commands = {
 	applyHosts: () => typedError<null, string>(__TAURI_INVOKE("apply_hosts")),
 	checkFlowsealUpdate: () => typedError<string | null, string>(__TAURI_INVOKE("check_flowseal_update")),
 	systemChecks: () => typedError<SystemCheck[], string>(__TAURI_INVOKE("system_checks")),
+	/**  Removing WinDivert under the router's own handles: on a pause (router spec 11). */
 	fixCheck: (action: CheckAction) => typedError<null, string>(__TAURI_INVOKE("fix_check", { action })),
 	/**  Not a change to zapret: no queue. */
 	clearDiscordCache: () => typedError<CacheReport[], string>(__TAURI_INVOKE("clear_discord_cache")),
 	removeService: () => typedError<null, string>(__TAURI_INVOKE("remove_service")),
 	quickCheck: () => typedError<QuickCheck, string>(__TAURI_INVOKE("quick_check")),
 	takeNotices: () => __TAURI_INVOKE<Notice[]>("take_notices"),
+	/**  The only command that writes `router_enabled` (`routing::set_enabled`). */
+	setRouterEnabled: (enabled: boolean) => typedError<RouterStatus, string>(__TAURI_INVOKE("set_router_enabled", { enabled })),
+	routerStatus: () => __TAURI_INVOKE<RouterStatus>("router_status"),
+	/**  Reading the rules may reopen the filter, up to a second: off the main thread. */
+	listRoutes: () => __TAURI_INVOKE<RoutesView>("list_routes"),
+	getRoute: (name: string) => typedError<Rule, string>(__TAURI_INVOKE("get_route", { name })),
+	saveRoute: (rule: Rule, create: boolean) => typedError<null, string>(__TAURI_INVOKE("save_route", { rule, create })),
+	setRouteEnabled: (name: string, enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_route_enabled", { name, enabled })),
+	deleteRoute: (name: string) => typedError<null, string>(__TAURI_INVOKE("delete_route", { name })),
+	addRoutePreset: (preset: Preset) => typedError<Rule, string>(__TAURI_INVOKE("add_route_preset", { preset })),
+	routeFlows: (all: boolean) => __TAURI_INVOKE<FlowRow[]>("route_flows", { all }),
+	/**  The editor's checks as it types: nothing saved. */
+	validateRoute: (rule: Rule) => __TAURI_INVOKE<FieldError[]>("validate_route", { rule }),
+	/**  `ips` plus the subnets of an ipset-style list (one per line). */
+	importRouteLines: (ips: string[], text: string) => typedError<string[], string>(__TAURI_INVOKE("import_route_lines", { ips, text })),
 };
 
 /** Events */
@@ -219,6 +235,8 @@ export type Detected = {
 	zapret2: string | null,
 };
 
+export type DirectReason = { kind: "ProxyDown" } | { kind: "AuthRequired" } | { kind: "NoUdp" } | { kind: "Timeout" } | { kind: "Failed"; error: string } | { kind: "Loop" };
+
 /**  A release download from the window: bytes so far and the zip's size (0 when GitHub gave none). */
 export type DownloadProgress = {
 	engine: Engine,
@@ -265,6 +283,23 @@ export type Fakes = {
 	/**  The file each active fake is a copy of (same SHA-256), when one matches. */
 	discord: string | null,
 	game: string | null,
+};
+
+export type FieldError = {
+	field: string,
+	message: string,
+};
+
+export type FlowRow = {
+	protocol: string,
+	destination: string,
+	local_port: number,
+	rule: string | null,
+	via: Via,
+	up: number | null,
+	down: number | null,
+	seconds: number,
+	closed: boolean,
 };
 
 /**  The settings `service.bat` keeps in the folder: the «Zapret» tab. */
@@ -427,6 +462,8 @@ export type Pass = {
 	score: Score,
 };
 
+export type Preset = "discord-voice";
+
 /**  A profile as the card and the builder show it. */
 export type Profile = {
 	/**  From 0, counting every `--new`: what `CircularTarget` names. */
@@ -453,6 +490,10 @@ export type Progress =
 /**  A strategy's passes so far, aggregated (`rank::aggregate`). */
 { kind: "Done"; result: StrategyResult } | { kind: "Restoring" };
 
+export type Protocol = "tcp" | "udp" | "both";
+
+export type ProxyState = { state: "Unknown" } | { state: "Ok"; latency_ms: number } | { state: "Down"; error: string } | { state: "AuthRequired" } | { state: "NoUdp" };
+
 export type ProxyStatus = {
 	ok: boolean,
 	latency_ms: number | null,
@@ -478,6 +519,33 @@ export type Request = {
 	strategies: string[],
 	/**  Passes over the list, `1..=MAX_REPEATS`; a request from before repeats has one. */
 	repeats?: number,
+};
+
+export type RouterState = { state: "Off" } | { state: "Running" } | { state: "Paused" } | { state: "Unavailable"; reason: string };
+
+export type RouterStatus = {
+	state: RouterState,
+	proxy: ProxyState,
+	totals: Totals,
+	rules_error: string | null,
+};
+
+export type RoutesView = {
+	rules: RuleRow[],
+	error: string | null,
+};
+
+export type Rule = {
+	name: string,
+	enabled: boolean,
+	protocol: Protocol,
+	ports: string[],
+	ips: string[],
+};
+
+export type RuleRow = {
+	rule: Rule,
+	traffic: Traffic,
 };
 
 export type RunSummary = {
@@ -526,6 +594,8 @@ export type Settings = {
 	wizard_done?: boolean,
 	/**  The pipe of `zapret-hub-cli` runs commands (CLI spec 5). */
 	cli_enabled?: boolean,
+	/**  Routing through the SOCKS5 proxy (router spec 3); only `set_router_enabled` writes it. */
+	router_enabled?: boolean,
 };
 
 /**  zapret, the settings or the history changed: the page reads what it shows again. */
@@ -630,7 +700,21 @@ export type TestsFinished = {
 
 export type Theme = "system" | "light" | "dark";
 
+export type Totals = {
+	proxied: Traffic,
+	direct: Traffic,
+};
+
+/**  Bytes are `f64`: specta forbids u64 in TypeScript. */
+export type Traffic = {
+	flows: number,
+	up: number | null,
+	down: number | null,
+};
+
 export type UserList = "General" | "Exclude" | "IpsetExclude";
+
+export type Via = { via: "Opening" } | { via: "Proxy" } | { via: "Direct"; reason: DirectReason };
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

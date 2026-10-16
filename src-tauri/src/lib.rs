@@ -8,6 +8,7 @@ mod dto;
 mod jobs;
 mod journal;
 mod notify;
+mod routing;
 mod settings;
 mod shell;
 mod state;
@@ -91,7 +92,18 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::clear_discord_cache,
             commands::remove_service,
             commands::quick_check,
-            commands::take_notices
+            commands::take_notices,
+            commands::set_router_enabled,
+            commands::router_status,
+            commands::list_routes,
+            commands::get_route,
+            commands::save_route,
+            commands::set_route_enabled,
+            commands::delete_route,
+            commands::add_route_preset,
+            commands::route_flows,
+            commands::validate_route,
+            commands::import_route_lines
         ])
 }
 
@@ -180,6 +192,11 @@ pub fn run() -> anyhow::Result<()> {
             builder.mount_events(app);
             notify::register();
             tray::create(app.handle())?;
+            // The router's state or its proxy's kind of state changed; latency alone does not call.
+            let handle = app.handle().clone();
+            app.state::<AppState>()
+                .router
+                .on_change(move || actions::changed(&handle));
             let settings = app.state::<AppState>().settings();
             // A logon start stays in the tray once the wizard is done (spec 9.2, 9.3).
             if !(autostarted && settings.start_minimized && settings.wizard_done) {

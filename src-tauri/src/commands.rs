@@ -3,6 +3,9 @@
 use std::path::Path;
 
 use probe::socks::ProxyStatus;
+use router::flows::FlowRow;
+use router::rules::{self, FieldError, Preset, Rule};
+use router::{RouterStatus, RoutesView};
 use tauri::{AppHandle, Manager as _, State};
 use tauri_plugin_dialog::DialogExt as _;
 use tauri_specta::Event as _;
@@ -28,7 +31,7 @@ use crate::dto::{
 };
 use crate::settings::Settings;
 use crate::state::AppState;
-use crate::{texts, window};
+use crate::{routing, texts, window};
 
 type Answer<T> = Result<T, String>;
 
@@ -574,14 +577,26 @@ pub async fn check_flowseal_update(handle: AppHandle) -> Answer<Option<String>> 
 #[tauri::command]
 #[specta::specta]
 pub async fn system_checks(handle: AppHandle) -> Answer<Vec<SystemCheck>> {
-    blocking(move || Ok(zapret::checks::run_all(&app(&handle).folder()?))).await
+    blocking(move || {
+        let state = app(&handle);
+        let mut checks = zapret::checks::run_all(&state.folder()?);
+        routing::hide_own_driver(&mut checks, &state.router.status().state);
+        Ok(checks)
+    })
+    .await
 }
 
+/// Removing WinDivert under the router's own handles: on a pause (router spec 11).
 #[tauri::command]
 #[specta::specta]
 pub async fn fix_check(handle: AppHandle, action: CheckAction) -> Answer<()> {
     blocking(move || {
-        let done = app(&handle).change(|_| zapret::checks::fix(action));
+        let fix = || app(&handle).change(|_| zapret::checks::fix(action));
+        let done = if action == CheckAction::RemoveWinDivert {
+            routing::paused(&handle, fix)
+        } else {
+            fix()
+        };
         actions::changed(&handle);
         done
     })
@@ -599,7 +614,10 @@ pub async fn clear_discord_cache() -> Answer<Vec<CacheReport>> {
 #[specta::specta]
 pub async fn remove_service(handle: AppHandle) -> Answer<()> {
     blocking(move || {
-        let done = app(&handle).change_any_safely("remove_service", |_| zapret::service::remove());
+        // It removes WinDivert too: the router's handles close first (router spec 11).
+        let done = routing::paused(&handle, || {
+            app(&handle).change_any_safely("remove_service", |_| zapret::service::remove())
+        });
         actions::changed(&handle);
         done
     })
@@ -616,4 +634,109 @@ pub async fn quick_check(handle: AppHandle) -> Answer<QuickCheck> {
 #[specta::specta]
 pub fn take_notices(state: State<'_, AppState>) -> Vec<Notice> {
     state.take_notices()
+}
+
+/// The only command that writes `router_enabled` (`routing::set_enabled`).
+#[tauri::command]
+#[specta::specta]
+pub async fn set_router_enabled(handle: AppHandle, enabled: bool) -> Answer<RouterStatus> {
+    blocking(move || routing::set_enabled(&handle, enabled)).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn router_status(state: State<'_, AppState>) -> RouterStatus {
+    state.router.status()
+}
+
+/// Reading the rules may reopen the filter, up to a second: off the main thread.
+#[tauri::command]
+#[specta::specta]
+pub async fn list_routes(handle: AppHandle) -> RoutesView {
+    let router = app(&handle).router.clone();
+    tauri::async_runtime::spawn_blocking(move || router.rules())
+        .await
+        .unwrap_or_else(|err| RoutesView {
+            rules: Vec::new(),
+            error: Some(format!("the command did not finish: {err}")),
+        })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_route(handle: AppHandle, name: String) -> Answer<Rule> {
+    blocking(move || {
+        let view = app(&handle).router.rules();
+        let list: Vec<Rule> = view.rules.into_iter().map(|row| row.rule).collect();
+        Ok(rules::find(&list, &name)?.clone())
+    })
+    .await
+}
+
+/// A rule changed in the window: the router edits `routes.toml` (it refuses a broken one).
+fn edit_routes<T: Send + 'static>(
+    handle: AppHandle,
+    edit: impl FnOnce(&mut Vec<Rule>) -> anyhow::Result<T> + Send + 'static,
+) -> impl Future<Output = Answer<T>> {
+    blocking(move || {
+        let done = app(&handle).router.edit(edit);
+        actions::changed(&handle);
+        done
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn save_route(handle: AppHandle, rule: Rule, create: bool) -> Answer<()> {
+    edit_routes(handle, move |list| {
+        if create {
+            rules::add(list, rule)
+        } else {
+            rules::replace(list, rule)
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_route_enabled(handle: AppHandle, name: String, enabled: bool) -> Answer<()> {
+    edit_routes(handle, move |list| rules::set_enabled(list, &name, enabled)).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_route(handle: AppHandle, name: String) -> Answer<()> {
+    edit_routes(handle, move |list| rules::remove(list, &name).map(|_| ())).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn add_route_preset(handle: AppHandle, preset: Preset) -> Answer<Rule> {
+    let rule = rules::preset(preset);
+    edit_routes(handle, move |list| {
+        rules::add(list, rule.clone())?;
+        Ok(rule)
+    })
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn route_flows(state: State<'_, AppState>, all: bool) -> Vec<FlowRow> {
+    state.router.flows(all)
+}
+
+/// The editor's checks as it types: nothing saved.
+#[tauri::command]
+#[specta::specta]
+pub fn validate_route(rule: Rule) -> Vec<FieldError> {
+    rules::check(&rule)
+}
+
+/// `ips` plus the subnets of an ipset-style list (one per line).
+#[tauri::command]
+#[specta::specta]
+pub fn import_route_lines(ips: Vec<String>, text: String) -> Answer<Vec<String>> {
+    rules::import(&ips, &text).map_err(|err| err.to_string())
 }

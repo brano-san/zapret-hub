@@ -46,6 +46,10 @@ impl Paths {
     pub fn logs(&self) -> PathBuf {
         self.data().join("logs")
     }
+
+    pub fn routes(&self) -> PathBuf {
+        self.data().join("routes.toml")
+    }
 }
 
 /// A poisoned lock still holds good data: a panic elsewhere must not take the app down.
@@ -77,11 +81,14 @@ pub struct AppState {
     notices: Mutex<Vec<Notice>>,
     /// How the newest run since the start ended: `tests_status` (CLI spec 7.1).
     last_outcome: Mutex<Option<cli::Outcome>>,
+    /// Routing through the SOCKS5 proxy: `routing` drives it.
+    pub router: router::Router,
 }
 
 impl AppState {
     pub fn new(paths: Paths, settings: Settings) -> Self {
         Self {
+            router: router::Router::new(paths.routes()),
             paths,
             settings: Mutex::new(settings),
             saving: Mutex::new(()),

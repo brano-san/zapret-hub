@@ -31,6 +31,8 @@ pub struct Settings {
     pub wizard_done: bool,
     /// The pipe of `zapret-hub-cli` runs commands (CLI spec 5).
     pub cli_enabled: bool,
+    /// Routing through the SOCKS5 proxy (router spec 3); only `set_router_enabled` writes it.
+    pub router_enabled: bool,
 }
 
 impl Default for Settings {
@@ -44,6 +46,7 @@ impl Default for Settings {
             theme: Theme::System,
             wizard_done: false,
             cli_enabled: false,
+            router_enabled: false,
         }
     }
 }
@@ -83,8 +86,10 @@ pub fn load_or_default(path: &Path) -> (Settings, Option<String>) {
 /// zapret-hub-cli (`pipe`) never turns the CLI on: a save that passed the gate just before the user
 /// turned the CLI off must not turn it back on (CLI spec 7.2). Nor does it move the zapret or the
 /// zapret2 folder: the SYSTEM service runs winws.exe or winws2.exe from it, so any program of the
-/// user could pick what SYSTEM runs (CLI spec 5, zapret2 spec 10).
+/// user could pick what SYSTEM runs (CLI spec 5, zapret2 spec 10). Neither one changes
+/// `router_enabled`: a Settings tab opened before the switch must not undo it (`routing::set_enabled`).
 pub fn to_save(current: &Settings, mut sent: Settings, pipe: bool) -> anyhow::Result<Settings> {
+    sent.router_enabled = current.router_enabled;
     if pipe {
         anyhow::ensure!(
             sent.zapret_dir == current.zapret_dir,
@@ -127,6 +132,32 @@ mod tests {
             !Settings::default().cli_enabled,
             "off until the user turns it on"
         );
+        assert!(!Settings::default().router_enabled);
+    }
+
+    #[test]
+    fn a_settings_save_keeps_router_enabled() {
+        let on = Settings {
+            router_enabled: true,
+            ..Settings::default()
+        };
+        let stale = Settings {
+            theme: Theme::Dark,
+            ..Settings::default()
+        };
+        for pipe in [false, true] {
+            let saved = to_save(&on, stale.clone(), pipe).unwrap();
+            assert!(
+                saved.router_enabled,
+                "only set_router_enabled changes it (pipe: {pipe})"
+            );
+            assert_eq!(saved.theme, Theme::Dark);
+            assert!(
+                !to_save(&Settings::default(), on.clone(), pipe)
+                    .unwrap()
+                    .router_enabled
+            );
+        }
     }
 
     #[test]
@@ -142,6 +173,7 @@ mod tests {
             theme: Theme::Dark,
             wizard_done: true,
             cli_enabled: true,
+            router_enabled: true,
         };
         save(&path, &settings).unwrap();
         assert_eq!(load(&path).unwrap(), settings);

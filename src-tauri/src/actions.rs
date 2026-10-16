@@ -57,8 +57,16 @@ fn finish_with_check(
 }
 
 /// «Применить» (spec 5.4). A `zapret2:` name goes to zapret2 (zapret2 spec 3.1, 6); its folder
-/// is opened first, so a broken one changes nothing. zapret2 needs no Flowseal folder.
+/// is opened first, so a broken one changes nothing. zapret2 needs no Flowseal folder. A switch to
+/// the other engine pauses routing: it comes back with the new engine's DLL (router spec 3.1, 7).
 pub fn apply(app: &AppHandle, name: &str) -> anyhow::Result<QuickCheck> {
+    if crate::routing::switches_engine(name, active().0) {
+        return crate::routing::paused(app, || apply_now(app, name));
+    }
+    apply_now(app, name)
+}
+
+fn apply_now(app: &AppHandle, name: &str) -> anyhow::Result<QuickCheck> {
     let state = state(app);
     let result = match zapret2::strip_prefix(name) {
         Some(name) => state.engine2_required().and_then(|engine| {
@@ -150,6 +158,8 @@ pub fn save_settings(app: &AppHandle, settings: Settings, pipe: bool) -> anyhow:
     if folder_changed {
         prepare_folder(app);
     }
+    // The proxy or a folder, and with it the DLL, may have changed.
+    crate::routing::sync(app);
     changed(app);
     Ok(())
 }

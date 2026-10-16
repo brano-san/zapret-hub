@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use router::RouterState;
 use tauri::AppHandle;
 use tauri_specta::Event as _;
 use tester::model::{Suite, TestRun};
@@ -43,7 +44,8 @@ pub fn start_tests(app: &AppHandle, request: Request) -> anyhow::Result<()> {
     let handle = app.clone();
     std::thread::spawn(move || {
         let state = actions::state(&handle);
-        let outcome = {
+        // Routing is paused for the run and comes back however it ends (router spec 7).
+        let outcome = crate::routing::paused(&handle, || {
             // The whole run is one turn of the queue: nothing else changes zapret meanwhile.
             let _turn = state.turn();
             let socks5 = state.socks5();
@@ -70,7 +72,7 @@ pub fn start_tests(app: &AppHandle, request: Request) -> anyhow::Result<()> {
                     message.unwrap_or("no message")
                 ))
             })
-        };
+        });
         finish(&handle, outcome);
     });
     actions::changed(app);
@@ -208,8 +210,13 @@ fn check_version(app: &AppHandle) -> bool {
 /// Before anything else changes zapret, an interrupted operation is put back (spec 10).
 fn startup(app: &AppHandle) {
     recover(app);
-    actions::prepare_folder(app);
     let state = state(app);
+    // Routing comes back as it was left (router spec 3).
+    crate::routing::sync(app);
+    if let RouterState::Unavailable { reason } = state.router.status().state {
+        actions::notice(app, NoticeLevel::Error, texts::ROUTER_FAILED, reason);
+    }
+    actions::prepare_folder(app);
     if state.settings().autostart {
         let refreshed = std::env::current_exe()
             .map_err(anyhow::Error::from)
