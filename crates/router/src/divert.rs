@@ -44,8 +44,10 @@ pub fn filter(table: &Table) -> Option<String> {
             if !r.ports.is_empty() {
                 s += &format!(" and {}", any(r.ports.iter().map(port)));
             }
-            // ponytail: with no ports and too many ranges this is just `(udp)`: all outbound UDP goes
-            // through the hub, which matches IPs itself; upgrade: require ports in such a rule or raise the cap.
+            // ponytail: past MAX_FILTER_RANGES ranges in all rules together, EVERY rule loses its IP
+            // part: a rule with ports captures all outbound UDP to those ports, one without ports
+            // all outbound UDP; the hub matches IPs itself and re-sends the rest unchanged.
+            // Upgrade: per-rule caps, or merge ranges before counting.
             if by_ip && !r.ranges.is_empty() {
                 s += &format!(" and {}", any(r.ranges.iter().map(range)));
             }
