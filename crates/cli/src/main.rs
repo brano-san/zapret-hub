@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use clap::{Parser, Subcommand, ValueEnum};
 use cli::{Live, Outcome, PROTOCOL, Request, Response, TestsStatus};
 use probe::curl::{CheckStatus, DpiStatus};
+use router::rules::{Preset, parse_rule_file};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tester::catalog::StrategyRow;
@@ -53,7 +54,7 @@ const POLL: Duration = Duration::from_secs(2);
 )]
 struct Cli {
     /// Confirm what the window asks to confirm: custom delete, zapret2 delete, hosts apply, checks
-    /// fix remove-windivert|remove-conflicts, discord clear-cache, service remove.
+    /// fix remove-windivert|remove-conflicts, discord clear-cache, service remove, routes remove.
     #[arg(long, global = true)]
     yes: bool,
     #[command(subcommand)]
@@ -135,6 +136,12 @@ enum Command {
     /// The zapret service.
     #[command(subcommand)]
     Service(ServiceCommand),
+    /// Route UDP through the local SOCKS5 proxy.
+    #[command(subcommand)]
+    Router(RouterCommand),
+    /// The routing rules of data\routes.toml.
+    #[command(subcommand)]
+    Routes(RoutesCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -278,6 +285,70 @@ enum ChecksCommand {
 enum DiscordCommand {
     /// Close Discord and clear its caches (needs --yes).
     ClearCache,
+}
+
+#[derive(Debug, Subcommand)]
+enum RouterCommand {
+    /// Start routing.
+    On,
+    /// Stop routing.
+    Off,
+    /// Whether it runs, the proxy and the counters.
+    Status,
+}
+
+#[derive(Debug, Subcommand)]
+enum RoutesCommand {
+    /// The rules, their state and what is wrong with the file.
+    List,
+    /// One rule.
+    Show {
+        name: String,
+    },
+    /// Add a rule from a TOML file with a [rule] table (- is stdin).
+    Add {
+        name: String,
+        #[arg(long)]
+        file: PathBuf,
+    },
+    /// Replace a rule from a TOML file with a [rule] table (- is stdin).
+    Edit {
+        name: String,
+        #[arg(long)]
+        file: PathBuf,
+    },
+    Enable {
+        name: String,
+    },
+    Disable {
+        name: String,
+    },
+    /// Delete a rule (needs --yes).
+    Remove {
+        name: String,
+    },
+    /// Add a ready-made rule.
+    Preset {
+        preset: PresetArg,
+    },
+    /// The open flows; --all adds the closed ones.
+    Flows {
+        #[arg(long)]
+        all: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum PresetArg {
+    DiscordVoice,
+}
+
+impl From<PresetArg> for Preset {
+    fn from(preset: PresetArg) -> Self {
+        match preset {
+            PresetArg::DiscordVoice => Preset::DiscordVoice,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -517,6 +588,7 @@ fn needs_yes(command: &Command) -> bool {
             }
             | Command::Discord(DiscordCommand::ClearCache)
             | Command::Service(ServiceCommand::Remove)
+            | Command::Routes(RoutesCommand::Remove { .. })
     )
 }
 
@@ -681,6 +753,32 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
         },
         Command::Discord(DiscordCommand::ClearCache) => Request::ClearDiscordCache,
         Command::Service(ServiceCommand::Remove) => Request::RemoveService,
+        Command::Router(RouterCommand::On) => Request::SetRouterEnabled { enabled: true },
+        Command::Router(RouterCommand::Off) => Request::SetRouterEnabled { enabled: false },
+        Command::Router(RouterCommand::Status) => Request::RouterStatus,
+        Command::Routes(RoutesCommand::List) => Request::ListRoutes,
+        Command::Routes(RoutesCommand::Show { name }) => Request::GetRoute { name },
+        Command::Routes(RoutesCommand::Add { name, file }) => Request::SaveRoute {
+            rule: read_rule(&name, &file)?,
+            create: true,
+        },
+        Command::Routes(RoutesCommand::Edit { name, file }) => Request::SaveRoute {
+            rule: read_rule(&name, &file)?,
+            create: false,
+        },
+        Command::Routes(RoutesCommand::Enable { name }) => Request::SetRouteEnabled {
+            name,
+            enabled: true,
+        },
+        Command::Routes(RoutesCommand::Disable { name }) => Request::SetRouteEnabled {
+            name,
+            enabled: false,
+        },
+        Command::Routes(RoutesCommand::Remove { name }) => Request::DeleteRoute { name },
+        Command::Routes(RoutesCommand::Preset { preset }) => Request::AddRoutePreset {
+            preset: preset.into(),
+        },
+        Command::Routes(RoutesCommand::Flows { all }) => Request::RouteFlows { all },
     };
     // Only `flowseal check-update` has a `null` that means something (no update).
     let silent = !matches!(request, Request::CheckFlowsealUpdate);
@@ -745,6 +843,11 @@ fn read_text(file: &Path) -> Result<String, Fail> {
         String::from_utf8(bytes).map_err(|err| fail(&err))?
     };
     Ok(text.trim_start_matches('\u{feff}').to_owned())
+}
+
+/// One rule from a file with a `[rule]` table, or stdin for `-`; checked before anything is sent.
+fn read_rule(name: &str, file: &Path) -> Result<router::rules::Rule, Fail> {
+    parse_rule_file(name, &read_text(file)?).map_err(|err| Fail::new(USAGE, err.to_string()))
 }
 
 /// A `CustomStrategy` JSON from a file, or from stdin for `-` (spec 7.3).
@@ -1035,6 +1138,51 @@ mod tests {
         let general = || "general (ALT11)".to_owned();
         let table: Vec<(&[&str], Request)> = vec![
             (&["status"], Request::GetOverview),
+            (
+                &["router", "on"],
+                Request::SetRouterEnabled { enabled: true },
+            ),
+            (
+                &["router", "off"],
+                Request::SetRouterEnabled { enabled: false },
+            ),
+            (&["router", "status"], Request::RouterStatus),
+            (&["routes", "list"], Request::ListRoutes),
+            (
+                &["routes", "show", "Discord голос"],
+                Request::GetRoute {
+                    name: "Discord голос".into(),
+                },
+            ),
+            (
+                &["routes", "enable", "v"],
+                Request::SetRouteEnabled {
+                    name: "v".into(),
+                    enabled: true,
+                },
+            ),
+            (
+                &["routes", "disable", "v"],
+                Request::SetRouteEnabled {
+                    name: "v".into(),
+                    enabled: false,
+                },
+            ),
+            (
+                &["routes", "remove", "v", "--yes"],
+                Request::DeleteRoute { name: "v".into() },
+            ),
+            (
+                &["routes", "preset", "discord-voice"],
+                Request::AddRoutePreset {
+                    preset: Preset::DiscordVoice,
+                },
+            ),
+            (&["routes", "flows"], Request::RouteFlows { all: false }),
+            (
+                &["routes", "flows", "--all"],
+                Request::RouteFlows { all: true },
+            ),
             (&["settings", "get"], Request::GetSettings),
             (
                 &["proxy", "check", "127.0.0.1:2080"],
@@ -1184,11 +1332,59 @@ mod tests {
             &["checks", "fix", "remove-conflicts"],
             &["discord", "clear-cache"],
             &["service", "remove"],
+            &["routes", "remove", "v"],
         ] {
             let (outcome, asked) = drive(args, Vec::new());
             assert_eq!(code(outcome), USAGE, "{args:?}");
             assert!(asked.is_empty(), "{args:?} reached the app");
         }
+    }
+
+    #[test]
+    fn routes_add_and_edit_read_one_rule_from_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("rule.toml");
+        std::fs::write(
+            &file,
+            "[rule]\nprotocol = \"udp\"\nips = [\"104.29.0.0/16\"]\n",
+        )
+        .unwrap();
+        let path = file.to_str().unwrap();
+        let (_, asked) = drive(&["routes", "add", "v", "--file", path], Vec::new());
+        let rule = parse_rule_file(
+            "v",
+            "[rule]\nprotocol = \"udp\"\nips = [\"104.29.0.0/16\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            asked,
+            [Request::SaveRoute {
+                rule: rule.clone(),
+                create: true
+            }]
+        );
+        let (_, asked) = drive(&["routes", "edit", "v", "--file", path], Vec::new());
+        assert_eq!(
+            asked,
+            [Request::SaveRoute {
+                rule,
+                create: false
+            }]
+        );
+        std::fs::write(
+            &file,
+            "[rule]\nprotocol = \"udp\"\nips = [\"1.1.1.1\"]\ndomains = [\"discord.media\"]\n",
+        )
+        .unwrap();
+        let (outcome, asked) = drive(&["routes", "add", "v", "--file", path], Vec::new());
+        assert!(asked.is_empty());
+        let fail = outcome.err().unwrap();
+        assert_eq!(fail.code, 2);
+        assert!(
+            fail.error.contains("`domains` is not supported yet"),
+            "{}",
+            fail.error
+        );
     }
 
     #[test]

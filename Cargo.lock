@@ -576,6 +576,7 @@ dependencies = [
  "clap",
  "exec",
  "probe",
+ "router",
  "serde",
  "serde_json",
  "tempfile",

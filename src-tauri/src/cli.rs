@@ -153,6 +153,23 @@ fn dispatch(app: &AppHandle, request: Request) -> Result<Value, String> {
         Request::ClearDiscordCache => json(block_on(commands::clear_discord_cache())?),
         Request::RemoveService => json(block_on(commands::remove_service(handle))?),
         Request::QuickCheck => json(block_on(commands::quick_check(handle))?),
+        Request::SetRouterEnabled { enabled } => {
+            json(block_on(commands::set_router_enabled(handle, enabled))?)
+        }
+        Request::RouterStatus => json(commands::router_status(state)),
+        Request::ListRoutes => json(block_on(commands::list_routes(handle))),
+        Request::GetRoute { name } => json(block_on(commands::get_route(handle, name))?),
+        Request::SaveRoute { rule, create } => {
+            json(block_on(commands::save_route(handle, rule, create))?)
+        }
+        Request::SetRouteEnabled { name, enabled } => json(block_on(commands::set_route_enabled(
+            handle, name, enabled,
+        ))?),
+        Request::DeleteRoute { name } => json(block_on(commands::delete_route(handle, name))?),
+        Request::AddRoutePreset { preset } => {
+            json(block_on(commands::add_route_preset(handle, preset))?)
+        }
+        Request::RouteFlows { all } => json(commands::route_flows(state, all)),
     }
 }
 

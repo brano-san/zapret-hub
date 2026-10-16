@@ -4,6 +4,7 @@
 
 pub mod pipe;
 
+use router::rules::{Preset, Rule};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tester::run::Request as TestRequest;
@@ -123,6 +124,31 @@ pub enum Request {
     ClearDiscordCache,
     RemoveService,
     QuickCheck,
+    SetRouterEnabled {
+        enabled: bool,
+    },
+    RouterStatus,
+    ListRoutes,
+    GetRoute {
+        name: String,
+    },
+    SaveRoute {
+        rule: Rule,
+        create: bool,
+    },
+    SetRouteEnabled {
+        name: String,
+        enabled: bool,
+    },
+    DeleteRoute {
+        name: String,
+    },
+    AddRoutePreset {
+        preset: Preset,
+    },
+    RouteFlows {
+        all: bool,
+    },
 }
 
 impl Request {
@@ -368,11 +394,32 @@ mod tests {
             Request::ClearDiscordCache,
             Request::RemoveService,
             Request::QuickCheck,
+            Request::SetRouterEnabled { enabled: true },
+            Request::RouterStatus,
+            Request::ListRoutes,
+            Request::GetRoute {
+                name: "Discord голос".into(),
+            },
+            Request::SaveRoute {
+                rule: router::rules::preset(Preset::DiscordVoice),
+                create: true,
+            },
+            Request::SetRouteEnabled {
+                name: "Discord голос".into(),
+                enabled: false,
+            },
+            Request::DeleteRoute {
+                name: "Discord голос".into(),
+            },
+            Request::AddRoutePreset {
+                preset: Preset::DiscordVoice,
+            },
+            Request::RouteFlows { all: true },
         ]
     }
 
     /// Window commands the CLI leaves out (spec 6).
-    const WINDOW_ONLY: [&str; 14] = [
+    const WINDOW_ONLY: [&str; 16] = [
         "detect_folders",
         "check_folder",
         "check_zapret2_folder",
@@ -389,6 +436,9 @@ mod tests {
         "zapret2_profiles",
         "zapret2_circular",
         "zapret2_merge",
+        // The editor checks a rule as it is typed and fills its IP list from a pasted text.
+        "validate_route",
+        "import_route_lines",
     ];
 
     /// `("cmd", { a, b })` → the argument names in `bindings.ts`, sorted.
