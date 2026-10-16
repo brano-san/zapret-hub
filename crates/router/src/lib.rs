@@ -88,6 +88,8 @@ struct Inner {
     path: PathBuf,
     on_change: Mutex<Option<Callback>>,
     ctl: Mutex<Ctl>,
+    /// State and session as `control` left them: `status` and `flows` never wait for a launch.
+    snapshot: Mutex<(RouterState, Option<Arc<Live>>)>,
     rules: Mutex<RulesFile>,
     /// The table in force; a launch starts from it.
     table: Mutex<Table>,
@@ -161,6 +163,7 @@ impl Router {
                 paused: false,
                 live: None,
             }),
+            snapshot: Mutex::new((RouterState::Off, None)),
             rules: Mutex::new(file),
         }))
     }
@@ -175,6 +178,7 @@ impl Router {
         let before = ctl.state.clone();
         let out = op(&self.0, &mut ctl);
         let changed = ctl.state != before;
+        *self.0.snapshot.lock().unwrap() = (ctl.state.clone(), ctl.live.clone());
         drop(ctl);
         if changed {
             self.0.notify();
@@ -237,10 +241,7 @@ impl Router {
     }
 
     pub fn status(&self) -> RouterStatus {
-        let (state, live) = {
-            let ctl = self.0.ctl.lock().unwrap();
-            (ctl.state.clone(), ctl.live.clone())
-        };
+        let (state, live) = self.0.snapshot.lock().unwrap().clone();
         RouterStatus {
             state,
             proxy: live.as_ref().map_or(ProxyState::Unknown, |l| {
@@ -276,7 +277,7 @@ impl Router {
     }
 
     pub fn flows(&self, all: bool) -> Vec<FlowRow> {
-        match self.0.live() {
+        match self.0.snapshot.lock().unwrap().1.clone() {
             Some(l) => l.stats.lock().unwrap().rows(Instant::now(), all),
             None => Vec::new(),
         }
