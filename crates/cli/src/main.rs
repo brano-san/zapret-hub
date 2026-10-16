@@ -331,7 +331,7 @@ enum RoutesCommand {
     Preset {
         preset: PresetArg,
     },
-    /// The open flows; --all adds the closed ones.
+    /// The open flows and those closed in the last 30 s; --all adds rule-less flows (none in stage 1).
     Flows {
         #[arg(long)]
         all: bool,
