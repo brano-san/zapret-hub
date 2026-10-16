@@ -140,3 +140,52 @@ fn closed_flows_stay_30_seconds_and_traffic_adds_up() {
     );
     assert_eq!(rows[0].destination, "104.29.1.1:50001");
 }
+
+#[test]
+fn one_failed_check_keeps_a_live_proxy() {
+    let ok = ProxyState::Ok { latency_ms: 3 };
+    let down = || ProxyState::Down {
+        error: "refused".into(),
+    };
+    let mut failures = 0;
+    assert_eq!(flows::checked(&ok, down(), &mut failures), None);
+    assert_eq!(
+        flows::checked(&ok, ok.clone(), &mut failures),
+        Some(ok.clone())
+    );
+    assert_eq!(
+        flows::checked(&ok, down(), &mut failures),
+        None,
+        "the count restarts"
+    );
+    assert_eq!(flows::checked(&ok, down(), &mut failures), Some(down()));
+    let mut failures = 0;
+    assert_eq!(
+        flows::checked(&ProxyState::Unknown, down(), &mut failures),
+        Some(down()),
+        "nothing to keep yet"
+    );
+    assert_eq!(
+        flows::checked(&ProxyState::NoUdp, ok.clone(), &mut failures),
+        None,
+        "NoUdp stays until an associate succeeds"
+    );
+}
+
+#[test]
+fn only_flows_sent_direct_by_a_proxy_failure_retry_it() {
+    for reason in [
+        DirectReason::ProxyDown,
+        DirectReason::AuthRequired,
+        DirectReason::NoUdp,
+    ] {
+        assert!(reason.proxy_failure(), "{reason:?}");
+    }
+    for reason in [
+        DirectReason::Timeout,
+        DirectReason::Loop,
+        DirectReason::Failed { error: "x".into() },
+    ] {
+        assert!(!reason.proxy_failure(), "{reason:?}");
+    }
+}

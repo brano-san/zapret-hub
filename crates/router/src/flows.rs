@@ -124,6 +124,26 @@ pub fn decide(
     }
 }
 
+impl DirectReason {
+    /// Sent direct by a proxy failure: such a flow re-opens through the proxy once it is back.
+    pub fn proxy_failure(&self) -> bool {
+        matches!(self, Self::ProxyDown | Self::AuthRequired | Self::NoUdp)
+    }
+}
+
+/// The state a proxy check sets, `None` = keep the current one. A working proxy goes `Down` only
+/// after two failed checks in a row (one lost handshake must not drop a live call); `NoUdp` stays
+/// until an associate succeeds.
+pub fn checked(current: &ProxyState, new: ProxyState, failures: &mut u32) -> Option<ProxyState> {
+    let down = matches!(new, ProxyState::Down { .. });
+    *failures = if down { failures.saturating_add(1) } else { 0 };
+    match (current, &new) {
+        (ProxyState::Ok { .. }, ProxyState::Down { .. }) if *failures < 2 => None,
+        (ProxyState::NoUdp, ProxyState::Ok { .. }) => None,
+        _ => Some(new),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FlowKey {
     pub local_port: u16,

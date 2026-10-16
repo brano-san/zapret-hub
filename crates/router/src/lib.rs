@@ -613,8 +613,8 @@ impl Live {
     }
 
     // ponytail: a control TCP that drops after the flow opened is not watched; proxied flows close
-    // when the 10 s check sees the proxy fail (`set_proxy`), so a dead proxy black-holes up to 10 s;
-    // upgrade: watch `control` for EOF.
+    // when two 10 s checks in a row see the proxy fail (`set_proxy`), so a dead proxy black-holes
+    // up to 20 s; upgrade: watch `control` for EOF.
     fn open_flow(self: Arc<Self>, key: FlowKey, local: SocketAddrV4, inbound: Address) {
         let started = Instant::now();
         let opened = socks::udp_associate(self.proxy, key.dst, OPEN_TIMEOUT).and_then(|assoc| {
@@ -728,20 +728,26 @@ impl Live {
             new,
             ProxyState::Down { .. } | ProxyState::AuthRequired | ProxyState::NoUdp
         );
+        let recovered = changed && matches!(new, ProxyState::Ok { .. });
         *state = new;
         drop(state);
-        if failing {
-            // Their next packets open new flows, which go direct (spec 4.2, 6).
-            let proxied: Vec<FlowKey> = self
+        if failing || recovered {
+            // Their next packets open new flows: direct while it fails, through it once it is
+            // back (spec 4.2, 6).
+            let closing: Vec<FlowKey> = self
                 .flows
                 .lock()
                 .unwrap()
                 .iter()
-                .filter(|(_, f)| matches!(f, FlowState::Proxy(_)))
+                .filter(|(_, f)| match f {
+                    FlowState::Proxy(_) => failing,
+                    FlowState::Direct(reason) => recovered && reason.proxy_failure(),
+                    FlowState::Opening(_) => false,
+                })
                 .map(|(k, _)| *k)
                 .collect();
             let now = Instant::now();
-            for key in proxied {
+            for key in closing {
                 self.close_flow(key, now);
             }
         }
@@ -766,8 +772,9 @@ impl Live {
         false
     }
 
-    /// Right at start and every 10 s; `NoUdp` stays until an associate succeeds.
+    /// Right at start and every 10 s, debounced by `flows::checked`.
     fn check_proxy(&self) {
+        let mut failures = 0;
         loop {
             let new = match socks::check(self.proxy, OPEN_TIMEOUT) {
                 Ok(took) => ProxyState::Ok {
@@ -779,9 +786,8 @@ impl Live {
                 },
             };
             *self.proxy_pid.lock().unwrap() = owner::listener_pid(self.proxy.port());
-            let keep_no_udp = matches!(new, ProxyState::Ok { .. })
-                && *self.proxy_state.lock().unwrap() == ProxyState::NoUdp;
-            if !keep_no_udp {
+            let current = self.proxy_state.lock().unwrap().clone();
+            if let Some(new) = flows::checked(&current, new, &mut failures) {
                 self.set_proxy(new);
             }
             if !self.sleep(PROXY_CHECK) {
