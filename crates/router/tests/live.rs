@@ -23,17 +23,22 @@ fn a_network_handle_captures_and_reinjects_a_packet() {
         )
         .unwrap(),
     );
-    let reader = {
+    let (tx, rx) = std::sync::mpsc::channel();
+    {
         let h = h.clone();
         std::thread::spawn(move || {
             let mut buf = vec![0u8; MAX_PACKET];
-            let (n, addr) = h.recv(&mut buf).unwrap();
-            (buf[..n].to_vec(), addr)
-        })
-    };
+            if let Ok((n, addr)) = h.recv(&mut buf) {
+                let _ = tx.send((buf[..n].to_vec(), addr));
+            }
+        });
+    }
     let s = UdpSocket::bind("0.0.0.0:0").unwrap();
     s.send_to(b"zapret-hub", "192.0.2.1:9").unwrap();
-    let (packet, addr) = reader.join().unwrap();
+    let Ok((packet, addr)) = rx.recv_timeout(Duration::from_secs(2)) else {
+        h.shutdown();
+        panic!("no packet captured within 2 s");
+    };
     assert_eq!(parse_udp(&packet).unwrap().payload, b"zapret-hub");
     assert!(addr.outbound());
     h.send(&packet, &addr).unwrap();
