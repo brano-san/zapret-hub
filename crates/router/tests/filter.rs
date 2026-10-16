@@ -100,3 +100,14 @@ fn the_dll_comes_from_the_running_engine() {
     );
     assert!(pick_dll(None, None, None, all).is_err());
 }
+
+#[test]
+fn a_missing_dll_is_named_with_the_windows_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("WinDivert.dll");
+    let err = format!("{:#}", router::divert::Dll::load(&path).unwrap_err());
+    assert!(
+        err.contains("WinDivert.dll") && err.contains("cannot load"),
+        "{err}"
+    );
+}
