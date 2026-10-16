@@ -68,12 +68,17 @@ pub fn set_enabled(app: &AppHandle, enabled: bool) -> anyhow::Result<RouterStatu
             router_enabled: enabled,
             ..state.settings()
         };
-        let saved = switched
-            .and_then(|()| crate::settings::save(&state.paths.settings(), &settings))
-            .map(|()| state.set_settings(settings));
+        let saved =
+            switched.and_then(|()| crate::settings::save(&state.paths.settings(), &settings));
         if saved.is_err() && enabled {
             state.router.stop();
         }
+        // In memory the setting follows the router even when the file write failed: a stopped
+        // router left `true` there would come back on the next `sync`.
+        state.set_settings(Settings {
+            router_enabled: enabled && saved.is_ok(),
+            ..settings
+        });
         saved
     };
     actions::changed(app);
