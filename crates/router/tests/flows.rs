@@ -308,3 +308,34 @@ fn this_process_has_a_start_time_and_an_image() {
         "the idle process does not open"
     );
 }
+
+#[test]
+fn a_pid_zero_row_never_owns_a_port() {
+    let dw = u32::from(4000u16.to_be());
+    assert_eq!(owner::row_owner(dw, 0, 4000), None, "TIME_WAIT");
+    assert_eq!(owner::row_owner(dw, 9, 4000), Some(9));
+    assert_eq!(owner::row_owner(dw, 9, 4001), None);
+}
+
+#[test]
+fn an_ipv6_socket_is_found_in_the_ipv6_tables() {
+    let tcp = std::net::TcpListener::bind("[::1]:0").unwrap();
+    let udp = std::net::UdpSocket::bind("[::1]:0").unwrap();
+    let me = Some(std::process::id());
+    assert_eq!(
+        table_pid(Protocol::Tcp, tcp.local_addr().unwrap().port()),
+        me
+    );
+    assert_eq!(
+        table_pid(Protocol::Udp, udp.local_addr().unwrap().port()),
+        me
+    );
+}
+
+#[test]
+fn a_failed_image_lookup_is_cached() {
+    let images = Images::default();
+    assert_eq!(images.lookup(4, 1, || None), None);
+    assert_eq!(images.lookup(4, 1, || panic!("cached miss")), None);
+    assert!(images.paths().is_empty());
+}

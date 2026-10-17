@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
 use windows::Win32::NetworkManagement::IpHelper::{
-    GetExtendedTcpTable, GetExtendedUdpTable, MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID,
+    GetExtendedTcpTable, GetExtendedUdpTable, MIB_TCP6ROW_OWNER_PID, MIB_TCP6TABLE_OWNER_PID,
+    MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID, MIB_UDP6ROW_OWNER_PID, MIB_UDP6TABLE_OWNER_PID,
     MIB_UDPROW_OWNER_PID, MIB_UDPTABLE_OWNER_PID, TCP_TABLE_CLASS, TCP_TABLE_OWNER_PID_ALL,
     TCP_TABLE_OWNER_PID_LISTENER, UDP_TABLE_OWNER_PID,
 };
@@ -76,6 +77,7 @@ pub fn port_of(dw_port: u32) -> u16 {
 }
 
 const AF_INET: u32 = 2;
+const AF_INET6: u32 = 23;
 const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
 
 /// Runs a Windows owner-PID table call (retrying while the table grows) and returns the first
@@ -112,6 +114,11 @@ fn owner_rows<Row, T>(
     None
 }
 
+/// Owner of `port` for a table row: TIME_WAIT and similar rows carry PID 0 and never count.
+pub fn row_owner(dw_port: u32, pid: u32, port: u16) -> Option<u32> {
+    (pid != 0 && port_of(dw_port) == port).then_some(pid)
+}
+
 fn tcp_pid(class: TCP_TABLE_CLASS, port: u16) -> Option<u32> {
     owner_rows(
         |table, size| {
@@ -119,28 +126,51 @@ fn tcp_pid(class: TCP_TABLE_CLASS, port: u16) -> Option<u32> {
             unsafe { GetExtendedTcpTable(table, size, false, AF_INET, class, 0) }
         },
         std::mem::offset_of!(MIB_TCPTABLE_OWNER_PID, table),
-        |r: &MIB_TCPROW_OWNER_PID| (port_of(r.dwLocalPort) == port).then_some(r.dwOwningPid),
+        |r: &MIB_TCPROW_OWNER_PID| row_owner(r.dwLocalPort, r.dwOwningPid, port),
     )
+    .or_else(|| {
+        // Dual-stack sockets (bound on [::]) show up only in the IPv6 table.
+        owner_rows(
+            |table, size| {
+                // SAFETY: as above.
+                unsafe { GetExtendedTcpTable(table, size, false, AF_INET6, class, 0) }
+            },
+            std::mem::offset_of!(MIB_TCP6TABLE_OWNER_PID, table),
+            |r: &MIB_TCP6ROW_OWNER_PID| row_owner(r.dwLocalPort, r.dwOwningPid, port),
+        )
+    })
 }
 
-/// PID of the process listening on the IPv4 TCP `port`.
+fn udp_pid(port: u16) -> Option<u32> {
+    owner_rows(
+        |table, size| {
+            // SAFETY: `table` is None (size query) or a buffer of at least `*size` bytes.
+            unsafe { GetExtendedUdpTable(table, size, false, AF_INET, UDP_TABLE_OWNER_PID, 0) }
+        },
+        std::mem::offset_of!(MIB_UDPTABLE_OWNER_PID, table),
+        |r: &MIB_UDPROW_OWNER_PID| row_owner(r.dwLocalPort, r.dwOwningPid, port),
+    )
+    .or_else(|| {
+        owner_rows(
+            |table, size| {
+                // SAFETY: as above.
+                unsafe { GetExtendedUdpTable(table, size, false, AF_INET6, UDP_TABLE_OWNER_PID, 0) }
+            },
+            std::mem::offset_of!(MIB_UDP6TABLE_OWNER_PID, table),
+            |r: &MIB_UDP6ROW_OWNER_PID| row_owner(r.dwLocalPort, r.dwOwningPid, port),
+        )
+    })
+}
+
+/// PID of the process listening on the TCP `port`.
 pub fn listener_pid(port: u16) -> Option<u32> {
     tcp_pid(TCP_TABLE_OWNER_PID_LISTENER, port)
 }
 
-/// PID owning the local IPv4 `local_port` per the Windows socket tables (`Both` is treated as TCP).
+/// PID owning the local `local_port` per the Windows socket tables, IPv4 then IPv6 (`Both` is TCP).
 pub fn table_pid(protocol: Protocol, local_port: u16) -> Option<u32> {
     match protocol {
-        Protocol::Udp => owner_rows(
-            |table, size| {
-                // SAFETY: `table` is None (size query) or a buffer of at least `*size` bytes.
-                unsafe { GetExtendedUdpTable(table, size, false, AF_INET, UDP_TABLE_OWNER_PID, 0) }
-            },
-            std::mem::offset_of!(MIB_UDPTABLE_OWNER_PID, table),
-            |r: &MIB_UDPROW_OWNER_PID| {
-                (port_of(r.dwLocalPort) == local_port).then_some(r.dwOwningPid)
-            },
-        ),
+        Protocol::Udp => udp_pid(local_port),
         Protocol::Tcp | Protocol::Both => tcp_pid(TCP_TABLE_OWNER_PID_ALL, local_port),
     }
 }
@@ -194,8 +224,11 @@ pub fn image_path(pid: u32) -> Option<String> {
 }
 
 /// PID -> (start time, image path); the start time tells a reused PID from the old process.
+/// A failed image lookup is cached too (`None`), so System or unopenable processes cost one query.
 #[derive(Default)]
-pub struct Images(Mutex<HashMap<u32, (u64, Arc<str>)>>);
+pub struct Images(Mutex<HashMap<u32, Cached>>);
+
+type Cached = (u64, Option<Arc<str>>);
 
 impl Images {
     pub fn lookup(
@@ -204,15 +237,14 @@ impl Images {
         start: u64,
         image: impl FnOnce() -> Option<String>,
     ) -> Option<Arc<str>> {
-        let mut map = self.0.lock().unwrap();
-        if let Some((s, path)) = map.get(&pid)
+        if let Some((s, path)) = self.0.lock().unwrap().get(&pid)
             && *s == start
         {
-            return Some(path.clone());
+            return path.clone();
         }
-        let path: Arc<str> = image()?.into();
-        map.insert(pid, (start, path.clone()));
-        Some(path)
+        let path: Option<Arc<str>> = image().map(Into::into); // outside the lock
+        self.0.lock().unwrap().insert(pid, (start, path.clone()));
+        path
     }
 
     pub fn get(&self, pid: u32) -> Option<Arc<str>> {
@@ -233,7 +265,7 @@ impl Images {
             .lock()
             .unwrap()
             .values()
-            .map(|(_, p)| p.clone())
+            .filter_map(|(_, p)| p.clone())
             .collect()
     }
 }
