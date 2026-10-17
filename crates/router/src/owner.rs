@@ -300,10 +300,22 @@ impl Images {
 
     /// Drops entries whose process is gone or whose PID now has another start time.
     pub fn prune(&self, alive: impl Fn(u32) -> Option<u64>) {
+        let seen: Vec<(u32, u64)> = self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(pid, (start, _))| (*pid, *start))
+            .collect();
+        // The liveness checks run outside the lock: the capture thread reads the cache.
+        let dead: Vec<(u32, u64)> = seen
+            .into_iter()
+            .filter(|(pid, start)| alive(*pid) != Some(*start))
+            .collect();
         self.0
             .lock()
             .unwrap()
-            .retain(|pid, (start, _)| alive(*pid) == Some(*start));
+            .retain(|pid, (start, _)| !dead.contains(&(*pid, *start)));
     }
 
     pub fn paths(&self) -> Vec<Arc<str>> {
