@@ -101,7 +101,7 @@
 <label for="route-apps">{S.routes.apps}</label>
 <textarea id="route-apps" rows="3" bind:value={apps}></textarea>
 {@render fieldErrors("apps")}
-{#if draft.apps.length > 0 && draft.ports.length === 0}<p class="muted hint">{S.routes.appsHint}</p>{/if}
+{#if draft.apps.length > 0 && draft.ports.length === 0 && draft.protocol !== "tcp"}<p class="muted hint">{S.routes.appsHint}</p>{/if}
 {#if draft.domains.length > 0}<p class="muted hint">{S.routes.dohHint}</p>{/if}
 <input bind:this={picker} type="file" accept=".txt" hidden onchange={importFile} />
 <div class="buttons">
