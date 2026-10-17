@@ -148,11 +148,6 @@ fn entries_end_after_fin_both_ways_or_a_reset_and_idle_ones_after_2_minutes() {
     nat.from_acceptor(&reply(50001, FIN | ACK), t0);
     nat.from_acceptor(&reply(50002, RST), t0);
     nat.from_client(&seg("192.168.1.5:50003", SERVER, FIN | ACK), AP, t0);
-    assert_eq!(
-        nat.from_client(&seg("192.168.1.5:50001", SERVER, SYN), AP, t0),
-        Verdict::Syn,
-        "a closed entry takes a new SYN"
-    );
     assert!(
         nat.expire(t0 + LINGER - Duration::from_millis(1))
             .is_empty()
@@ -196,6 +191,48 @@ fn a_closed_entry_replaced_by_a_new_syn_is_reported() {
     nat.admit(&seg(CLIENT, "1.1.1.1:443", SYN), AP, t0);
     assert_eq!(nat.expire(t0), [(50000, sa(SERVER))]);
     assert_eq!(nat.destinations(), [sa("1.1.1.1:443")]);
+}
+
+#[test]
+fn a_new_direct_connection_on_a_lingering_port_is_not_caught() {
+    let (t0, mut nat) = (Instant::now(), Nat::default());
+    nat.admit(&seg(CLIENT, SERVER, SYN), AP, t0);
+    nat.from_client(&seg(CLIENT, SERVER, FIN | ACK), AP, t0);
+    nat.from_acceptor(&reply(50000, FIN | ACK), t0);
+    assert_eq!(
+        nat.from_client(&seg(CLIENT, SERVER, ACK), AP, t0),
+        Verdict::Rewrite {
+            src: sa("162.159.135.232:50000"),
+            dst: sa("192.168.1.5:61000")
+        },
+        "the last ACK still reaches the acceptor"
+    );
+    nat.mark_direct(sa(SERVER), t0);
+    assert_eq!(
+        nat.from_client(&seg(CLIENT, SERVER, SYN), AP, t0),
+        Verdict::Marked
+    );
+    assert_eq!(
+        nat.from_client(&seg(CLIENT, SERVER, ACK), AP, t0),
+        Verdict::Pass
+    );
+    assert_eq!(
+        nat.expire(t0),
+        [(50000, sa(SERVER))],
+        "the removal is reported"
+    );
+    assert!(nat.destinations().is_empty());
+}
+
+#[test]
+fn a_closed_entry_takes_a_new_syn() {
+    let (t0, mut nat) = (Instant::now(), Nat::default());
+    nat.admit(&seg(CLIENT, SERVER, SYN), AP, t0);
+    nat.from_acceptor(&reply(50000, RST), t0);
+    assert_eq!(
+        nat.from_client(&seg(CLIENT, SERVER, SYN), AP, t0),
+        Verdict::Syn
+    );
 }
 
 #[test]

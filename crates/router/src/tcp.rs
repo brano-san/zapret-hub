@@ -63,6 +63,8 @@ impl Entry {
 
 /// Entries by client port. Every removal is reported as `(client port, original destination)`
 /// by `expire` or `unaccepted`, so the caller can close its flow row.
+// ponytail: keyed by client port alone; the same local port to another destination replaces a
+// live entry. Upgrade: key by (client port, original destination) if that shows up.
 #[derive(Default)]
 pub struct Nat {
     entries: HashMap<u16, Entry>,
@@ -78,9 +80,16 @@ fn bare_syn(seg: &Tcp) -> bool {
 impl Nat {
     pub fn from_client(&mut self, seg: &Tcp, acceptor: u16, now: Instant) -> Verdict {
         let port = seg.src.port();
+        if bare_syn(seg)
+            && let Some(e) = self.entries.get(&port)
+            && e.closed.is_some()
+        {
+            // A new connection on this port: the lingering entry must not catch its segments.
+            self.replaced.push((port, e.orig));
+            self.entries.remove(&port);
+        }
         if let Some(e) = self.entries.get_mut(&port)
             && e.orig == seg.dst
-            && !(e.closed.is_some() && bare_syn(seg))
         {
             e.see(seg.flags, true, now);
             return to_acceptor(seg, acceptor);
@@ -204,16 +213,29 @@ pub fn pipe(
     count: &mut dyn FnMut(u64),
 ) -> std::io::Result<()> {
     from.set_read_timeout(Some(Duration::from_secs(1)))?;
+    to.set_write_timeout(Some(Duration::from_secs(1)))?;
+    let timed_out =
+        |e: &std::io::Error| matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut);
     let (mut from, mut to) = (from, to);
     let mut buf = [0u8; 16 * 1024];
     loop {
         match from.read(&mut buf) {
             Ok(0) => return to.shutdown(Shutdown::Write),
             Ok(n) => {
-                to.write_all(&buf[..n])?;
+                let mut sent = 0;
+                while sent < n {
+                    match to.write(&buf[sent..n]) {
+                        Ok(0) => return Err(ErrorKind::WriteZero.into()),
+                        Ok(k) => sent += k,
+                        Err(e) if timed_out(&e) && !stop() => {}
+                        Err(e) if timed_out(&e) => return Ok(()),
+                        Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                        Err(e) => return Err(e),
+                    }
+                }
                 count(n as u64);
             }
-            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+            Err(e) if timed_out(&e) => {
                 if stop() {
                     return Ok(());
                 }
