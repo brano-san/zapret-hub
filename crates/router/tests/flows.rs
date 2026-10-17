@@ -1,6 +1,6 @@
 use router::divert::Address;
 use router::flows::{self, DirectReason, FlowKey, Pending, ProxyState, Stats, Via};
-use router::owner::{self, Owners, PID_WAIT};
+use router::owner::{self, Images, Owners, PID_WAIT, table_pid};
 use router::rules::Protocol;
 use std::time::{Duration, Instant};
 
@@ -219,4 +219,92 @@ fn tcp_flows_never_go_idle_and_rows_name_protocol_and_domain() {
     assert_eq!(rows.len(), 2, "same port and address, two protocols");
     let row = rows.iter().find(|r| r.protocol == "tcp").unwrap();
     assert_eq!(row.domain.as_deref(), Some("discord.com"));
+}
+
+#[test]
+fn an_unknown_owner_is_looked_up_then_remembered() {
+    let owners = Owners::default();
+    assert_eq!(
+        owners.pid(5000, PID_WAIT, |_| Some(42)),
+        Some(42),
+        "from the tables"
+    );
+    assert_eq!(owners.pid(5000, PID_WAIT, |_| panic!("known")), Some(42));
+    let started = Instant::now();
+    assert_eq!(owners.pid(5001, PID_WAIT, |_| None), None);
+    assert!(started.elapsed() >= PID_WAIT);
+    let started = Instant::now();
+    assert_eq!(owners.pid(5001, PID_WAIT, |_| panic!("remembered")), None);
+    assert!(
+        started.elapsed() < PID_WAIT,
+        "a port without an owner is not waited for again"
+    );
+    owners.record(5001, 7);
+    assert_eq!(
+        owners.pid(5001, PID_WAIT, |_| None),
+        Some(7),
+        "a late event still lands"
+    );
+    owners.forget(5001);
+    assert_eq!(
+        owners.pid(5001, Duration::ZERO, |_| Some(8)),
+        Some(8),
+        "a closed socket is looked up again"
+    );
+}
+
+#[test]
+fn the_owner_of_a_bound_port_is_found_in_the_tables() {
+    let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let me = Some(std::process::id());
+    assert_eq!(
+        table_pid(Protocol::Udp, udp.local_addr().unwrap().port()),
+        me
+    );
+    assert_eq!(
+        table_pid(Protocol::Tcp, tcp.local_addr().unwrap().port()),
+        me
+    );
+}
+
+#[test]
+fn a_process_image_is_cached_by_pid_and_start_time() {
+    let images = Images::default();
+    let dbd = r"C:\Games\DeadByDaylight-Win64-Shipping.exe";
+    assert_eq!(
+        images.lookup(10, 1, || Some(dbd.into())).as_deref(),
+        Some(dbd)
+    );
+    assert_eq!(
+        images.lookup(10, 1, || panic!("cached")).as_deref(),
+        Some(dbd)
+    );
+    assert_eq!(
+        images
+            .lookup(10, 2, || Some(r"C:\x\other.exe".into()))
+            .as_deref(),
+        Some(r"C:\x\other.exe"),
+        "a reused PID"
+    );
+    images.prune(|pid| (pid == 10).then_some(2));
+    assert_eq!(images.paths().len(), 1);
+    images.prune(|_| None);
+    assert!(images.paths().is_empty());
+}
+
+#[test]
+fn this_process_has_a_start_time_and_an_image() {
+    let pid = std::process::id();
+    let start = owner::process_start(pid).unwrap();
+    assert_eq!(owner::process_start(pid), Some(start));
+    let exe = owner::image_path(pid).unwrap();
+    let me = std::env::current_exe().unwrap();
+    assert_eq!(exe.to_lowercase(), me.to_string_lossy().to_lowercase());
+    assert_eq!(Images::default().get(pid).as_deref(), Some(exe.as_str()));
+    assert_eq!(
+        owner::process_start(0),
+        None,
+        "the idle process does not open"
+    );
 }
