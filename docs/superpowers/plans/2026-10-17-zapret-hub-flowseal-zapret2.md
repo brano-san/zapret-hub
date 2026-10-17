@@ -90,7 +90,7 @@
 ### Task 5: Документация и версия
 
 **Files:**
-- Modify: `README.md` (раздел zapret2: встроенные копии Flowseal, имена, источник, не в прогоне по умолчанию), `docs/cli.md` (протокол 4, `tests run` без имён — без копий, пример имени; чек-лист: пункт о копии и пункт о протоколе), `docs/superpowers/specs/2026-10-17-zapret-hub-zapret2-design.md` (поправка: встроенные копии Flowseal), `docs/superpowers/specs/2026-10-17-zapret-hub-diag-design.md` (протокол CLI диагностики — 5), `CHANGELOG.md`, `Cargo.toml`, `package.json`, `frontend/package.json`, `package-lock.json`, `Cargo.lock` (0.7.0)
+- Modify: `README.md` (раздел zapret2: встроенные копии Flowseal, имена, источник, не в прогоне по умолчанию), `docs/cli.md` (протокол 4, `tests run` без имён — без копий, пример имени; чек-лист: пункт о копии и пункт о протоколе), `docs/superpowers/specs/2026-10-11-zapret-hub-zapret2-design.md` (поправка: встроенные копии Flowseal), `docs/superpowers/specs/2026-10-17-zapret-hub-diag-design.md` (протокол CLI диагностики — 5), `CHANGELOG.md`, `Cargo.toml`, `package.json`, `frontend/package.json`, `package-lock.json`, `Cargo.lock` (0.7.0)
 
 - [ ] **Step 1:** Правки текста; версии — через инструменты (`cargo`, `npm version --no-git-tag-version`), не руками в lock-файлах.
 - [ ] **Step 2:** Полный набор проверок из Task 1, Step 4.
