@@ -1,5 +1,6 @@
 use router::divert::{
     Engine, FILTER_BUDGET, MAX_FILTER_RANGES, capture_filter, filter, pick_dll, refused,
+    refused_for_good,
 };
 use router::rules::{self, Preset, Protocol, Rule, Table};
 use std::net::Ipv4Addr;
@@ -340,4 +341,5 @@ fn a_refused_capture_filter_names_too_many_rules() {
     assert!(refused(&invalid).starts_with("too many rules for the capture filter"));
     let other = std::io::Error::from_raw_os_error(5);
     assert!(refused(&other).starts_with("WinDivert refused the filter: "));
+    assert!(refused_for_good(&invalid) && !refused_for_good(&other));
 }

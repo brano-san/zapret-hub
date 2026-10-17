@@ -186,6 +186,8 @@ fn only_flows_sent_direct_by_a_proxy_failure_retry_it() {
     for reason in [
         DirectReason::Timeout,
         DirectReason::Loop,
+        DirectReason::Marked,
+        DirectReason::NotAccepted,
         DirectReason::Failed { error: "x".into() },
     ] {
         assert!(!reason.proxy_failure(), "{reason:?}");

@@ -167,6 +167,12 @@ pub fn refused(e: &std::io::Error) -> String {
     }
 }
 
+/// Only error 87 (the filter did not fit) is final for that filter text; memory or driver
+/// errors may pass on the next rebuild.
+pub fn refused_for_good(e: &std::io::Error) -> bool {
+    e.raw_os_error() == Some(87)
+}
+
 pub fn filter(table: &Table) -> Option<String> {
     capture_filter(table, None, &[])
 }

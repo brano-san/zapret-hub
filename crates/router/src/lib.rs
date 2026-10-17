@@ -679,7 +679,9 @@ impl Live {
             Ok(h) => Arc::new(h),
             Err(e) => {
                 let reason = divert::refused(&e);
-                filter.failed = Some((text, reason.clone()));
+                if divert::refused_for_good(&e) {
+                    filter.failed = Some((text, reason.clone()));
+                }
                 self.release(None);
                 return Err(reason);
             }
