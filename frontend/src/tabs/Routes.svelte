@@ -16,6 +16,7 @@
 
   const on = $derived(status !== null && status.state.state !== "Off");
   const error = $derived(view?.error ?? status?.rules_error ?? null);
+  const dohBlind = $derived(!!view?.system_doh && view.rules.some((r) => r.rule.enabled && r.rule.domains.length > 0));
 
   // Every read counts: an answer older than the latest asked (say, before «все» flipped) is dropped.
   let asked = 0;
@@ -118,6 +119,7 @@
     <p>{S.routes.proxied(trafficLabel(status.totals.proxied))}</p>
     <p>{S.routes.direct(trafficLabel(status.totals.direct))}</p>
     {#if error}<pre class="bad">{error}</pre>{/if}
+    {#if dohBlind}<p class="warn">{S.routes.systemDoh}</p>{/if}
   </section>
 
   <section class="card">

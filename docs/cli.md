@@ -133,7 +133,7 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `service remove --yes` | удаляет службу zapret или zapret2 и WinDivert | `remove_service` |
 | `router on\|off` | включает или выключает маршрутизацию; пишет `router_enabled` | `set_router_enabled` |
 | `router status` | идёт ли маршрутизация, состояние прокси, счётчики | `router_status` |
-| `routes list` | правила, их состояние и ошибка файла `routes.toml` | `list_routes` |
+| `routes list` | правила, их состояние, ошибка файла `routes.toml` и `system_doh` — включено ли шифрование DNS в Windows (тогда правила по доменам не срабатывают) | `list_routes` |
 | `routes show <name>` | одно правило | `get_route` |
 | `routes add <name> --file <file\|->` | добавляет правило из файла с таблицей `[rule]` | `save_route` |
 | `routes edit <name> --file <file\|->` | заменяет правило из файла с таблицей `[rule]` | `save_route` |

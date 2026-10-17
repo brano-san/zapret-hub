@@ -659,6 +659,7 @@ pub async fn list_routes(handle: AppHandle) -> RoutesView {
         .unwrap_or_else(|err| RoutesView {
             rules: Vec::new(),
             error: Some(format!("the command did not finish: {err}")),
+            system_doh: false,
         })
 }
 

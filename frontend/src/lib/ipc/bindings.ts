@@ -547,6 +547,8 @@ export type RouterStatus = {
 export type RoutesView = {
 	rules: RuleRow[],
 	error: string | null,
+	/**  Windows resolves names over DNS over HTTPS: domain rules see no answers. */
+	system_doh: boolean,
 };
 
 export type Rule = {

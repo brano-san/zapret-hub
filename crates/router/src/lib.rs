@@ -1,5 +1,6 @@
 pub mod divert;
 pub mod dns;
+pub mod doh;
 pub mod flows;
 mod live_tcp;
 pub mod owner;
@@ -88,6 +89,8 @@ pub struct RuleRow {
 pub struct RoutesView {
     pub rules: Vec<RuleRow>,
     pub error: Option<String>,
+    /// Windows resolves names over DNS over HTTPS: domain rules see no answers.
+    pub system_doh: bool,
 }
 
 #[derive(Clone)]
@@ -290,6 +293,7 @@ impl Router {
                 })
                 .collect(),
             error: file.error(),
+            system_doh: doh::system_doh(),
         }
     }
 
