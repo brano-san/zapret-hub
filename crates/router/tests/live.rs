@@ -98,56 +98,132 @@ fn shutdown_ends_a_waiting_recv() {
     assert!(t.elapsed() < Duration::from_secs(1));
 }
 
+/// A router running one rule. The traffic under test comes from a child process: the router
+/// leaves this process's own sockets alone (`Loop`).
+fn running(rule: router::rules::Rule) -> (tempfile::TempDir, router::Router) {
+    use router::{Router, RouterState, Setup, parse_proxy};
+    let dir = tempfile::tempdir().unwrap();
+    let r = Router::new(dir.path().join("routes.toml"));
+    r.edit(|list| router::rules::add(list, rule)).unwrap();
+    let proxy = parse_proxy(std::env::var("ROUTER_SOCKS5").ok().as_deref()).unwrap();
+    let dll = PathBuf::from(std::env::var("WINDIVERT_DLL").expect("set WINDIVERT_DLL"));
+    r.start(Setup { dll, proxy }).unwrap();
+    assert_eq!(r.status().state, RouterState::Running);
+    (dir, r)
+}
+
+/// `curl.exe` (in System32 since Windows 10 1803) fetches `http://<ip>/`; returns its output.
+fn curl(ip: &str, host: &str) -> String {
+    let out = std::process::Command::new("curl.exe")
+        .args(["-s", "-i", "--http1.1", "--max-time", "10", "-H"])
+        .arg(format!("Host: {host}"))
+        .args(["-H", "Connection: close"])
+        .arg(format!("http://{ip}/"))
+        .output()
+        .expect("curl.exe runs");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
 #[test]
 #[ignore = "opens WinDivert: run elevated with WINDIVERT_DLL and ROUTER_SOCKS5 (a working proxy) set"]
 fn a_running_router_relays_a_flow_through_the_proxy() {
+    use router::RouterState;
     use router::flows::Via;
-    use router::rules::{self, Protocol, Rule};
-    use router::{Router, RouterState, Setup, parse_proxy};
+    use router::rules::{Protocol, Rule};
 
-    let dir = tempfile::tempdir().unwrap();
-    let r = Router::new(dir.path().join("routes.toml"));
-    let rule = Rule {
+    let (_dir, r) = running(Rule {
         name: "dns".into(),
         enabled: true,
         protocol: Protocol::Udp,
         ports: vec!["53".into()],
         ips: vec!["1.1.1.1/32".into()],
         domains: vec![],
-    };
-    r.edit(|list| rules::add(list, rule)).unwrap();
-    let proxy = parse_proxy(std::env::var("ROUTER_SOCKS5").ok().as_deref()).unwrap();
-    let dll = PathBuf::from(std::env::var("WINDIVERT_DLL").expect("set WINDIVERT_DLL"));
-    r.start(Setup { dll, proxy }).unwrap();
-    assert_eq!(r.status().state, RouterState::Running);
+    });
+    let out = std::process::Command::new("nslookup.exe")
+        .args(["-timeout=5", "example.com", "1.1.1.1"])
+        .output()
+        .expect("nslookup.exe runs");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("example.com"),
+        "no DNS answer through the proxy: {text}"
+    );
 
-    // A DNS query for example.com, type A.
-    let mut query = vec![0x12, 0x34, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];
-    for label in ["example", "com"] {
-        query.push(label.len() as u8);
-        query.extend_from_slice(label.as_bytes());
+    let rows = r.flows(false);
+    let row = rows
+        .iter()
+        .find(|f| f.protocol == "udp" && f.destination == "1.1.1.1:53" && f.down > 0.0)
+        .unwrap_or_else(|| panic!("no flow row with an answer: {rows:?}"));
+    assert_eq!(row.via, Via::Proxy, "{row:?}");
+    r.stop();
+    assert_eq!(r.status().state, RouterState::Off);
+}
+
+#[test]
+#[ignore = "opens WinDivert: run elevated with WINDIVERT_DLL and ROUTER_SOCKS5 (a working proxy) set"]
+fn a_running_router_carries_tcp_through_the_proxy() {
+    use router::flows::Via;
+    use router::rules::{Protocol, Rule};
+
+    let (_dir, r) = running(Rule {
+        name: "web".into(),
+        enabled: true,
+        protocol: Protocol::Tcp,
+        ports: vec!["80".into()],
+        ips: vec!["1.1.1.1/32".into()],
+        domains: vec![],
+    });
+    let reply = curl("1.1.1.1", "1.1.1.1");
+    assert!(reply.starts_with("HTTP/1.1"), "{reply}");
+    let rows = r.flows(false);
+    let row = rows
+        .iter()
+        .find(|f| f.protocol == "tcp" && f.destination == "1.1.1.1:80")
+        .unwrap_or_else(|| panic!("no flow row: {rows:?}"));
+    assert_eq!(row.via, Via::Proxy, "{row:?}");
+    assert!(row.down > 0.0, "{row:?}");
+    r.stop();
+}
+
+#[test]
+#[ignore = "opens WinDivert: run elevated with WINDIVERT_DLL and ROUTER_SOCKS5 (a working proxy) set"]
+fn a_domain_rule_follows_dns() {
+    use router::flows::Via;
+    use router::rules::{Protocol, Rule};
+
+    let (_dir, r) = running(Rule {
+        name: "one".into(),
+        enabled: true,
+        protocol: Protocol::Both,
+        ports: vec![],
+        ips: vec![],
+        domains: vec!["one.one.one.one".into()],
+    });
+    // Our own query, not the system resolver's cache.
+    let mut query = vec![0x43, 0x21, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+    for _ in 0..4 {
+        query.extend_from_slice(b"\x03one");
     }
     query.extend_from_slice(&[0, 0, 1, 0, 1]);
     let s = UdpSocket::bind("0.0.0.0:0").unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     s.send_to(&query, "1.1.1.1:53").unwrap();
     let mut buf = [0u8; 1500];
-    let (n, from) = s
-        .recv_from(&mut buf)
-        .expect("no DNS answer through the proxy");
-    assert_eq!(from.to_string(), "1.1.1.1:53");
-    assert!(n > 12 && buf[..2] == [0x12, 0x34], "not our answer");
+    let (n, _) = s.recv_from(&mut buf).expect("no DNS answer");
+    let answer = router::dns::parse(&buf[..n]).expect("a DNS answer");
+    let ip = answer.ips.first().expect("an A record").0.to_string();
+    std::thread::sleep(Duration::from_millis(1500)); // the filter reopens with the new address
 
-    let port = s.local_addr().unwrap().port();
+    let reply = curl(&ip, "one.one.one.one");
+    assert!(reply.starts_with("HTTP/1.1"), "{reply}");
     let rows = r.flows(false);
     let row = rows
         .iter()
-        .find(|f| f.local_port == port && f.destination == "1.1.1.1:53")
+        .find(|f| f.protocol == "tcp" && f.destination == format!("{ip}:80"))
         .unwrap_or_else(|| panic!("no flow row: {rows:?}"));
+    assert_eq!(row.domain.as_deref(), Some("one.one.one.one"), "{row:?}");
     assert_eq!(row.via, Via::Proxy, "{row:?}");
-    assert!(row.down > 0.0, "{row:?}");
     r.stop();
-    assert_eq!(r.status().state, RouterState::Off);
 }
 
 #[test]

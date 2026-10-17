@@ -211,3 +211,18 @@ fn a_failed_edit_still_applies_an_outside_change() {
     );
     assert_eq!(r.rules().rules.len(), 1);
 }
+
+#[test]
+fn a_domain_rule_is_saved_and_its_names_are_wanted() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = router(dir.path());
+    r.edit(|list| rules::add(list, rules::preset(Preset::Discord)))
+        .unwrap();
+    assert!(r.table().wants("gateway.discord.gg"));
+    assert_eq!(
+        rules::load(&dir.path().join("routes.toml")).unwrap()[0]
+            .domains
+            .len(),
+        5
+    );
+}

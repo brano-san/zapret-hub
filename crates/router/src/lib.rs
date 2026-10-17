@@ -1,6 +1,7 @@
 pub mod divert;
 pub mod dns;
 pub mod flows;
+mod live_tcp;
 pub mod owner;
 pub mod packet;
 pub mod rules;
@@ -9,7 +10,7 @@ pub mod tcp;
 
 use std::collections::{HashMap, hash_map::Entry};
 use std::mem::discriminant;
-use std::net::{SocketAddr, SocketAddrV4, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
@@ -18,15 +19,21 @@ use std::time::{Duration, Instant, SystemTime};
 use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
-use divert::{Address, Dll, FLAG_RECV_ONLY, FLAG_SNIFF, Handle, Layer, MAX_PACKET, SOCKET_FILTER};
+use divert::{
+    Address, DNS_FILTER, Dll, FLAG_RECV_ONLY, FLAG_SNIFF, Handle, Layer, MAX_PACKET, PROTO_TCP,
+    SOCKET_FILTER,
+};
+use dns::Names;
 use flows::{DirectReason, FlowKey, FlowRow, Pending, ProxyState, Stats, Totals, Traffic, Via};
 use owner::{Owners, PID_WAIT};
-use packet::{build_udp, parse_socks_udp, parse_udp, socks_header};
-use rules::{Rule, Table};
+use packet::{build_udp, parse_socks_udp_from, parse_tcp, parse_udp, socks_header_to};
+use rules::{Protocol, Rule, Table};
 use socks::{OPEN_TIMEOUT, SocksError};
 
 const PROXY_CHECK: Duration = Duration::from_secs(10);
-const RULES_CHECK_TICKS: u32 = 2;
+/// At most 500 ms: an unaccepted SYN must go direct before its 3 s retry (`tcp::ACCEPT_WAIT`).
+const TICK: Duration = Duration::from_millis(500);
+const RULES_CHECK_TICKS: u32 = 4;
 const REOPEN_GAP: Duration = Duration::from_secs(1);
 /// The largest UDP payload an IPv4 packet carries (`build_udp` refuses more).
 const MAX_PAYLOAD: usize = 65507;
@@ -95,6 +102,8 @@ struct Inner {
     rules: Mutex<RulesFile>,
     /// The table in force; a launch starts from it.
     table: Mutex<Table>,
+    /// Outlives sessions: programs keep resolved addresses cached across a pause.
+    names: Arc<Mutex<Names>>,
 }
 
 struct Ctl {
@@ -157,6 +166,7 @@ impl Router {
         let table = Mutex::new(Table::new(&file.list));
         Router(Arc::new(Inner {
             table,
+            names: Arc::default(),
             path: routes,
             on_change: Mutex::new(None),
             ctl: Mutex::new(Ctl {
@@ -374,7 +384,7 @@ impl Inner {
         *self.table.lock().unwrap() = table.clone();
         let Some(live) = self.live() else { return };
         let error = live
-            .apply(table)
+            .apply(Some(table))
             .err()
             .map(|e| format!("WinDivert refused the filter: {e}"));
         self.rules.lock().unwrap().filter_error = error;
@@ -382,16 +392,18 @@ impl Inner {
 }
 
 struct Relay {
-    _control: std::net::TcpStream,
+    _control: TcpStream,
     socket: UdpSocket,
     relay: SocketAddrV4,
     inbound: Address,
     local: SocketAddrV4,
+    /// Named in each datagram's header instead of the address, when known.
+    domain: Option<String>,
 }
 
 impl Relay {
     fn send(&self, dst: SocketAddrV4, payload: &[u8]) {
-        let mut datagram = socks_header(dst).to_vec();
+        let mut datagram = socks_header_to(dst, self.domain.as_deref());
         datagram.extend_from_slice(payload);
         let _ = self.socket.send_to(&datagram, self.relay);
     }
@@ -409,6 +421,15 @@ struct FilterState {
     opened: Option<Instant>,
 }
 
+/// SYNs to addresses the table has but the open capture filter may not (ruling R1): reflecting
+/// one before the filter catches its connection's later segments would break the connection.
+#[derive(Default)]
+struct Waiting {
+    /// The table of the filter in force.
+    active: Arc<Table>,
+    syns: Vec<(Vec<u8>, Address)>,
+}
+
 /// One running session: handles, flows and counters; dropped whole on stop or pause.
 struct Live {
     inner: Weak<Inner>,
@@ -419,9 +440,21 @@ struct Live {
     capture: RwLock<Option<Arc<Handle>>>,
     sockets: Mutex<Option<Arc<Handle>>>,
     filter: Mutex<FilterState>,
+    /// The rules without resolved names; `table` is it with them.
+    base: Mutex<Table>,
     table: RwLock<Arc<Table>>,
+    names: Arc<Mutex<Names>>,
+    waiting: Mutex<Waiting>,
     flows: Mutex<HashMap<FlowKey, FlowState>>,
+    /// UDP ports; TCP ports have their own map, so a TCP socket event never replaces a UDP owner.
     owners: Owners,
+    tcp_owners: Owners,
+    nat: Mutex<tcp::Nat>,
+    acceptor: TcpListener,
+    acceptor_port: u16,
+    dns: Mutex<Option<Arc<Handle>>>,
+    /// Both sockets of each proxied TCP connection, shut down when its NAT entry or the session ends.
+    conns: Mutex<HashMap<FlowKey, (TcpStream, TcpStream)>>,
     stats: Mutex<Stats>,
     proxy_state: Mutex<ProxyState>,
     proxy_pid: Mutex<Option<u32>>,
@@ -444,6 +477,19 @@ impl Live {
             )
             .map_err(|e| anyhow!("WinDivert refused the socket handle: {e}"))?,
         );
+        let dns = Arc::new(
+            Handle::open(
+                &dll,
+                DNS_FILTER,
+                Layer::Network,
+                FLAG_SNIFF | FLAG_RECV_ONLY,
+            )
+            .map_err(|e| anyhow!("WinDivert refused the DNS handle: {e}"))?,
+        );
+        let acceptor = TcpListener::bind("0.0.0.0:0")
+            .map_err(|e| anyhow!("cannot open the local TCP acceptor: {e}"))?;
+        let acceptor_port = acceptor.local_addr()?.port();
+        inner.names.lock().unwrap().expire(Instant::now());
         let live = Arc::new(Live {
             inner: Arc::downgrade(inner),
             dll,
@@ -452,15 +498,24 @@ impl Live {
             capture: RwLock::new(None),
             sockets: Mutex::new(Some(sockets.clone())),
             filter: Mutex::new(FilterState::default()),
+            base: Mutex::new(Table::default()),
             table: RwLock::new(Arc::new(Table::default())),
+            names: inner.names.clone(),
+            waiting: Mutex::new(Waiting::default()),
             flows: Mutex::new(HashMap::new()),
             owners: Owners::default(),
+            tcp_owners: Owners::default(),
+            nat: Mutex::new(tcp::Nat::default()),
+            acceptor,
+            acceptor_port,
+            dns: Mutex::new(Some(dns.clone())),
+            conns: Mutex::new(HashMap::new()),
             stats: Mutex::new(Stats::default()),
             proxy_state: Mutex::new(ProxyState::Unknown),
             proxy_pid: Mutex::new(None),
             next_id: AtomicU16::new(0),
         });
-        if let Err(e) = live.apply(table) {
+        if let Err(e) = live.apply(Some(table)) {
             live.shut();
             bail!("WinDivert refused the filter: {e}");
         }
@@ -468,13 +523,22 @@ impl Live {
         spawn(move || {
             while let Ok((_, addr)) = sockets.recv(&mut []) {
                 let port = addr.socket_local_port();
-                if addr.event() == divert::EVENT_SOCKET_CLOSE {
-                    l.owners.forget(port);
+                let owners = if addr.socket_protocol() == PROTO_TCP {
+                    &l.tcp_owners
                 } else {
-                    l.owners.record(port, addr.socket_pid());
+                    &l.owners
+                };
+                if addr.event() == divert::EVENT_SOCKET_CLOSE {
+                    owners.forget(port);
+                } else {
+                    owners.record(port, addr.socket_pid());
                 }
             }
         });
+        let l = live.clone();
+        spawn(move || l.dns_loop(&dns));
+        let l = live.clone();
+        spawn(move || l.accept_loop());
         let l = live.clone();
         spawn(move || l.housekeeping());
         let l = live.clone();
@@ -489,6 +553,43 @@ impl Live {
     /// Works after a panic poisoned the locks (`capture_loop`).
     fn shut(&self) {
         self.stopped.store(true, Ordering::SeqCst);
+        // Held SYNs go out unchanged while the capture can still send.
+        let syns = std::mem::take(
+            &mut self
+                .waiting
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .syns,
+        );
+        if let Some(h) = &*self.capture.read().unwrap_or_else(PoisonError::into_inner) {
+            for (packet, addr) in &syns {
+                let _ = h.send(packet, addr);
+            }
+        }
+        if let Some(h) = self
+            .dns
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            h.shutdown();
+        }
+        // Nobody rewrites the redirected connections any more: they end (programs reconnect).
+        *self.nat.lock().unwrap_or_else(PoisonError::into_inner) = tcp::Nat::default();
+        for (_, (a, b)) in self
+            .conns
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .drain()
+        {
+            let _ = a.shutdown(std::net::Shutdown::Both);
+            let _ = b.shutdown(std::net::Shutdown::Both);
+        }
+        // Wakes the acceptor, which then sees `stopped`.
+        let _ = TcpStream::connect_timeout(
+            &SocketAddr::from((Ipv4Addr::LOCALHOST, self.acceptor_port)),
+            Duration::from_secs(1),
+        );
         if let Some(h) = self
             .sockets
             .lock()
@@ -518,24 +619,54 @@ impl Live {
         }
     }
 
-    /// New table now; a changed filter opens a new handle (at most once a second) before the old
+    /// New rules (`None`: the same ones with the names known now) take effect at once; a changed
+    /// filter opens a new handle (at most once a second, unless a SYN waits for it) before the old
     /// one stops receiving. No rules: a `false` filter, which captures nothing but still injects.
-    fn apply(self: &Arc<Self>, table: Table) -> std::io::Result<()> {
+    fn apply(self: &Arc<Self>, base: Option<Table>) -> std::io::Result<()> {
         let mut filter = self.filter.lock().unwrap();
-        let text = divert::filter(&table);
-        *self.table.write().unwrap() = Arc::new(table);
+        let base = match base {
+            Some(b) => {
+                *self.base.lock().unwrap() = b.clone();
+                b
+            }
+            None => self.base.lock().unwrap().clone(),
+        };
+        let table = base.with_names(&self.names.lock().unwrap().entries());
+        // Live connections keep their destination captured (spec 7), matched or not.
+        let held: Vec<Ipv4Addr> = self
+            .nat
+            .lock()
+            .unwrap()
+            .destinations()
+            .into_iter()
+            .filter(|d| table.matches(Protocol::Tcp, *d).is_none())
+            .map(|d| *d.ip())
+            .collect();
+        let text = divert::capture_filter(&table, Some(self.acceptor_port), &held);
+        let table = Arc::new(table);
+        *self.table.write().unwrap() = table.clone();
         if filter.opened.is_some() && text == filter.text {
+            self.release(Some(table));
             return Ok(());
         }
         if let Some(at) = filter.opened {
-            std::thread::sleep(REOPEN_GAP.saturating_sub(at.elapsed()));
+            // A held SYN skips the gap: its program is waiting for this reopen.
+            while at.elapsed() < REOPEN_GAP && self.waiting.lock().unwrap().syns.is_empty() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
         }
-        let new = Arc::new(Handle::open(
+        let new = match Handle::open(
             &self.dll,
             text.as_deref().unwrap_or("false"),
             Layer::Network,
             0,
-        )?);
+        ) {
+            Ok(h) => Arc::new(h),
+            Err(e) => {
+                self.release(None);
+                return Err(e);
+            }
+        };
         filter.text = text;
         filter.opened = Some(Instant::now());
         let (l, h) = (self.clone(), new.clone());
@@ -551,6 +682,7 @@ impl Live {
         if let Some(old) = old {
             old.shutdown();
         }
+        self.release(Some(table));
         Ok(())
     }
 
@@ -592,6 +724,9 @@ impl Live {
     }
 
     fn on_packet(self: &Arc<Self>, handle: &Handle, packet: &[u8], addr: Address) {
+        if let Some(seg) = parse_tcp(packet) {
+            return self.on_tcp(Some(handle), packet, &seg, addr);
+        }
         // Stopped: the old handle drains its queue unchanged, no new flows open.
         let Some(udp) = parse_udp(packet)
             .filter(|u| !self.is_stopped() && packet::unicast(*u.src.ip(), *u.dst.ip()))
@@ -617,15 +752,19 @@ impl Live {
             let state = self.proxy_state.lock().unwrap().clone();
             let proxy_pid = *self.proxy_pid.lock().unwrap();
             let reason = flows::decide(&state, pid, std::process::id(), proxy_pid);
+            let now = Instant::now();
+            let domain = self.domain_of(udp.dst, now);
             let mut flows = self.flows.lock().unwrap();
             if let Entry::Vacant(e) = flows.entry(key) {
-                let now = Instant::now();
                 match reason {
                     Some(reason) => {
                         e.insert(FlowState::Direct(reason.clone()));
                         drop(flows);
                         let mut stats = self.stats.lock().unwrap();
                         stats.open(key, rule, Via::Direct { reason }, now);
+                        if let Some(d) = domain {
+                            stats.set_domain(key, d);
+                        }
                         stats.add(key, up, 0, now);
                         drop(stats);
                         let _ = handle.send(packet, &addr);
@@ -634,13 +773,15 @@ impl Live {
                         let mut pending = Pending::default();
                         pending.push(packet.to_vec(), addr);
                         e.insert(FlowState::Opening(pending));
-                        self.stats
-                            .lock()
-                            .unwrap()
-                            .open(key, rule, Via::Opening, now);
+                        let mut stats = self.stats.lock().unwrap();
+                        stats.open(key, rule, Via::Opening, now);
+                        if let Some(d) = domain.clone() {
+                            stats.set_domain(key, d);
+                        }
+                        drop(stats);
                         drop(flows);
                         let (l, local, inbound) = (self.clone(), udp.src, addr.as_inbound());
-                        spawn(move || l.open_flow(key, local, inbound));
+                        spawn(move || l.open_flow(key, local, inbound, domain));
                     }
                 }
                 return;
@@ -666,7 +807,13 @@ impl Live {
     // ponytail: a control TCP that drops after the flow opened is not watched; proxied flows close
     // when two 10 s checks in a row see the proxy fail (`set_proxy`), so a dead proxy black-holes
     // up to 20 s; upgrade: watch `control` for EOF.
-    fn open_flow(self: Arc<Self>, key: FlowKey, local: SocketAddrV4, inbound: Address) {
+    fn open_flow(
+        self: Arc<Self>,
+        key: FlowKey,
+        local: SocketAddrV4,
+        inbound: Address,
+        domain: Option<String>,
+    ) {
         let started = Instant::now();
         let opened = socks::udp_associate(self.proxy, key.dst, OPEN_TIMEOUT).and_then(|assoc| {
             let socket = UdpSocket::bind("127.0.0.1:0")?;
@@ -677,6 +824,7 @@ impl Live {
                 relay: assoc.relay,
                 inbound,
                 local,
+                domain,
             }))
         });
         let latency_ms = started.elapsed().as_millis() as u32;
@@ -755,8 +903,10 @@ impl Live {
             if from != SocketAddr::V4(relay.relay) {
                 continue;
             }
-            // The buffer caps `data` at MAX_PAYLOAD, so `build_udp` never panics.
-            let Some((src, data)) = parse_socks_udp(&buf[..n]) else {
+            // A short domain header leaves more than MAX_PAYLOAD, which `build_udp` refuses.
+            let Some((src, data)) = parse_socks_udp_from(&buf[..n], key.dst)
+                .filter(|(_, data)| data.len() <= MAX_PAYLOAD)
+            else {
                 continue;
             };
             let id = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -790,6 +940,9 @@ impl Live {
         let recovered = changed && matches!(new, ProxyState::Ok { .. });
         *state = new;
         drop(state);
+        if recovered {
+            self.nat.lock().unwrap().clear_marks();
+        }
         if failing || recovered {
             // Their next packets open new flows: direct while it fails, through it once it is
             // back (spec 4.2, 6).
@@ -852,10 +1005,11 @@ impl Live {
         }
     }
 
-    /// Every second: close idle flows and drop old closed rows; every 2 s: re-read the rules.
-    fn housekeeping(&self) {
+    /// Every tick: close idle flows, drop old closed rows, expire names and NAT entries; every
+    /// 2 s: re-read the rules.
+    fn housekeeping(self: &Arc<Self>) {
         let mut tick = 0u32;
-        while self.sleep(Duration::from_secs(1)) {
+        while self.sleep(TICK) {
             tick += 1;
             let now = Instant::now();
             let idle = self.stats.lock().unwrap().idle(now);
@@ -863,6 +1017,7 @@ impl Live {
                 self.close_flow(key, now);
             }
             self.stats.lock().unwrap().rows(now, true);
+            self.tcp_tick(now);
             if tick.is_multiple_of(RULES_CHECK_TICKS) {
                 match self.inner.upgrade() {
                     Some(inner) => inner.refresh(),
