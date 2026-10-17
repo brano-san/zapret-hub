@@ -16,7 +16,7 @@ use zapret::ipset::IpsetMode;
 use zapret::user_lists::UserList;
 
 /// Grows only with an incompatible change; a new command is not one.
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 
 /// A longer request is refused (spec 5).
 pub const MAX_REQUEST: usize = 1024 * 1024;
@@ -168,7 +168,7 @@ struct Outgoing<'a> {
     request: &'a Request,
 }
 
-/// The line the CLI sends, without its `\n`: `{"v":1,"cmd":"apply_strategy","args":{"name":"…"}}`.
+/// The line the CLI sends, without its `\n`: `{"v":2,"cmd":"apply_strategy","args":{"name":"…"}}`.
 pub fn encode(request: &Request) -> String {
     serde_json::to_string(&Outgoing {
         v: PROTOCOL,
@@ -506,9 +506,9 @@ mod tests {
             encode(&Request::ApplyStrategy {
                 name: "general (ALT11)".into()
             }),
-            r#"{"v":1,"cmd":"apply_strategy","args":{"name":"general (ALT11)"}}"#
+            r#"{"v":2,"cmd":"apply_strategy","args":{"name":"general (ALT11)"}}"#
         );
-        assert_eq!(encode(&Request::ApplyBest), r#"{"v":1,"cmd":"apply_best"}"#);
+        assert_eq!(encode(&Request::ApplyBest), r#"{"v":2,"cmd":"apply_best"}"#);
     }
 
     #[test]
@@ -539,20 +539,20 @@ mod tests {
         );
         assert!(refusal(b"not json", true).starts_with("the request does not parse"));
         assert!(
-            refusal(br#"{"v":1,"cmd":"format_disk"}"#, true).contains("format_disk"),
+            refusal(br#"{"v":2,"cmd":"format_disk"}"#, true).contains("format_disk"),
             "an unknown command is named"
         );
         assert!(refusal(br#"{"cmd":"apply_best"}"#, true).contains("`v`"));
         assert_eq!(
-            refusal(br#"{"v":2,"cmd":"format_disk"}"#, true),
-            "protocol v2 is not supported: update zapret-hub-cli.exe and Zapret Hub together"
+            refusal(br#"{"v":3,"cmd":"format_disk"}"#, true),
+            "protocol v3 is not supported: update zapret-hub-cli.exe and Zapret Hub together"
         );
     }
 
     #[test]
     fn a_refusal_is_one_line_whatever_the_request_holds() {
         // serde names an unknown `cmd` as sent; the app journals the reason as `cli: refused: …`.
-        let reason = refusal(br#"{"v":1,"cmd":"x\ncli: apply_best: ok"}"#, true);
+        let reason = refusal(br#"{"v":2,"cmd":"x\ncli: apply_best: ok"}"#, true);
         assert!(!reason.contains(char::is_control), "{reason:?}");
         assert!(reason.contains("x cli: apply_best: ok"), "{reason}");
     }

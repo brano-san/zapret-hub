@@ -1917,7 +1917,7 @@ more",
             outcome,
             Ok(Done::Json(json!({
                 "cli": env!("CARGO_PKG_VERSION"),
-                "protocol": 1,
+                "protocol": 2,
                 "app": null,
             })))
         );
