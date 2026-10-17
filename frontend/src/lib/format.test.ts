@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Rule, StrategyResult } from "./ipc/bindings";
-import { blockSummary, bytes, programName, proxyLabel, routeDraft, routeSummary, viaLabel, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, foldersReady, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
+import { copyStem, blockSummary, bytes, programName, proxyLabel, routeDraft, routeSummary, viaLabel, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, foldersReady, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
 import { S } from "./strings";
 
 describe("blockSummary", () => {
@@ -22,6 +22,15 @@ describe("zapret2Name", () => {
   it("tells zapret2 strategies by their prefix", () => {
     expect(zapret2Name("zapret2:general-sni")).toBe("general-sni");
     expect(zapret2Name("general (ALT11)")).toBeNull();
+  });
+});
+
+describe("copyStem", () => {
+  it("drops the parentheses a copy's name cannot have", () => {
+    expect(copyStem("zapret2:general (ALT5)")).toBe("ALT5");
+    expect(copyStem("zapret2:general (Flowseal)")).toBe("Flowseal");
+    expect(copyStem("zapret2:mine")).toBe("mine");
+    expect(copyStem("general (ALT11)")).toBe("ALT11");
   });
 });
 

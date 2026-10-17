@@ -34,6 +34,9 @@ pub struct StrategyRow {
     /// static check of zapret2.
     pub error: Option<String>,
     pub last: Option<LastResult>,
+    /// A built-in copy of a Flowseal strategy on zapret2: not run by default (the CLI and the Tests
+    /// tab leave it out unless named).
+    pub flowseal_copy: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -82,6 +85,7 @@ pub fn rows(
                 active: false,
                 error: Some(problem),
                 last: None,
+                flowseal_copy: false,
             });
         }
     }
@@ -171,13 +175,14 @@ fn zapret2_row(
         }
         Err(err) => Err(anyhow::anyhow!("{err:#}")),
     };
-    let row = row(
+    let mut row = row(
         latest,
         active,
         strategy.full_name(),
         !strategy.builtin,
         sha256,
     );
+    row.flowseal_copy = strategy.flowseal_copy;
     (row, tail.ok())
 }
 
@@ -204,5 +209,6 @@ fn row(
         error: sha256.err().map(|err| format!("{err:#}")),
         last,
         name,
+        flowseal_copy: false,
     }
 }

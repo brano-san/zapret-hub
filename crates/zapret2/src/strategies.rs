@@ -16,6 +16,13 @@ const BUILTIN: [(&str, &str); 2] = [
     ("general-sni", include_str!("builtin/general-sni.txt")),
 ];
 
+/// Flowseal's strategies ported to zapret2 (names without the prefix): read-only like `BUILTIN`, but
+/// left out of the tests that run without names.
+const FLOWSEAL: [(&str, &str); 1] = [(
+    "general (ALT11)",
+    include_str!("builtin/flowseal/general (ALT11).txt"),
+)];
+
 /// The placeholders that come from the Flowseal folder.
 const FLOWSEAL_VARS: [&str; 5] = [
     "%LISTS%",
@@ -32,6 +39,8 @@ pub struct Strategy {
     /// As written: comment lines and placeholders kept.
     pub text: String,
     pub builtin: bool,
+    /// A built-in copy of a Flowseal strategy (`FLOWSEAL`): not in the default test run.
+    pub flowseal_copy: bool,
 }
 
 impl Strategy {
@@ -148,6 +157,7 @@ fn scan(home: &Path) -> anyhow::Result<Scan> {
                 name: stem.to_owned(),
                 text: text.trim_start_matches('\u{feff}').to_owned(),
                 builtin: false,
+                flowseal_copy: false,
             }),
             Err(err) => {
                 log::warn!("{} cannot be read and is skipped: {err}", path.display());
@@ -161,16 +171,22 @@ fn scan(home: &Path) -> anyhow::Result<Scan> {
 }
 
 fn builtin() -> impl Iterator<Item = Strategy> {
-    BUILTIN.into_iter().map(|(name, text)| Strategy {
-        name: name.to_owned(),
-        text: text.to_owned(),
-        builtin: true,
-    })
+    let table = |table: &'static [(&str, &str)], flowseal_copy| {
+        table.iter().map(move |(name, text)| Strategy {
+            name: (*name).to_owned(),
+            text: (*text).to_owned(),
+            builtin: true,
+            flowseal_copy,
+        })
+    };
+    // Natural order: the copies are added in it by hand.
+    table(&BUILTIN, false).chain(table(&FLOWSEAL, true))
 }
 
 fn is_builtin(name: &str) -> bool {
     BUILTIN
         .iter()
+        .chain(&FLOWSEAL)
         .any(|(builtin, _)| builtin.eq_ignore_ascii_case(name))
 }
 

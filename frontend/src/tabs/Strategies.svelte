@@ -3,7 +3,7 @@
   import { call } from "$lib/api";
   import { app, change, refreshLive } from "$lib/app.svelte";
   import { confirmation } from "$lib/confirm.svelte";
-  import { ZAPRET2_TEMPLATE, blockSummary, hubStem, mergeNote, ms, nameError, ownName, runDate, uniqueName, variantLabel, zapret2Name } from "$lib/format";
+  import { ZAPRET2_TEMPLATE, copyStem, blockSummary, hubStem, mergeNote, ms, nameError, ownName, runDate, uniqueName, variantLabel, zapret2Name } from "$lib/format";
   import { S } from "$lib/strings";
   import RepeatsSelect from "../components/RepeatsSelect.svelte";
   import TargetChecks from "../components/TargetChecks.svelte";
@@ -37,7 +37,7 @@
 
   async function open(name: string): Promise<void> {
     // Another strategy: its copy gets a fresh name; a reload of the same one keeps what was typed.
-    if (detail?.row.name !== name) cloneName = uniqueName(`${zapret2Name(name) ?? name} copy`, taken);
+    if (detail?.row.name !== name) cloneName = uniqueName(`${copyStem(name)} copy`, taken);
     detail = (await call(S.failed.strategy, commands.getStrategy(name))) ?? null;
   }
 

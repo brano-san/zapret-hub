@@ -24,6 +24,12 @@ export function zapret2Name(name: string): string | null {
   return name.startsWith(ZAPRET2) ? name.slice(ZAPRET2.length) : null;
 }
 
+/** The stem of a copy's name: `ALT5` for `zapret2:general (ALT5)` (a name with parentheses is refused), else the name without the prefix. */
+export function copyStem(name: string): string {
+  const own = zapret2Name(name) ?? name;
+  return /\((.+)\)$/.exec(own)?.[1] ?? own;
+}
+
 /** `"%LISTS%list-general.txt"` → `list-general.txt`. */
 function file(path: string): string {
   return path.replace(/"/g, "").replace(/^%\w+%/, "").split(/[\\/]/).pop() ?? path;

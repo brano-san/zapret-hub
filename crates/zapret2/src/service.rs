@@ -172,6 +172,7 @@ pub fn save(
         name,
         text: text.to_owned(),
         builtin: false,
+        flowseal_copy: false,
     };
     Ok((saved, tail))
 }

@@ -170,6 +170,7 @@ fn zapret2_rows_follow_flowseals_with_their_checks_and_results() {
             "helper",
             "zapret2:general",
             "zapret2:general-sni",
+            "zapret2:general (ALT11)",
             "zapret2:mine"
         ]
     );
@@ -179,7 +180,8 @@ fn zapret2_rows_follow_flowseals_with_their_checks_and_results() {
         builtin.error.as_deref().unwrap().contains("multidisorder"),
         "{builtin:?}"
     );
-    let mine = &rows[4];
+    let mine = &rows[5];
+    assert!(!rows[3].flowseal_copy && rows[4].flowseal_copy);
     assert!(
         mine.custom && mine.active && mine.error.is_none(),
         "{mine:?}"
@@ -220,7 +222,7 @@ fn zapret2_rows_follow_flowseals_with_their_checks_and_results() {
     let rows =
         tester::catalog::rows(Some(&folder), Some(&engine), &store, data.path(), None).unwrap();
     assert!(
-        rows[4].last.as_ref().unwrap().stale,
+        rows[5].last.as_ref().unwrap().stale,
         "an edit makes the result stale"
     );
 }
@@ -238,7 +240,12 @@ fn zapret2_alone_lists_its_strategies_and_names_what_needs_flowseal() {
     let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
     assert_eq!(
         names,
-        ["zapret2:general", "zapret2:general-sni", "zapret2:mine"]
+        [
+            "zapret2:general",
+            "zapret2:general-sni",
+            "zapret2:general (ALT11)",
+            "zapret2:mine"
+        ]
     );
     // The built-in ones run on Flowseal's lists.
     assert!(
@@ -246,7 +253,8 @@ fn zapret2_alone_lists_its_strategies_and_names_what_needs_flowseal() {
         "{:?}",
         rows[0]
     );
-    assert_eq!(rows[2].error, None);
+    assert!(rows[2].flowseal_copy && rows[2].error.is_some());
+    assert_eq!(rows[3].error, None);
     let detail = tester::catalog::detail(
         None,
         Some(&engine),

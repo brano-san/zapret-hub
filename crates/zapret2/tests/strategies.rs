@@ -32,6 +32,7 @@ fn built_in_ones_come_first_then_the_users_in_natural_order() {
     let expected: Vec<(String, bool)> = [
         ("general", true),
         ("general-sni", true),
+        ("general (ALT11)", true),
         ("a", false),
         ("b 9", false),
         ("b 10", false),
@@ -50,13 +51,15 @@ fn built_in_ones_come_first_then_the_users_in_natural_order() {
 #[test]
 fn without_a_folder_there_are_the_built_in_ones() {
     let data = tempfile::tempdir().unwrap();
+    let names = names(data.path());
     assert_eq!(
-        names(data.path()),
+        names[..2],
         [
             ("general".to_owned(), true),
             ("general-sni".to_owned(), true)
         ]
     );
+    assert!(names.contains(&("general (ALT11)".to_owned(), true)));
 }
 
 #[test]
@@ -122,7 +125,7 @@ fn a_file_that_cannot_be_read_is_skipped_and_the_rest_still_works() {
     assert!(fs::read(&locked).is_err());
     // The built-in ones, then these of the user's.
     let listed = |users: &[&str]| -> Vec<(String, bool)> {
-        ["general", "general-sni"]
+        ["general", "general-sni", "general (ALT11)"]
             .iter()
             .map(|name| (name.to_string(), true))
             .chain(users.iter().map(|name| (name.to_string(), false)))
@@ -336,8 +339,14 @@ fn every_built_in_strategy_passes_the_static_check_and_names_files_that_exist() 
         .into_iter()
         .filter(|s| s.builtin)
         .collect();
-    assert!((1..=3).contains(&builtin.len()));
+    assert!(builtin.len() > 2);
     for strategy in builtin {
+        assert_eq!(
+            strategy.flowseal_copy,
+            !["general", "general-sni"].contains(&strategy.name.as_str()),
+            "{}",
+            strategy.name
+        );
         let tail = tail(&engine, Some(&folder), &strategy.text).unwrap();
         check(&engine, &tail).unwrap_or_else(|err| panic!("{}: {err:#}", strategy.name));
         let paths: Vec<&str> = tail
@@ -355,7 +364,8 @@ fn every_built_in_strategy_passes_the_static_check_and_names_files_that_exist() 
             );
         }
         assert!(
-            strategy.text.contains("bol-van") && strategy.text.contains("MIT"),
+            strategy.text.contains("MIT")
+                && (strategy.text.contains("bol-van") || strategy.text.contains("Flowseal")),
             "{}: the source and its license are named",
             strategy.name
         );
@@ -384,7 +394,30 @@ fn files_that_are_not_strategies_are_reported_not_hidden() {
         skipped,
         ["General.txt", "no extension", "notes.md", "имя.txt"]
     );
-    assert_eq!(names(home.path()).len(), 3, "two built-in ones and ok");
+    assert_eq!(
+        names(home.path()).len(),
+        4,
+        "two built-in ones, the ALT11 copy and ok"
+    );
+}
+
+#[test]
+fn a_file_named_like_a_flowseal_copy_is_skipped() {
+    let home = tempfile::tempdir().unwrap();
+    let own = strategies::dir(home.path());
+    fs::create_dir_all(&own).unwrap();
+    fs::write(own.join("general (ALT11).txt"), "--wf-tcp-out=443").unwrap();
+    let skipped = strategies::skipped(home.path());
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].0, "general (ALT11).txt");
+    assert!(skipped[0].1.contains("named like a built-in"));
+    assert_eq!(
+        names(home.path())
+            .iter()
+            .filter(|(name, _)| name == "general (ALT11)")
+            .count(),
+        1
+    );
 }
 
 #[test]

@@ -17,7 +17,7 @@
   // The selection is set once; later reloads keep what the user chose.
   let picked = false;
 
-  const usable = (list: StrategyRow[]) => list.filter((row) => row.error === null).map((row) => row.name);
+  const usable = (list: StrategyRow[]) => list.filter((row) => row.error === null && !row.flowseal_copy).map((row) => row.name);
   const flowseal = $derived(rows.filter((row) => zapret2Name(row.name) === null));
   const zapret2 = $derived(rows.filter((row) => zapret2Name(row.name) !== null));
   // Ticks or clears one group; the other group's ticks stay.

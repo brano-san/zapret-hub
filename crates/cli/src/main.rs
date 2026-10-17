@@ -867,12 +867,13 @@ fn read_strategy(file: &Path) -> Result<CustomStrategy, Fail> {
     })
 }
 
-/// `tests run` without names: every strategy that parses, in service.bat's order (spec 7.1).
+/// `tests run` without names: every strategy that parses, in service.bat's order (spec 7.1), but not
+/// the built-in copies of Flowseal's: those run when named.
 fn runnable(rows: Value) -> Result<Vec<String>, Fail> {
     let rows: Vec<StrategyRow> = read(rows)?;
     Ok(rows
         .into_iter()
-        .filter(|row| row.error.is_none())
+        .filter(|row| row.error.is_none() && !row.flowseal_copy)
         .map(|row| row.name)
         .collect())
 }
@@ -1646,14 +1647,15 @@ mod tests {
 
     fn rows() -> Value {
         json!([
-            { "name": "general", "custom": false, "active": true, "error": null, "last": null },
-            { "name": "general (broken)", "custom": false, "active": false, "error": "no winws line", "last": null },
-            { "name": "general (ALT11)", "custom": false, "active": false, "error": null, "last": null },
+            { "name": "general", "custom": false, "active": true, "error": null, "last": null, "flowseal_copy": false },
+            { "name": "general (broken)", "custom": false, "active": false, "error": "no winws line", "last": null, "flowseal_copy": false },
+            { "name": "general (ALT11)", "custom": false, "active": false, "error": null, "last": null, "flowseal_copy": false },
+            { "name": "zapret2:general (ALT11)", "custom": false, "active": false, "error": null, "last": null, "flowseal_copy": true },
         ])
     }
 
     #[test]
-    fn tests_run_without_names_takes_every_strategy_that_parses() {
+    fn tests_run_without_names_takes_every_strategy_that_parses_except_flowseal_copies() {
         let (outcome, asked) = drive(&["tests", "run"], vec![Ok(rows())]);
         assert_eq!(
             outcome,
@@ -1931,7 +1933,7 @@ more",
             outcome,
             Ok(Done::Json(json!({
                 "cli": env!("CARGO_PKG_VERSION"),
-                "protocol": 3,
+                "protocol": 4,
                 "app": null,
             })))
         );

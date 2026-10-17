@@ -666,6 +666,11 @@ export type StrategyRow = {
 	 */
 	error: string | null,
 	last: LastResult | null,
+	/**
+	 *  A built-in copy of a Flowseal strategy on zapret2: not run by default (the CLI and the Tests
+	 *  tab leave it out unless named).
+	 */
+	flowseal_copy: boolean,
 };
 
 export type Suite = "Standard" | "Dpi";

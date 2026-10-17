@@ -207,6 +207,7 @@ pub fn save_zapret2(
             name: claimed,
             text: text.to_owned(),
             builtin: false,
+            flowseal_copy: false,
         };
         let result = state.change_any_safely("custom", |folder| {
             zapret2::strategies::write(&data, &saved.name, text)?;
