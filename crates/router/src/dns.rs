@@ -65,8 +65,8 @@ pub fn parse(m: &[u8]) -> Option<Answer> {
         return None;
     }
     pos += 4; // QTYPE, QCLASS
-    let (mut edges, mut ips): (HashMap<String, Vec<String>>, Vec<(String, Ipv4Addr, u32)>) =
-        Default::default();
+    let mut edges: HashMap<String, Vec<String>> = HashMap::new();
+    let mut ips = Vec::new();
     for _ in 0..u16_at(6)? {
         let (owner, p) = read_name(m, pos)?;
         let (kind, class, rdlen) = (u16_at(p)?, u16_at(p + 2)?, u16_at(p + 8)?);
