@@ -233,7 +233,7 @@ fn an_app_rule_is_saved_with_its_programs() {
     let r = router(dir.path());
     r.edit(|list| rules::add(list, rules::preset(Preset::Dbd)))
         .unwrap();
-    assert!(r.table().wants_owner(rules::Protocol::Udp, 7777));
+    assert!(r.table().wants_owner(rules::Protocol::Tcp, 7777));
     assert_eq!(
         rules::load(&dir.path().join("routes.toml")).unwrap()[0].apps,
         ["DeadByDaylight-Win64-Shipping.exe"]

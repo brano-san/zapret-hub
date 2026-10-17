@@ -595,11 +595,13 @@ impl Table {
             .map(|r| r.name.as_str())
     }
 
-    /// Whether a rule with programs takes flows of protocol to port.
+    /// Whether a rule with programs takes flows of protocol to port (UDP: only while it runs).
     pub fn wants_owner(&self, protocol: Protocol, port: u16) -> bool {
-        self.rules
-            .iter()
-            .any(|r| !r.apps.is_empty() && r.takes(protocol, port))
+        self.rules.iter().any(|r| {
+            !r.apps.is_empty()
+                && r.takes(protocol, port)
+                && (protocol != Protocol::Udp || r.running)
+        })
     }
 
     /// Marks the UDP rules whose program is among exes as running.

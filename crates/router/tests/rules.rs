@@ -442,7 +442,15 @@ fn a_flow_matches_by_program_name_or_full_path_without_case() {
         None,
         "address matching ignores programs"
     );
-    assert!(table.wants_owner(Protocol::Udp, 7777) && table.wants_owner(Protocol::Tcp, 443));
+    assert!(table.wants_owner(Protocol::Tcp, 443));
+    assert!(
+        !table.wants_owner(Protocol::Udp, 7777)
+            && table
+                .clone()
+                .with_running(&[DBD])
+                .wants_owner(Protocol::Udp, 7777),
+        "UDP owners only while the program runs"
+    );
     assert!(
         !table.wants_owner(Protocol::Tcp, 80)
             && !Table::new(&[voice()]).wants_owner(Protocol::Udp, 50000)
