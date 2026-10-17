@@ -385,10 +385,7 @@ impl Inner {
     fn apply(&self, table: Table) {
         *self.table.lock().unwrap() = table.clone();
         let Some(live) = self.live() else { return };
-        let error = live
-            .apply(Some(table))
-            .err()
-            .map(|e| format!("WinDivert refused the filter: {e}"));
+        let error = live.apply(Some(table)).err();
         self.rules.lock().unwrap().filter_error = error;
     }
 }
@@ -421,6 +418,8 @@ enum FlowState {
 struct FilterState {
     text: Option<String>,
     opened: Option<Instant>,
+    /// The last text WinDivert refused and the reason.
+    failed: Option<(Option<String>, String)>,
 }
 
 /// SYNs to addresses the table has but the open capture filter may not (ruling R1): reflecting
@@ -519,7 +518,7 @@ impl Live {
         });
         if let Err(e) = live.apply(Some(table)) {
             live.shut();
-            bail!("WinDivert refused the filter: {e}");
+            bail!(e);
         }
         let l = live.clone();
         spawn(move || {
@@ -630,7 +629,8 @@ impl Live {
     /// New rules (`None`: the same ones with the names known now) take effect at once; a changed
     /// filter opens a new handle (at most once a second, unless a SYN waits for it) before the old
     /// one stops receiving. No rules: a `false` filter, which captures nothing but still injects.
-    fn apply(self: &Arc<Self>, base: Option<Table>) -> std::io::Result<()> {
+    /// A refused text is not retried until the filter changes; the error is the router's reason.
+    fn apply(self: &Arc<Self>, base: Option<Table>) -> Result<(), String> {
         let mut filter = self.filter.lock().unwrap();
         let base = match base {
             Some(b) => {
@@ -654,8 +654,15 @@ impl Live {
         let table = Arc::new(table);
         *self.table.write().unwrap() = table.clone();
         if filter.opened.is_some() && text == filter.text {
+            filter.failed = None;
             self.release(Some(table));
             return Ok(());
+        }
+        if let Some((failed, reason)) = &filter.failed
+            && *failed == text
+        {
+            self.release(None);
+            return Err(reason.clone());
         }
         if let Some(at) = filter.opened {
             // A held SYN skips the gap: its program is waiting for this reopen.
@@ -671,11 +678,14 @@ impl Live {
         ) {
             Ok(h) => Arc::new(h),
             Err(e) => {
+                let reason = divert::refused(&e);
+                filter.failed = Some((text, reason.clone()));
                 self.release(None);
-                return Err(e);
+                return Err(reason);
             }
         };
         filter.text = text;
+        filter.failed = None;
         filter.opened = Some(Instant::now());
         let (l, h) = (self.clone(), new.clone());
         spawn(move || l.capture_loop(&h));

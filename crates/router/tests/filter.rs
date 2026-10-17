@@ -1,4 +1,6 @@
-use router::divert::{Engine, FILTER_BUDGET, MAX_FILTER_RANGES, capture_filter, filter, pick_dll};
+use router::divert::{
+    Engine, FILTER_BUDGET, MAX_FILTER_RANGES, capture_filter, filter, pick_dll, refused,
+};
 use router::rules::{self, Preset, Protocol, Rule, Table};
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
@@ -330,4 +332,12 @@ fn a_missing_dll_is_named_with_the_windows_error() {
         err.contains("WinDivert.dll") && err.contains("cannot load"),
         "{err}"
     );
+}
+
+#[test]
+fn a_refused_capture_filter_names_too_many_rules() {
+    let invalid = std::io::Error::from_raw_os_error(87);
+    assert!(refused(&invalid).starts_with("too many rules for the capture filter"));
+    let other = std::io::Error::from_raw_os_error(5);
+    assert!(refused(&other).starts_with("WinDivert refused the filter: "));
 }

@@ -157,6 +157,16 @@ fn fit(parts: &mut [Part], extra: usize) {
     }
 }
 
+/// The router's reason for a capture filter WinDivert refused. The filter is generated, so an
+/// invalid one (`ERROR_INVALID_PARAMETER`) means it did not fit WinDivert's limit.
+pub fn refused(e: &std::io::Error) -> String {
+    if e.raw_os_error() == Some(87) {
+        format!("too many rules for the capture filter: disable or narrow some (WinDivert: {e})")
+    } else {
+        format!("WinDivert refused the filter: {e}")
+    }
+}
+
 pub fn filter(table: &Table) -> Option<String> {
     capture_filter(table, None, &[])
 }

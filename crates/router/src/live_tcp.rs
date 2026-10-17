@@ -171,10 +171,7 @@ impl Live {
         if self.is_stopped() {
             return;
         }
-        let error = self
-            .apply(None)
-            .err()
-            .map(|e| format!("WinDivert refused the filter: {e}"));
+        let error = self.apply(None).err();
         if let Some(inner) = self.inner.upgrade() {
             inner.rules.lock().unwrap().filter_error = error;
         }
