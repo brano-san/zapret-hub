@@ -1,24 +1,27 @@
 //! WinDivert: the capture filter, DLL choice and the address struct (pure part).
 
-use crate::rules::Table;
+use crate::rules::{Protocol, Table};
 use anyhow::{Result, bail};
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
 pub const MAX_FILTER_RANGES: usize = 64;
 pub const SOCKET_FILTER: &str =
-    "!loopback and udp and (event == BIND or event == CONNECT or event == CLOSE)";
+    "!loopback and (udp or tcp) and (event == BIND or event == CONNECT or event == CLOSE)";
+pub const DNS_FILTER: &str = "ip and udp and udp.SrcPort == 53";
 pub const EVENT_SOCKET_CLOSE: u8 = 7;
+pub const PROTO_TCP: u8 = 6;
 
-fn port(&(a, b): &(u16, u16)) -> String {
+fn port(proto: &str, &(a, b): &(u16, u16)) -> String {
     match (a, b) {
-        _ if a == b => format!("udp.DstPort == {a}"),
-        (_, 65535) => format!("udp.DstPort >= {a}"),
-        _ => format!("(udp.DstPort >= {a} and udp.DstPort <= {b})"),
+        _ if a == b => format!("{proto}.DstPort == {a}"),
+        (_, 65535) => format!("{proto}.DstPort >= {a}"),
+        _ => format!("({proto}.DstPort >= {a} and {proto}.DstPort <= {b})"),
     }
 }
 
 fn range(&(lo, hi): &(u32, u32)) -> String {
-    let ip = |x: u32| std::net::Ipv4Addr::from(x);
+    let ip = |x: u32| Ipv4Addr::from(x);
     if lo == hi {
         format!("ip.DstAddr == {}", ip(lo))
     } else {
@@ -30,33 +33,106 @@ fn any(items: impl Iterator<Item = String>) -> String {
     format!("({})", items.collect::<Vec<_>>().join(" or "))
 }
 
+/// `head` alone, or `head and (<ports in proto's field>)`.
+fn on_ports(head: &str, proto: &str, ports: &[(u16, u16)]) -> String {
+    if ports.is_empty() {
+        head.to_string()
+    } else {
+        format!("{head} and {}", any(ports.iter().map(|p| port(proto, p))))
+    }
+}
+
+/// One `or` alternative: a head, ANDed with its IP ranges when it has any.
+struct Part {
+    head: String,
+    ranges: Vec<(u32, u32)>,
+}
+
+/// Merges, inside one part, the two neighbouring ranges with the smallest gap (ties: the first)
+/// until `MAX_FILTER_RANGES` ranges are left or no part has two.
+// ponytail: O(n²) in the number of ranges (hundreds at most); a heap of gaps if that ever grows.
+// The filter becomes a superset; `Table` stays exact and the hub re-sends what it does not match.
+fn fit(parts: &mut [Part]) {
+    let mut total: usize = parts.iter().map(|p| p.ranges.len()).sum();
+    while total > MAX_FILTER_RANGES {
+        let Some((_, p, i)) = parts
+            .iter()
+            .enumerate()
+            .flat_map(|(p, part)| {
+                part.ranges
+                    .windows(2)
+                    .enumerate()
+                    .map(move |(i, w)| (w[1].0 - w[0].1, p, i))
+            })
+            .min_by_key(|&(gap, _, _)| gap)
+        else {
+            return;
+        };
+        let r = &mut parts[p].ranges;
+        r[i].1 = r[i + 1].1;
+        r.remove(i + 1);
+        total -= 1;
+    }
+}
+
 pub fn filter(table: &Table) -> Option<String> {
-    if table.is_empty() {
+    capture_filter(table, None, &[])
+}
+
+/// The capture handle's filter: each rule's protocol and ports over its ranges (subnets and
+/// resolved IPs; none yet, no part), the first SYNs of domain TCP rules (so the hub sees a SYN to
+/// an address learned since the last reopen), destinations of live NAT entries (`held`) and the
+/// local acceptor's replies.
+pub fn capture_filter(table: &Table, acceptor: Option<u16>, held: &[Ipv4Addr]) -> Option<String> {
+    let mut parts = Vec::new();
+    for r in &table.rules {
+        if !r.ranges.is_empty() {
+            let head = match r.protocol {
+                Protocol::Udp => on_ports("udp", "udp", &r.ports),
+                Protocol::Tcp => on_ports("tcp", "tcp", &r.ports),
+                Protocol::Both if r.ports.is_empty() => "(udp or tcp)".into(),
+                Protocol::Both => format!(
+                    "(({}) or ({}))",
+                    on_ports("udp", "udp", &r.ports),
+                    on_ports("tcp", "tcp", &r.ports)
+                ),
+            };
+            parts.push(Part {
+                head,
+                ranges: r.ranges.clone(),
+            });
+        }
+        if r.protocol != Protocol::Udp && !r.domains.is_empty() {
+            parts.push(Part {
+                head: on_ports("tcp and tcp.Syn and !tcp.Ack", "tcp", &r.ports),
+                ranges: vec![],
+            });
+        }
+    }
+    if !held.is_empty() {
+        parts.push(Part {
+            head: "tcp".into(),
+            ranges: crate::rules::merge(held.iter().map(|&ip| (ip.into(), ip.into())).collect()),
+        });
+    }
+    let tcp = parts.iter().any(|p| p.head.contains("tcp"));
+    if parts.is_empty() {
         return None;
     }
-    let total: usize = table.rules.iter().map(|r| r.ranges.len()).sum();
-    let by_ip = total <= MAX_FILTER_RANGES;
-    let parts: Vec<String> = table
-        .rules
+    fit(&mut parts);
+    let mut text: Vec<String> = parts
         .iter()
-        .map(|r| {
-            let mut s = String::from("udp");
-            if !r.ports.is_empty() {
-                s += &format!(" and {}", any(r.ports.iter().map(port)));
-            }
-            // ponytail: past MAX_FILTER_RANGES ranges in all rules together, EVERY rule loses its IP
-            // part: a rule with ports captures all outbound UDP to those ports, one without ports
-            // all outbound UDP; the hub matches IPs itself and re-sends the rest unchanged.
-            // Upgrade: per-rule caps, or merge ranges before counting.
-            if by_ip && !r.ranges.is_empty() {
-                s += &format!(" and {}", any(r.ranges.iter().map(range)));
-            }
-            format!("({s})")
+        .map(|p| match p.ranges.is_empty() {
+            true => format!("({})", p.head),
+            false => format!("({} and {})", p.head, any(p.ranges.iter().map(range))),
         })
         .collect();
+    if let (Some(port), true) = (acceptor, tcp) {
+        text.push(format!("(tcp and tcp.SrcPort == {port})"));
+    }
     Some(format!(
         "outbound and !loopback and ip and ({})",
-        parts.join(" or ")
+        text.join(" or ")
     ))
 }
 

@@ -442,7 +442,7 @@ pub fn remove(rules: &mut Vec<Rule>, name: &str) -> Result<Rule> {
 }
 
 /// Sorts and merges overlapping or adjacent inclusive ranges.
-fn merge(mut nets: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
+pub(crate) fn merge(mut nets: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
     nets.sort_unstable();
     let mut ranges: Vec<(u32, u32)> = Vec::new();
     for n in nets {

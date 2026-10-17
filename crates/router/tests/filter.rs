@@ -1,5 +1,6 @@
-use router::divert::{Engine, filter, pick_dll};
-use router::rules::{self, Preset, Rule, Table};
+use router::divert::{Engine, capture_filter, filter, pick_dll};
+use router::rules::{self, Preset, Protocol, Rule, Table};
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
 fn rule(ports: &[&str], ips: &[&str]) -> Rule {
@@ -49,18 +50,170 @@ fn overlapping_and_adjacent_subnets_merge() {
     assert_eq!(table.rules[0].ranges, [(0x0A00_0000, 0x0A00_01FF)]);
 }
 
+fn named(rule: Rule, names: &[(&str, &str)]) -> Table {
+    let names: Vec<(Ipv4Addr, String)> = names
+        .iter()
+        .map(|(ip, n)| (ip.parse().unwrap(), n.to_string()))
+        .collect();
+    Table::new(&[rule]).with_names(&names)
+}
+
+fn domain_rule(protocol: Protocol, ports: &[&str]) -> Rule {
+    Rule {
+        protocol,
+        domains: vec!["example.com".into()],
+        ..rule(ports, &[])
+    }
+}
+
 #[test]
-fn too_many_ranges_leave_the_ips_to_the_hub() {
+fn a_domain_rule_without_answers_captures_nothing() {
+    assert_eq!(
+        capture_filter(
+            &Table::new(&[rules::preset(Preset::Discord)]),
+            Some(61000),
+            &[]
+        )
+        .unwrap(),
+        "outbound and !loopback and ip and ((tcp and tcp.Syn and !tcp.Ack) or (tcp and tcp.SrcPort == 61000))",
+        "only the first SYNs: no UDP, no TCP past the handshake"
+    );
+    assert_eq!(
+        capture_filter(
+            &Table::new(&[domain_rule(Protocol::Udp, &["443"])]),
+            Some(61000),
+            &[]
+        ),
+        None,
+        "a domain UDP rule without answers captures no UDP at all"
+    );
+    let voice = Table::new(&[rules::preset(Preset::DiscordVoice)]);
+    assert_eq!(
+        capture_filter(&voice, Some(61000), &[]),
+        filter(&voice),
+        "a UDP rule needs no acceptor part"
+    );
+}
+
+#[test]
+fn a_domain_tcp_rule_catches_first_syns_on_its_ports() {
+    assert_eq!(
+        capture_filter(
+            &Table::new(&[domain_rule(Protocol::Tcp, &["443", "8000-8100"])]),
+            None,
+            &[]
+        )
+        .unwrap(),
+        "outbound and !loopback and ip and ((tcp and tcp.Syn and !tcp.Ack and (tcp.DstPort == 443 or (tcp.DstPort >= 8000 and tcp.DstPort <= 8100))))"
+    );
+}
+
+#[test]
+fn resolved_ips_and_the_acceptor_replies_are_captured() {
+    let table = named(
+        rules::preset(Preset::Discord),
+        &[
+            ("162.159.135.232", "discord.com"),
+            ("162.159.136.232", "gateway.discord.gg"),
+            ("8.8.8.8", "example.com"),
+        ],
+    );
+    assert_eq!(
+        capture_filter(&table, Some(61000), &[]).unwrap(),
+        "outbound and !loopback and ip and (((udp or tcp) and (ip.DstAddr == 162.159.135.232 or ip.DstAddr == 162.159.136.232)) or (tcp and tcp.Syn and !tcp.Ack) or (tcp and tcp.SrcPort == 61000))"
+    );
+}
+
+#[test]
+fn tcp_and_both_rules_use_their_own_port_fields() {
+    let tcp = Rule {
+        name: "t".into(),
+        protocol: Protocol::Tcp,
+        ..rule(&["443"], &["1.1.1.1"])
+    };
+    let both = Rule {
+        name: "b".into(),
+        protocol: Protocol::Both,
+        ..rule(&["443", "50000-65535"], &["2.2.2.2"])
+    };
+    assert_eq!(
+        capture_filter(&Table::new(&[tcp, both]), Some(61000), &[]).unwrap(),
+        "outbound and !loopback and ip and ((tcp and (tcp.DstPort == 443) and (ip.DstAddr == 1.1.1.1)) or (((udp and (udp.DstPort == 443 or udp.DstPort >= 50000)) or (tcp and (tcp.DstPort == 443 or tcp.DstPort >= 50000))) and (ip.DstAddr == 2.2.2.2)) or (tcp and tcp.SrcPort == 61000))"
+    );
+}
+
+#[test]
+fn a_rule_captures_only_its_own_protocol() {
+    let tcp = Rule {
+        protocol: Protocol::Tcp,
+        ..rule(&["443"], &["1.1.1.1"])
+    };
+    let text = capture_filter(&Table::new(&[tcp]), Some(61000), &[]).unwrap();
+    assert!(
+        !text.contains("udp"),
+        "a tcp-only rule emits no udp clause: {text}"
+    );
+    let udp = rule(&["443"], &["1.1.1.1"]);
+    let text = capture_filter(&Table::new(&[udp]), Some(61000), &[]).unwrap();
+    assert!(
+        !text.contains("tcp"),
+        "a udp-only rule emits no tcp clause: {text}"
+    );
+}
+
+#[test]
+fn a_live_connection_keeps_its_destination_in_the_filter() {
+    let held = ["162.159.135.232".parse().unwrap()];
+    assert_eq!(
+        capture_filter(&Table::new(&[]), Some(61000), &held).unwrap(),
+        "outbound and !loopback and ip and ((tcp and (ip.DstAddr == 162.159.135.232)) or (tcp and tcp.SrcPort == 61000))"
+    );
+    let held: Vec<Ipv4Addr> = ["10.0.0.2", "10.0.0.1", "10.0.0.2"]
+        .iter()
+        .map(|s| s.parse().unwrap())
+        .collect();
+    assert_eq!(
+        capture_filter(&Table::new(&[]), None, &held).unwrap(),
+        "outbound and !loopback and ip and ((tcp and ((ip.DstAddr >= 10.0.0.1 and ip.DstAddr <= 10.0.0.2))))"
+    );
+}
+
+#[test]
+fn too_many_ranges_merge_the_closest_ones() {
     let ips: Vec<String> = (0..65).map(|i| format!("10.{i}.0.0/24")).collect();
     let ips: Vec<&str> = ips.iter().map(String::as_str).collect();
-    let text = filter(&Table::new(&[rule(&["50000-65535"], &ips)])).unwrap();
-    assert_eq!(
-        text,
-        "outbound and !loopback and ip and ((udp and (udp.DstPort >= 50000)))"
+    let table = Table::new(&[rule(&["50000-65535"], &ips)]);
+    let text = filter(&table).unwrap();
+    assert_eq!(text.matches("ip.DstAddr >=").count(), 64);
+    assert!(
+        text.starts_with(
+            "outbound and !loopback and ip and ((udp and (udp.DstPort >= 50000) and ((ip.DstAddr >= 10.0.0.0 and ip.DstAddr <= 10.1.0.255) or "
+        ),
+        "{text}"
     );
-    // no ports: all outbound UDP reaches the hub, which matches the IPs itself
-    let text = filter(&Table::new(&[rule(&[], &ips)])).unwrap();
-    assert_eq!(text, "outbound and !loopback and ip and ((udp))");
+    assert!(text.contains("(ip.DstAddr >= 10.64.0.0 and ip.DstAddr <= 10.64.0.255)"));
+    assert_eq!(
+        table.match_udp("10.0.200.1:50001".parse().unwrap()),
+        None,
+        "the hub matches exactly"
+    );
+}
+
+#[test]
+fn merging_picks_the_smallest_gap_across_parts() {
+    // 63 far-apart /24s in one rule, two close ones in another: the close pair merges.
+    let far: Vec<String> = (0..63).map(|i| format!("10.{}.0.0/24", i * 2)).collect();
+    let far: Vec<&str> = far.iter().map(String::as_str).collect();
+    let text = filter(&Table::new(&[
+        rule(&[], &far),
+        rule(&[], &["192.168.0.0/24", "192.168.1.128/25"]),
+    ]))
+    .unwrap();
+    assert_eq!(text.matches("ip.DstAddr >=").count(), 64);
+    assert!(
+        text.contains("(ip.DstAddr >= 192.168.0.0 and ip.DstAddr <= 192.168.1.255)"),
+        "{text}"
+    );
 }
 
 #[test]
