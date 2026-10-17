@@ -247,3 +247,67 @@ fn resolved_names_add_ips_to_their_rules_by_protocol() {
     };
     assert!(!Table::new(&[off]).wants("discord.com"));
 }
+
+#[test]
+fn edits_go_by_name_without_case() {
+    let mut list = vec![voice()];
+    let dup = Rule {
+        name: "discord ГОЛОС".into(),
+        ..voice()
+    };
+    assert!(rules::add(&mut list, dup).is_err());
+    rules::set_enabled(&mut list, "DISCORD голос", false).unwrap();
+    assert!(!list[0].enabled);
+    let other = Rule {
+        name: "other".into(),
+        ..voice()
+    };
+    assert!(rules::replace(&mut list, other).is_err());
+    assert!(rules::find(&list, "nope").is_err());
+    assert_eq!(
+        rules::remove(&mut list, "discord голос").unwrap().name,
+        "Discord голос"
+    );
+    assert!(list.is_empty());
+}
+
+#[test]
+fn the_table_matches_enabled_rules_by_port_and_subnet() {
+    let off = Rule {
+        name: "off".into(),
+        enabled: false,
+        ips: vec!["8.8.8.0/24".into()],
+        ..voice()
+    };
+    let table = Table::new(&[voice(), off]);
+    let at = |addr: &str| table.match_udp(addr.parse().unwrap());
+    assert_eq!(at("104.29.5.6:50001"), Some("Discord голос"));
+    assert_eq!(at("35.217.0.1:19294"), Some("Discord голос"));
+    assert_eq!(at("35.217.255.255:65535"), Some("Discord голос"));
+    assert_eq!(at("35.217.0.1:19293"), None);
+    assert_eq!(at("104.29.5.6:443"), None);
+    assert_eq!(at("8.8.8.8:50001"), None, "a disabled rule matches nothing");
+    assert!(Table::new(&[]).is_empty());
+}
+
+#[test]
+fn an_unknown_field_is_named() {
+    let err = rules::parse("[[rule]]\nname = \"a\"\ncolour = 1\n").unwrap_err();
+    assert!(err.to_string().contains("colour"), "{err}");
+}
+
+#[test]
+fn domain_length_limits_and_label_boundaries() {
+    let with = |d: String| Rule {
+        domains: vec![d],
+        ips: vec![],
+        ..voice()
+    };
+    let label = "a".repeat(63);
+    assert!(rules::check(&with(format!("{label}.com"))).is_empty());
+    // 4 x 63 + 3 dots + ".com" = 259 > 253
+    let long = format!("{label}.{label}.{label}.{label}.com");
+    assert_eq!(rules::check(&with(long))[0].field, "domains");
+    assert!(!rules::covers("discord.media", "xdiscord.media"));
+    assert!(rules::covers("discord.media", "x.discord.media"));
+}
