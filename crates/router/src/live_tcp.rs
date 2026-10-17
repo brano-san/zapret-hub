@@ -227,8 +227,6 @@ impl Live {
 
     /// Re-applies the rules with the names known now; a refused filter shows as the rules error.
     pub(crate) fn recompose(self: &Arc<Self>) {
-        // Cleared before `apply` reads the NAT: a SYN admitted from now on asks again.
-        self.recompose_pending.store(false, Ordering::SeqCst);
         if self.is_stopped() {
             return;
         }

@@ -686,6 +686,9 @@ impl Live {
     /// A refused text is not retried until the filter changes; the error is the router's reason.
     fn apply(self: &Arc<Self>, base: Option<Table>) -> Result<(), String> {
         let mut filter = self.filter.lock().unwrap();
+        // Cleared under the filter lock (one recompose waits behind a running apply at most) and
+        // before the NAT is read below, so a SYN admitted after this point asks again.
+        self.recompose_pending.store(false, Ordering::SeqCst);
         let base = match base {
             Some(b) => {
                 *self.base.lock().unwrap() = b.clone();
