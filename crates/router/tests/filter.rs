@@ -1,4 +1,4 @@
-use router::divert::{Engine, capture_filter, filter, pick_dll};
+use router::divert::{Engine, FILTER_BUDGET, MAX_FILTER_RANGES, capture_filter, filter, pick_dll};
 use router::rules::{self, Preset, Protocol, Rule, Table};
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
@@ -67,7 +67,7 @@ fn domain_rule(protocol: Protocol, ports: &[&str]) -> Rule {
 }
 
 #[test]
-fn a_domain_rule_without_answers_captures_nothing() {
+fn a_domain_rule_without_answers_captures_only_first_syns() {
     assert_eq!(
         capture_filter(
             &Table::new(&[rules::preset(Preset::Discord)]),
@@ -213,6 +213,72 @@ fn merging_picks_the_smallest_gap_across_parts() {
     assert!(
         text.contains("(ip.DstAddr >= 192.168.0.0 and ip.DstAddr <= 192.168.1.255)"),
         "{text}"
+    );
+}
+
+/// Tests WinDivert compiles: every `and`/`or` joins two of them.
+fn tests(text: &str) -> usize {
+    text.matches(" and ").count() + text.matches(" or ").count() + 1
+}
+
+#[test]
+fn same_syn_parts_are_written_once() {
+    let a = domain_rule(Protocol::Tcp, &[]);
+    let b = domain_rule(Protocol::Both, &[]);
+    let text = capture_filter(&Table::new(&[a, b]), None, &[]).unwrap();
+    assert_eq!(text.matches("tcp.Syn").count(), 1, "{text}");
+}
+
+#[test]
+fn both_discord_presets_with_many_answers_fit_the_budget() {
+    let names: Vec<(Ipv4Addr, String)> = (0..400u32)
+        .map(|i| {
+            let name = if i % 2 == 0 {
+                "discord.com"
+            } else {
+                "x.discord.media"
+            };
+            (Ipv4Addr::from(0x0A00_0000 + i * 1000), name.to_string())
+        })
+        .collect();
+    let table = Table::new(&[
+        rules::preset(Preset::Discord),
+        rules::preset(Preset::DiscordVoice),
+    ])
+    .with_names(&names);
+    let held: Vec<Ipv4Addr> = (0..100u32)
+        .map(|i| Ipv4Addr::from(0xC000_0000 + i * 7))
+        .collect();
+    let text = capture_filter(&table, Some(61000), &held).unwrap();
+    assert!(
+        tests(&text) <= FILTER_BUDGET,
+        "{} tests: {text}",
+        tests(&text)
+    );
+    assert!(text.matches("ip.DstAddr").count() <= 2 * MAX_FILTER_RANGES);
+    assert!(text.contains("tcp.Syn") && text.ends_with("(tcp and tcp.SrcPort == 61000))"));
+}
+
+#[test]
+fn many_ports_still_fit_the_budget() {
+    let ports: Vec<String> = (0..150).map(|i| (1000 + 2 * i).to_string()).collect();
+    let ports: Vec<&str> = ports.iter().map(String::as_str).collect();
+    let both = Rule {
+        protocol: Protocol::Both,
+        domains: vec!["example.com".into()],
+        ..rule(&ports, &["1.1.1.1", "2.2.2.2"])
+    };
+    let table = Table::new(&[both]);
+    let text = capture_filter(&table, Some(61000), &[]).unwrap();
+    assert!(
+        tests(&text) <= FILTER_BUDGET,
+        "{} tests: {text}",
+        tests(&text)
+    );
+    assert_eq!(
+        table.matches(Protocol::Tcp, "1.1.1.1:1001".parse().unwrap()),
+        None,
+        "the hub matches exactly"
     );
 }
 

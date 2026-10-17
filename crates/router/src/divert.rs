@@ -42,36 +42,118 @@ fn on_ports(head: &str, proto: &str, ports: &[(u16, u16)]) -> String {
     }
 }
 
-/// One `or` alternative: a head, ANDed with its IP ranges when it has any.
+/// WinDivert compiles a filter into at most 256 tests (`WINDIVERT_FILTER_MAXLEN`); this keeps
+/// a margin, since `capture_filter` counts the tests itself.
+pub const FILTER_BUDGET: usize = 200;
+/// `outbound`, `!loopback`, `ip`.
+const BASE_TESTS: usize = 3;
+/// `tcp and tcp.SrcPort == N`.
+const ACCEPTOR_TESTS: usize = 2;
+
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Udp,
+    Tcp,
+    Both,
+    /// The first SYN of a connection (domain TCP rules).
+    Syn,
+    /// Destinations of live NAT entries.
+    Held,
+}
+
+/// One `or` alternative: protocol and ports, ANDed with its IP ranges when it has any.
 struct Part {
-    head: String,
+    kind: Kind,
+    /// Sorted.
+    ports: Vec<(u16, u16)>,
+    /// Sorted, merged.
     ranges: Vec<(u32, u32)>,
 }
 
-/// Merges, inside one part, the two neighbouring ranges with the smallest gap (ties: the first)
-/// until `MAX_FILTER_RANGES` ranges are left or no part has two.
-// ponytail: O(n²) in the number of ranges (hundreds at most); a heap of gaps if that ever grows.
-// The filter becomes a superset; `Table` stays exact and the hub re-sends what it does not match.
-fn fit(parts: &mut [Part]) {
-    let mut total: usize = parts.iter().map(|p| p.ranges.len()).sum();
-    while total > MAX_FILTER_RANGES {
-        let Some((_, p, i)) = parts
+impl Part {
+    fn tcp(&self) -> bool {
+        self.kind != Kind::Udp
+    }
+
+    fn tests(&self) -> usize {
+        let ports: usize = self
+            .ports
             .iter()
-            .enumerate()
-            .flat_map(|(p, part)| {
-                part.ranges
-                    .windows(2)
-                    .enumerate()
-                    .map(move |(i, w)| (w[1].0 - w[0].1, p, i))
-            })
-            .min_by_key(|&(gap, _, _)| gap)
-        else {
-            return;
+            .map(|&(a, b)| if a == b || b == 65535 { 1 } else { 2 })
+            .sum();
+        let ranges: usize = self
+            .ranges
+            .iter()
+            .map(|&(a, b)| if a == b { 1 } else { 2 })
+            .sum();
+        ranges
+            + match self.kind {
+                Kind::Udp | Kind::Tcp | Kind::Held => 1 + ports,
+                Kind::Both => 2 + 2 * ports,
+                Kind::Syn => 3 + ports,
+            }
+    }
+
+    fn text(&self) -> String {
+        let head = match self.kind {
+            Kind::Udp => on_ports("udp", "udp", &self.ports),
+            Kind::Tcp => on_ports("tcp", "tcp", &self.ports),
+            Kind::Both if self.ports.is_empty() => "(udp or tcp)".into(),
+            Kind::Both => format!(
+                "(({}) or ({}))",
+                on_ports("udp", "udp", &self.ports),
+                on_ports("tcp", "tcp", &self.ports)
+            ),
+            Kind::Syn => on_ports("tcp and tcp.Syn and !tcp.Ack", "tcp", &self.ports),
+            Kind::Held => "tcp".into(),
         };
-        let r = &mut parts[p].ranges;
-        r[i].1 = r[i + 1].1;
-        r.remove(i + 1);
-        total -= 1;
+        if self.ranges.is_empty() {
+            format!("({head})")
+        } else {
+            format!("({head} and {})", any(self.ranges.iter().map(range)))
+        }
+    }
+}
+
+/// Inside one list, merges the two neighbouring items with the smallest gap (ties: the first).
+/// False when no list has two items.
+fn merge_closest<T: Copy + Ord + Into<u64>>(lists: Vec<&mut Vec<(T, T)>>) -> bool {
+    let closest = lists
+        .iter()
+        .enumerate()
+        .flat_map(|(l, list)| {
+            list.windows(2)
+                .enumerate()
+                .map(move |(i, w)| (w[1].0.into().saturating_sub(w[0].1.into()), l, i))
+        })
+        .min_by_key(|&(gap, _, _)| gap);
+    let Some((_, l, i)) = closest else {
+        return false;
+    };
+    let list = lists.into_iter().nth(l).unwrap();
+    list[i].1 = list[i].1.max(list[i + 1].1);
+    list.remove(i + 1);
+    true
+}
+
+/// Merges the closest IP ranges, then the closest ports, until at most `MAX_FILTER_RANGES`
+/// ranges are left and the filter has at most `FILTER_BUDGET` tests, or nothing is left to merge.
+// ponytail: O(n²) in the number of ranges and ports (hundreds at most); a heap of gaps if that
+// ever grows. The filter becomes a superset; `Table` stays exact and the hub re-sends what it does
+// not match.
+fn fit(parts: &mut [Part], extra: usize) {
+    loop {
+        let ranges: usize = parts.iter().map(|p| p.ranges.len()).sum();
+        let tests: usize = extra + parts.iter().map(Part::tests).sum::<usize>();
+        if ranges <= MAX_FILTER_RANGES && tests <= FILTER_BUDGET {
+            return;
+        }
+        let merged = merge_closest(parts.iter_mut().map(|p| &mut p.ranges).collect())
+            || (ranges <= MAX_FILTER_RANGES
+                && merge_closest(parts.iter_mut().map(|p| &mut p.ports).collect()));
+        if !merged {
+            return;
+        }
     }
 }
 
@@ -84,50 +166,50 @@ pub fn filter(table: &Table) -> Option<String> {
 /// an address learned since the last reopen), destinations of live NAT entries (`held`) and the
 /// local acceptor's replies.
 pub fn capture_filter(table: &Table, acceptor: Option<u16>, held: &[Ipv4Addr]) -> Option<String> {
-    let mut parts = Vec::new();
+    let mut parts: Vec<Part> = Vec::new();
     for r in &table.rules {
+        let mut ports = r.ports.clone();
+        ports.sort_unstable();
         if !r.ranges.is_empty() {
-            let head = match r.protocol {
-                Protocol::Udp => on_ports("udp", "udp", &r.ports),
-                Protocol::Tcp => on_ports("tcp", "tcp", &r.ports),
-                Protocol::Both if r.ports.is_empty() => "(udp or tcp)".into(),
-                Protocol::Both => format!(
-                    "(({}) or ({}))",
-                    on_ports("udp", "udp", &r.ports),
-                    on_ports("tcp", "tcp", &r.ports)
-                ),
+            let kind = match r.protocol {
+                Protocol::Udp => Kind::Udp,
+                Protocol::Tcp => Kind::Tcp,
+                Protocol::Both => Kind::Both,
             };
             parts.push(Part {
-                head,
+                kind,
+                ports: ports.clone(),
                 ranges: r.ranges.clone(),
             });
         }
-        if r.protocol != Protocol::Udp && !r.domains.is_empty() {
+        let syn = r.protocol != Protocol::Udp && !r.domains.is_empty();
+        if syn
+            && !parts
+                .iter()
+                .any(|p| p.kind == Kind::Syn && p.ports == ports)
+        {
             parts.push(Part {
-                head: on_ports("tcp and tcp.Syn and !tcp.Ack", "tcp", &r.ports),
+                kind: Kind::Syn,
+                ports,
                 ranges: vec![],
             });
         }
     }
     if !held.is_empty() {
         parts.push(Part {
-            head: "tcp".into(),
+            kind: Kind::Held,
+            ports: vec![],
             ranges: crate::rules::merge(held.iter().map(|&ip| (ip.into(), ip.into())).collect()),
         });
     }
-    let tcp = parts.iter().any(|p| p.head.contains("tcp"));
     if parts.is_empty() {
         return None;
     }
-    fit(&mut parts);
-    let mut text: Vec<String> = parts
-        .iter()
-        .map(|p| match p.ranges.is_empty() {
-            true => format!("({})", p.head),
-            false => format!("({} and {})", p.head, any(p.ranges.iter().map(range))),
-        })
-        .collect();
-    if let (Some(port), true) = (acceptor, tcp) {
+    let acceptor = acceptor.filter(|_| parts.iter().any(Part::tcp));
+    let extra = BASE_TESTS + acceptor.map_or(0, |_| ACCEPTOR_TESTS);
+    fit(&mut parts, extra);
+    let mut text: Vec<String> = parts.iter().map(Part::text).collect();
+    if let Some(port) = acceptor {
         text.push(format!("(tcp and tcp.SrcPort == {port})"));
     }
     Some(format!(
@@ -227,6 +309,8 @@ type SendFn =
 type ShutdownFn = unsafe extern "C" fn(*mut c_void, i32) -> i32;
 type CloseFn = unsafe extern "C" fn(*mut c_void) -> i32;
 type ChecksumsFn = unsafe extern "C" fn(*mut c_void, u32, *mut Address, u64) -> i32;
+type CompileFn =
+    unsafe extern "C" fn(*const c_char, i32, *mut c_char, u32, *mut *const c_char, *mut u32) -> i32;
 
 #[derive(Clone, Debug)]
 pub struct Dll {
@@ -236,6 +320,7 @@ pub struct Dll {
     shutdown: ShutdownFn,
     close: CloseFn,
     checksums: ChecksumsFn,
+    compile: CompileFn,
 }
 
 pub const PRIORITY: i16 = 1000;
@@ -285,10 +370,42 @@ impl Dll {
                 checksums: std::mem::transmute::<*const c_void, ChecksumsFn>(sym(
                     "WinDivertHelperCalcChecksums",
                 )?),
+                compile: std::mem::transmute::<*const c_void, CompileFn>(sym(
+                    "WinDivertHelperCompileFilter",
+                )?),
             }
         };
         loaded.insert(path.to_path_buf(), dll.clone());
         Ok(dll)
+    }
+
+    /// Compiles `filter` without opening a handle (no elevation needed): WinDivert's error and
+    /// position on failure.
+    pub fn compile(&self, filter: &str, layer: Layer) -> std::result::Result<(), String> {
+        let f = std::ffi::CString::new(filter).map_err(|e| e.to_string())?;
+        let mut error: *const c_char = std::ptr::null();
+        let mut pos = 0u32;
+        // SAFETY: `f` is NUL-terminated; a null object buffer only checks; `error`/`pos` are valid
+        // out-pointers and `error` points to a static string when set.
+        let ok = unsafe {
+            (self.compile)(
+                f.as_ptr(),
+                layer as i32,
+                std::ptr::null_mut(),
+                0,
+                &mut error,
+                &mut pos,
+            )
+        };
+        if ok != 0 {
+            return Ok(());
+        }
+        let error = match error.is_null() {
+            true => "unknown error".into(),
+            // SAFETY: WinDivert sets `error` to a NUL-terminated static string.
+            false => unsafe { std::ffi::CStr::from_ptr(error) }.to_string_lossy(),
+        };
+        Err(format!("{error} at {pos}"))
     }
 
     pub fn checksums(&self, packet: &mut [u8], addr: &mut Address) {

@@ -149,3 +149,48 @@ fn a_running_router_relays_a_flow_through_the_proxy() {
     r.stop();
     assert_eq!(r.status().state, RouterState::Off);
 }
+
+#[test]
+#[ignore = "loads WinDivert.dll (no elevation needed): run with WINDIVERT_DLL set"]
+fn the_largest_capture_filters_compile() {
+    use router::divert::{capture_filter, filter};
+    use router::rules::{self, Preset, Rule, Table};
+    use std::net::Ipv4Addr;
+    let names: Vec<(Ipv4Addr, String)> = (0..400u32)
+        .map(|i| {
+            let name = if i % 2 == 0 {
+                "discord.com"
+            } else {
+                "x.discord.media"
+            };
+            (Ipv4Addr::from(0x0A00_0000 + i * 1000), name.to_string())
+        })
+        .collect();
+    let table = Table::new(&[
+        rules::preset(Preset::Discord),
+        rules::preset(Preset::DiscordVoice),
+    ])
+    .with_names(&names);
+    let held: Vec<Ipv4Addr> = (0..100u32)
+        .map(|i| Ipv4Addr::from(0xC000_0000 + i * 7))
+        .collect();
+    let ranges = Table::new(&[Rule {
+        domains: vec![],
+        ips: (0..65).map(|i| format!("10.{i}.0.0/24")).collect(),
+        ..rules::preset(Preset::DiscordVoice)
+    }]);
+    let ports = Table::new(&[Rule {
+        protocol: rules::Protocol::Both,
+        ports: (0..150).map(|i| (1000 + 2 * i).to_string()).collect(),
+        ..rules::preset(Preset::Discord)
+    }]);
+    let dll = dll();
+    for text in [
+        capture_filter(&table, Some(61000), &held).unwrap(),
+        filter(&ranges).unwrap(),
+        capture_filter(&ports, Some(61000), &[]).unwrap(),
+    ] {
+        dll.compile(&text, Layer::Network)
+            .unwrap_or_else(|e| panic!("{e}: {text}"));
+    }
+}
