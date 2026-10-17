@@ -489,7 +489,7 @@ impl Live {
         let acceptor = TcpListener::bind("0.0.0.0:0")
             .map_err(|e| anyhow!("cannot open the local TCP acceptor: {e}"))?;
         let acceptor_port = acceptor.local_addr()?.port();
-        inner.names.lock().unwrap().expire(Instant::now());
+        inner.names.lock().unwrap().expire(Instant::now(), &[]);
         let live = Arc::new(Live {
             inner: Arc::downgrade(inner),
             dll,

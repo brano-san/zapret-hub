@@ -1,4 +1,4 @@
-use router::dns::{self, Answer, MIN_TTL, Names};
+use router::dns::{self, Answer, MAX_TTL, MIN_TTL, Names};
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
@@ -149,14 +149,14 @@ fn names_live_their_ttl_but_at_least_5_minutes() {
         names.name_of(ip("1.1.1.1"), t0 + Duration::from_secs(309)),
         Some("discord.com")
     );
-    assert!(names.expire(t0 + Duration::from_secs(310)));
+    assert!(names.expire(t0 + Duration::from_secs(310), &[]));
     assert_eq!(
         names.name_of(ip("1.1.1.1"), t0 + Duration::from_secs(310)),
         None
     );
     assert_eq!(names.entries(), [(ip("2.2.2.2"), "discord.gg".to_string())]);
-    assert!(!names.expire(t0 + Duration::from_secs(3599)));
-    assert!(names.expire(t0 + MIN_TTL * 12));
+    assert!(!names.expire(t0 + Duration::from_secs(3599), &[]));
+    assert!(names.expire(t0 + MIN_TTL * 12, &[]));
 }
 
 #[test]
@@ -166,4 +166,47 @@ fn names_over_253_bytes_are_rejected() {
     assert!(dns::parse(&message(&long, &[])).is_none());
     let ok = format!("{label}.{label}.{label}.{}", "b".repeat(61));
     assert_eq!(dns::parse(&message(&ok, &[])).unwrap().name.len(), 253);
+}
+
+#[test]
+fn a_ttl_is_clamped_to_a_day_and_a_top_bit_one_reads_as_zero() {
+    let m = message(
+        "discord.com",
+        &[
+            rr(&name("discord.com"), 1, u32::MAX, &[1, 1, 1, 1]),
+            rr(&name("discord.com"), 1, 0x7FFF_FFFF, &[2, 2, 2, 2]),
+            rr(&name("discord.com"), 1, 3600, &[3, 3, 3, 3]),
+        ],
+    );
+    assert_eq!(
+        dns::parse(&m).unwrap().ips,
+        [
+            (ip("1.1.1.1"), 0),
+            (ip("2.2.2.2"), MAX_TTL),
+            (ip("3.3.3.3"), 3600)
+        ]
+    );
+}
+
+#[test]
+fn a_name_in_use_outlives_its_ttl() {
+    let t0 = Instant::now();
+    let mut names = Names::default();
+    let answer = Answer {
+        name: "discord.media".into(),
+        ips: vec![(ip("1.1.1.1"), 60), (ip("2.2.2.2"), 60)],
+    };
+    names.record(&answer, t0);
+    let late = t0 + MIN_TTL + Duration::from_secs(1);
+    assert!(names.expire(late, &[ip("1.1.1.1")]), "the unused one goes");
+    assert_eq!(
+        names.entries(),
+        [(ip("1.1.1.1"), "discord.media".to_string())]
+    );
+    assert_eq!(names.name_of(ip("1.1.1.1"), late), Some("discord.media"));
+    assert!(
+        !names.expire(late + MIN_TTL - Duration::from_secs(1), &[]),
+        "a used name lives another MIN_TTL after its last use"
+    );
+    assert!(names.expire(late + MIN_TTL, &[]));
 }

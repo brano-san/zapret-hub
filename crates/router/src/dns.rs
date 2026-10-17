@@ -6,6 +6,9 @@ use std::time::{Duration, Instant};
 
 /// A known address stays at least this long, whatever the TTL says.
 pub const MIN_TTL: Duration = Duration::from_secs(300);
+/// A spoofed answer cannot pin an address to a name for longer (RFC 2181 8 also reads a TTL with
+/// the top bit set as zero).
+pub const MAX_TTL: u32 = 86_400;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Answer {
@@ -71,6 +74,11 @@ pub fn parse(m: &[u8]) -> Option<Answer> {
         let (owner, p) = read_name(m, pos)?;
         let (kind, class, rdlen) = (u16_at(p)?, u16_at(p + 2)?, u16_at(p + 8)?);
         let ttl = u32::from_be_bytes(m.get(p + 4..p + 8)?.try_into().ok()?);
+        let ttl = if ttl > i32::MAX as u32 {
+            0
+        } else {
+            ttl.min(MAX_TTL)
+        };
         let data = p + 10;
         let rdata = m.get(data..data + rdlen)?;
         match (kind, class) {
@@ -134,9 +142,16 @@ impl Names {
             .map(|(n, _)| n.as_str())
     }
 
-    pub fn expire(&mut self, now: Instant) -> bool {
+    /// Addresses in `live` (destinations of live flows) are kept: their name lives another
+    /// `MIN_TTL` from now, so the capture filter keeps them while they are in use.
+    pub fn expire(&mut self, now: Instant, live: &[Ipv4Addr]) -> bool {
         let before = self.0.len();
-        self.0.retain(|_, (_, until)| *until > now);
+        self.0.retain(|ip, (_, until)| {
+            if live.contains(ip) {
+                *until = (*until).max(now + MIN_TTL);
+            }
+            *until > now
+        });
         self.0.len() != before
     }
 

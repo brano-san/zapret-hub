@@ -321,10 +321,27 @@ impl Live {
         }
     }
 
-    /// Expires names and NAT entries (their rows close, their relays end), sends unaccepted SYNs'
-    /// destinations direct, then rebuilds the filter (no reopen when its text is the same).
+    /// Expires names (not those of live flows) and NAT entries (their rows close, their relays
+    /// end), sends unaccepted SYNs' destinations direct, then rebuilds the filter (no reopen when
+    /// its text is the same).
     pub(crate) fn tcp_tick(self: &Arc<Self>, now: Instant) {
-        self.names.lock().unwrap().expire(now);
+        // A live flow to an address known only from DNS keeps it captured (proxied UDP mid-call).
+        let mut live: Vec<_> = self
+            .flows
+            .lock()
+            .unwrap()
+            .keys()
+            .map(|k| *k.dst.ip())
+            .collect();
+        live.extend(
+            self.nat
+                .lock()
+                .unwrap()
+                .destinations()
+                .iter()
+                .map(|d| *d.ip()),
+        );
+        self.names.lock().unwrap().expire(now, &live);
         let (gone, unaccepted) = {
             let mut nat = self.nat.lock().unwrap();
             (nat.expire(now), nat.unaccepted(now))
