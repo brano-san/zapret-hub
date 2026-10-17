@@ -1,5 +1,8 @@
 use router::divert::Address;
-use router::packet::{build_udp, parse_socks_udp, parse_udp, socks_header};
+use router::packet::{
+    ACK, SYN, build_udp, parse_socks_udp, parse_socks_udp_from, parse_tcp, parse_udp, rewrite_tcp,
+    socks_header, socks_header_to,
+};
 
 #[test]
 fn a_built_packet_has_the_scripts_bytes_and_parses_back() {
@@ -100,4 +103,83 @@ fn only_unicast_packets_are_routed() {
     assert!(!unicast(ip("192.168.1.5"), ip("255.255.255.255")));
     assert!(!unicast(ip("0.0.0.0"), ip("255.255.255.255")), "DHCP");
     assert!(!unicast(ip("0.0.0.0"), ip("104.29.1.1")));
+}
+
+/// 192.168.1.5:50000 -> 162.159.135.232:443, SYN, data offset 6 (an MSS option), checksums 0x1234 / 0xABCD.
+fn syn() -> Vec<u8> {
+    let mut p = vec![
+        0x45, 0, 0, 44, 0, 1, 0x40, 0, 128, 6, 0xAB, 0xCD, 192, 168, 1, 5, 162, 159, 135, 232,
+    ];
+    p.extend_from_slice(&[
+        0xC3, 0x50, 0x01, 0xBB, 0, 0, 0, 1, 0, 0, 0, 0, 0x60, 0x02, 0xFA, 0xF0, 0x12, 0x34, 0, 0,
+    ]);
+    p.extend_from_slice(&[2, 4, 5, 0xB4]);
+    p
+}
+
+#[test]
+fn a_tcp_segment_parses_with_its_flags_and_options() {
+    let p = syn();
+    let t = parse_tcp(&p).unwrap();
+    assert_eq!(
+        (t.src.to_string(), t.dst.to_string()),
+        ("192.168.1.5:50000".into(), "162.159.135.232:443".into())
+    );
+    assert_eq!(t.flags & (SYN | ACK), SYN);
+    assert!(t.payload.is_empty(), "options are not payload");
+    let mut data = p.clone();
+    data.extend_from_slice(b"GET");
+    data[3] = 47;
+    assert_eq!(parse_tcp(&data).unwrap().payload, b"GET");
+}
+
+#[test]
+fn bad_tcp_does_not_parse() {
+    let p = syn();
+    let (mut udp, mut fragment, mut short, mut long) = (p.clone(), p.clone(), p.clone(), p.clone());
+    udp[9] = 17;
+    fragment[7] = 1;
+    short[32] = 0x40; // data offset 4
+    long[32] = 0xF0; // 60 bytes, past the packet
+    for bad in [udp, fragment, short, long, p[..39].to_vec()] {
+        assert!(parse_tcp(&bad).is_none());
+    }
+}
+
+#[test]
+fn a_reflected_segment_has_new_addresses_and_zero_checksums() {
+    let mut p = syn();
+    rewrite_tcp(
+        &mut p,
+        "162.159.135.232:50000".parse().unwrap(),
+        "192.168.1.5:61000".parse().unwrap(),
+    );
+    assert_eq!(p[12..20], [162, 159, 135, 232, 192, 168, 1, 5]);
+    assert_eq!(p[20..24], [0xC3, 0x50, 0xEE, 0x48]);
+    assert_eq!(
+        (&p[10..12], &p[36..38]),
+        (&[0u8, 0][..], &[0u8, 0][..]),
+        "checksums are left to WinDivert"
+    );
+    assert_eq!(
+        (&p[24..36], &p[38..]),
+        (&syn()[24..36], &syn()[38..]),
+        "sequence, flags, window and options stay"
+    );
+}
+
+#[test]
+fn a_known_domain_goes_into_the_socks_udp_header() {
+    let dst = "35.214.1.1:50005".parse().unwrap();
+    assert_eq!(socks_header_to(dst, None), socks_header(dst).to_vec());
+    let named = [&[0u8, 0, 0, 3, 15][..], b"a.discord.media", &[0xC3, 0x55]].concat();
+    assert_eq!(socks_header_to(dst, Some("a.discord.media")), named);
+    let reply = [named.as_slice(), b"ok"].concat();
+    assert_eq!(parse_socks_udp_from(&reply, dst), Some((dst, &b"ok"[..])));
+    assert_eq!(parse_socks_udp_from(&reply[..12], dst), None, "a cut name");
+    let ipv4 = [0, 0, 0, 1, 35, 214, 1, 1, 0xC3, 0x55, b'x'];
+    assert_eq!(
+        parse_socks_udp_from(&ipv4, "1.1.1.1:1".parse().unwrap()),
+        Some((dst, &b"x"[..]))
+    );
 }
