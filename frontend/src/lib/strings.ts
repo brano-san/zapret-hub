@@ -548,7 +548,7 @@ export const S = {
     noRules: "Правил ещё нет",
     newRule: "Новое правило",
     addPreset: "Добавить из профиля",
-    presets: { "discord-voice": "Discord голос" } satisfies Record<Preset, string>,
+    presets: { "discord-voice": "Discord голос", discord: "Discord целиком" } satisfies Record<Preset, string>,
     edit: "Изменить",
     delete: "Удалить",
     deleteTitle: (name: string) => `Удалить правило «${name}»?`,
@@ -573,6 +573,8 @@ export const S = {
       NoUdp: "прокси не поддерживает UDP",
       Timeout: "прокси не ответил за 3 с",
       Loop: "трафик прокси или хаба",
+      Marked: "прокси отказал, адрес идёт напрямую",
+      NotAccepted: "соединение не дошло до приёмника",
     } satisfies Record<Exclude<DirectReason["kind"], "Failed">, string>,
   },
   names: {

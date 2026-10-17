@@ -341,12 +341,14 @@ enum RoutesCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum PresetArg {
     DiscordVoice,
+    Discord,
 }
 
 impl From<PresetArg> for Preset {
     fn from(preset: PresetArg) -> Self {
         match preset {
             PresetArg::DiscordVoice => Preset::DiscordVoice,
+            PresetArg::Discord => Preset::Discord,
         }
     }
 }
@@ -1178,6 +1180,12 @@ mod tests {
                     preset: Preset::DiscordVoice,
                 },
             ),
+            (
+                &["routes", "preset", "discord"],
+                Request::AddRoutePreset {
+                    preset: Preset::Discord,
+                },
+            ),
             (&["routes", "flows"], Request::RouteFlows { all: false }),
             (
                 &["routes", "flows", "--all"],
@@ -1385,6 +1393,16 @@ mod tests {
             "{}",
             fail.error
         );
+        std::fs::write(
+            &file,
+            "[rule]\nprotocol = \"tcp\"\ndomains = [\"discord.com\"]\n",
+        )
+        .unwrap();
+        let (_, asked) = drive(&["routes", "add", "v", "--file", path], Vec::new());
+        let [Request::SaveRoute { rule, create: true }] = asked.as_slice() else {
+            panic!("{asked:?}")
+        };
+        assert_eq!(rule.domains, ["discord.com"]);
     }
 
     #[test]

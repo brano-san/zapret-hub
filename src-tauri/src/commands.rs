@@ -734,11 +734,13 @@ pub fn validate_route(rule: Rule) -> Vec<FieldError> {
     rules::check(&rule)
 }
 
-/// `ips` plus the subnets of an ipset-style list (one per line).
+/// `ips` and `domains` plus the entries of a list file (one subnet or domain per line).
 #[tauri::command]
 #[specta::specta]
-pub fn import_route_lines(ips: Vec<String>, text: String) -> Answer<Vec<String>> {
-    rules::import(&ips, &[], &text)
-        .map(|got| got.ips)
-        .map_err(|err| err.to_string())
+pub fn import_route_lines(
+    ips: Vec<String>,
+    domains: Vec<String>,
+    text: String,
+) -> Answer<rules::Imported> {
+    rules::import(&ips, &domains, &text).map_err(|err| err.to_string())
 }

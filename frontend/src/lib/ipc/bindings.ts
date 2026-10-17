@@ -118,8 +118,8 @@ export const commands = {
 	routeFlows: (all: boolean) => __TAURI_INVOKE<FlowRow[]>("route_flows", { all }),
 	/**  The editor's checks as it types: nothing saved. */
 	validateRoute: (rule: Rule) => __TAURI_INVOKE<FieldError[]>("validate_route", { rule }),
-	/**  `ips` plus the subnets of an ipset-style list (one per line). */
-	importRouteLines: (ips: string[], text: string) => typedError<string[], string>(__TAURI_INVOKE("import_route_lines", { ips, text })),
+	/**  `ips` and `domains` plus the entries of a list file (one subnet or domain per line). */
+	importRouteLines: (ips: string[], domains: string[], text: string) => typedError<Imported, string>(__TAURI_INVOKE("import_route_lines", { ips, domains, text })),
 };
 
 /** Events */
@@ -235,7 +235,11 @@ export type Detected = {
 	zapret2: string | null,
 };
 
-export type DirectReason = { kind: "ProxyDown" } | { kind: "AuthRequired" } | { kind: "NoUdp" } | { kind: "Timeout" } | { kind: "Failed"; error: string } | { kind: "Loop" };
+export type DirectReason = { kind: "ProxyDown" } | { kind: "AuthRequired" } | { kind: "NoUdp" } | { kind: "Timeout" } | { kind: "Failed"; error: string } | { kind: "Loop" } | 
+/**  The address is sent direct for a while after the proxy refused a connection to it. */
+{ kind: "Marked" } | 
+/**  The SYN never reached the local acceptor. */
+{ kind: "NotAccepted" };
 
 /**  A release download from the window: bytes so far and the zip's size (0 when GitHub gave none). */
 export type DownloadProgress = {
@@ -292,6 +296,7 @@ export type FieldError = {
 
 export type FlowRow = {
 	protocol: string,
+	domain: string | null,
 	destination: string,
 	local_port: number,
 	rule: string | null,
@@ -343,6 +348,11 @@ export type HostsPlan = {
 	added: string[],
 	/**  Lines of the current zapret-hub block that Flowseal no longer has. */
 	removed: string[],
+};
+
+export type Imported = {
+	ips: string[],
+	domains: string[],
 };
 
 /**  The zapret2 folder as «Настройки», «Обзор» and `zapret2_info` show it. */
@@ -462,7 +472,7 @@ export type Pass = {
 	score: Score,
 };
 
-export type Preset = "discord-voice";
+export type Preset = "discord-voice" | "discord";
 
 /**  A profile as the card and the builder show it. */
 export type Profile = {
@@ -541,6 +551,7 @@ export type Rule = {
 	protocol: Protocol,
 	ports: string[],
 	ips: string[],
+	domains?: string[],
 };
 
 export type RuleRow = {

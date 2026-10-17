@@ -49,8 +49,8 @@
     // The same file can be picked again.
     input.value = "";
     if (!file) return;
-    const merged = await call(S.failed.importRoute, commands.importRouteLines(lines(ips), await file.text()));
-    if (merged) ips = merged.join("\n");
+    const merged = await call(S.failed.importRoute, commands.importRouteLines(lines(ips), [], await file.text()));
+    if (merged) ips = merged.ips.join("\n");
   }
 
   async function save(): Promise<void> {
