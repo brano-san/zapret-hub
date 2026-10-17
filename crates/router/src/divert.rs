@@ -178,8 +178,9 @@ pub fn filter(table: &Table) -> Option<String> {
 }
 
 /// The capture handle's filter: each rule's protocol and ports over its ranges (subnets and
-/// resolved IPs; none yet, no part), the first SYNs of domain TCP rules (so the hub sees a SYN to
-/// an address learned since the last reopen), destinations of live NAT entries (`held`) and the
+/// resolved IPs; none yet, no part), the first SYNs of domain and program TCP rules (so the hub
+/// sees a SYN to an address learned since the last reopen, or decides a program's connection), the
+/// UDP of program rules while their program runs (`Compiled.running`), destinations of live NAT entries (`held`) and the
 /// local acceptor's replies.
 pub fn capture_filter(table: &Table, acceptor: Option<u16>, held: &[Ipv4Addr]) -> Option<String> {
     let mut parts: Vec<Part> = Vec::new();
@@ -198,17 +199,18 @@ pub fn capture_filter(table: &Table, acceptor: Option<u16>, held: &[Ipv4Addr]) -
                 ranges: r.ranges.clone(),
             });
         }
-        let syn = r.protocol != Protocol::Udp && !r.domains.is_empty();
-        if syn
-            && !parts
-                .iter()
-                .any(|p| p.kind == Kind::Syn && p.ports == ports)
-        {
-            parts.push(Part {
-                kind: Kind::Syn,
-                ports,
-                ranges: vec![],
-            });
+        let syn = r.protocol != Protocol::Udp && !(r.domains.is_empty() && r.apps.is_empty());
+        // `running` is set only for rules that take UDP and have programs.
+        let udp = r.protocol != Protocol::Tcp && !r.apps.is_empty() && r.running;
+        for (wanted, kind) in [(syn, Kind::Syn), (udp, Kind::Udp)] {
+            let same = |p: &Part| p.kind == kind && p.ports == ports && p.ranges.is_empty();
+            if wanted && !parts.iter().any(same) {
+                parts.push(Part {
+                    kind,
+                    ports: ports.clone(),
+                    ranges: vec![],
+                });
+            }
         }
     }
     if !held.is_empty() {

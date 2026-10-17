@@ -343,3 +343,44 @@ fn a_refused_capture_filter_names_too_many_rules() {
     assert!(refused(&other).starts_with("WinDivert refused the filter: "));
     assert!(refused_for_good(&invalid) && !refused_for_good(&other));
 }
+
+const DBD: &str = r"D:\Games\DeadByDaylight-Win64-Shipping.exe";
+
+fn app_rule(protocol: Protocol, ports: &[&str]) -> Rule {
+    Rule {
+        protocol,
+        domains: vec![],
+        apps: vec!["DeadByDaylight-Win64-Shipping.exe".into()],
+        ..rule(ports, &[])
+    }
+}
+
+#[test]
+fn an_app_rule_captures_first_syns_and_udp_only_while_its_program_runs() {
+    let both = Table::new(&[app_rule(Protocol::Both, &[])]);
+    assert_eq!(
+        capture_filter(&both, Some(61000), &[]).unwrap(),
+        "outbound and !loopback and ip and ((tcp and tcp.Syn and !tcp.Ack) or (tcp and tcp.SrcPort == 61000))",
+        "the game is not running: SYNs only"
+    );
+    assert_eq!(
+        capture_filter(&both.with_running(&[DBD]), Some(61000), &[]).unwrap(),
+        "outbound and !loopback and ip and ((tcp and tcp.Syn and !tcp.Ack) or (udp) or (tcp and tcp.SrcPort == 61000))"
+    );
+    let udp = Table::new(&[app_rule(Protocol::Udp, &["7000-8000"])]);
+    assert_eq!(filter(&udp), None, "nothing while the game is not running");
+    assert_eq!(
+        filter(&udp.clone().with_running(&[r"C:\x\chrome.exe"])),
+        None
+    );
+    assert_eq!(
+        filter(&udp.with_running(&[DBD])).unwrap(),
+        "outbound and !loopback and ip and ((udp and ((udp.DstPort >= 7000 and udp.DstPort <= 8000))))"
+    );
+    let dbd = Table::new(&[rules::preset(Preset::Dbd)]);
+    assert_eq!(
+        filter(&dbd).unwrap(),
+        "outbound and !loopback and ip and ((tcp and tcp.Syn and !tcp.Ack))",
+        "domain and program share the SYN part"
+    );
+}
