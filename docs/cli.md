@@ -404,7 +404,7 @@ zapret-hub-cli apply zapret2:mine
    `cli: refused: the CLI is off…`.
 2. Флажок «Управление из командной строки» включён и сохранён: `status` → код 0, обзор; в журнале
    `cli: get_overview: ok`.
-3. `version` → `{"app": "0.6.0", "cli": "0.6.0", "protocol": 3}`, код 0.
+3. `version` → `{"app": "0.7.0", "cli": "0.7.0", "protocol": 4}`, код 0.
 4. `apply "general (ALT2)"` → код 0; окно и иконка трея сами показывают новую стратегию.
 5. `service remove` → код 2, служба на месте. `service remove --yes` → код 0, `sc query zapret` службу не
    находит. `apply "general (ALT2)"` возвращает её.
