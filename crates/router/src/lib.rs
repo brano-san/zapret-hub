@@ -697,9 +697,9 @@ impl Live {
                 drop(flows);
                 let l = self.clone();
                 spawn(move || l.relay_rx(key, &relay));
-                if *self.proxy_state.lock().unwrap() == ProxyState::NoUdp {
-                    self.set_proxy(ProxyState::Ok { latency_ms });
-                }
+                self.update_proxy(|current| {
+                    (*current == ProxyState::NoUdp).then_some(ProxyState::Ok { latency_ms })
+                });
                 Via::Proxy
             }
             Err(e) => {
@@ -770,7 +770,15 @@ impl Live {
 
     /// Calls back only when the kind changes (ok -> down), not on every latency update.
     fn set_proxy(&self, new: ProxyState) {
+        self.update_proxy(|_| Some(new));
+    }
+
+    /// Decides and writes under one lock, so a concurrent writer cannot be overwritten.
+    fn update_proxy(&self, f: impl FnOnce(&ProxyState) -> Option<ProxyState>) {
         let mut state = self.proxy_state.lock().unwrap();
+        let Some(new) = f(&state) else {
+            return;
+        };
         let changed = discriminant(&*state) != discriminant(&new);
         let failing = matches!(
             new,
@@ -834,10 +842,7 @@ impl Live {
                 },
             };
             *self.proxy_pid.lock().unwrap() = owner::listener_pid(self.proxy.port());
-            let current = self.proxy_state.lock().unwrap().clone();
-            if let Some(new) = flows::checked(&current, new, &mut failures) {
-                self.set_proxy(new);
-            }
+            self.update_proxy(|current| flows::checked(current, new, &mut failures));
             if !self.sleep(PROXY_CHECK) {
                 return;
             }
