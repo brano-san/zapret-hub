@@ -5,6 +5,7 @@ pub mod owner;
 pub mod packet;
 pub mod rules;
 pub mod socks;
+pub mod tcp;
 
 use std::collections::{HashMap, hash_map::Entry};
 use std::mem::discriminant;
