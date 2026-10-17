@@ -331,7 +331,7 @@ enum RoutesCommand {
     Preset {
         preset: PresetArg,
     },
-    /// The open flows and those closed in the last 30 s; --all adds rule-less flows (none in stage 1).
+    /// The open flows and those closed in the last 30 s; --all adds flows without a rule (seen for app rules).
     Flows {
         #[arg(long)]
         all: bool,
@@ -342,6 +342,7 @@ enum RoutesCommand {
 enum PresetArg {
     DiscordVoice,
     Discord,
+    Dbd,
 }
 
 impl From<PresetArg> for Preset {
@@ -349,6 +350,7 @@ impl From<PresetArg> for Preset {
         match preset {
             PresetArg::DiscordVoice => Preset::DiscordVoice,
             PresetArg::Discord => Preset::Discord,
+            PresetArg::Dbd => Preset::Dbd,
         }
     }
 }
@@ -1186,6 +1188,12 @@ mod tests {
                     preset: Preset::Discord,
                 },
             ),
+            (
+                &["routes", "preset", "dbd"],
+                Request::AddRoutePreset {
+                    preset: Preset::Dbd,
+                },
+            ),
             (&["routes", "flows"], Request::RouteFlows { all: false }),
             (
                 &["routes", "flows", "--all"],
@@ -1379,6 +1387,16 @@ mod tests {
                 create: false
             }]
         );
+        std::fs::write(
+            &file,
+            "[rule]\nprotocol = \"udp\"\napps = [\"Discord.exe\"]\n",
+        )
+        .unwrap();
+        let (_, asked) = drive(&["routes", "add", "v", "--file", path], Vec::new());
+        let [Request::SaveRoute { rule, create: true }] = asked.as_slice() else {
+            panic!("{asked:?}")
+        };
+        assert_eq!(rule.apps, ["Discord.exe"]);
         std::fs::write(
             &file,
             "[rule]\nprotocol = \"udp\"\nips = [\"1.1.1.1\"]\napps = [\"Discord\"]\n",
@@ -1913,7 +1931,7 @@ more",
             outcome,
             Ok(Done::Json(json!({
                 "cli": env!("CARGO_PKG_VERSION"),
-                "protocol": 2,
+                "protocol": 3,
                 "app": null,
             })))
         );
