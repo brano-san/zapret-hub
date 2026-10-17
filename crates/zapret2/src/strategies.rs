@@ -18,7 +18,7 @@ const BUILTIN: [(&str, &str); 2] = [
 
 /// Flowseal's strategies ported to zapret2 (names without the prefix): read-only like `BUILTIN`, but
 /// left out of the tests that run without names.
-const FLOWSEAL: [(&str, &str); 14] = [
+const FLOWSEAL: [(&str, &str); 22] = [
     (
         "general (ALT)",
         include_str!("builtin/flowseal/general (ALT).txt"),
@@ -72,8 +72,40 @@ const FLOWSEAL: [(&str, &str); 14] = [
         include_str!("builtin/flowseal/general (ALT13).txt"),
     ),
     (
+        "general (EXP)",
+        include_str!("builtin/flowseal/general (EXP).txt"),
+    ),
+    (
+        "general (FAKE TLS AUTO ALT)",
+        include_str!("builtin/flowseal/general (FAKE TLS AUTO ALT).txt"),
+    ),
+    (
+        "general (FAKE TLS AUTO ALT2)",
+        include_str!("builtin/flowseal/general (FAKE TLS AUTO ALT2).txt"),
+    ),
+    (
+        "general (FAKE TLS AUTO ALT3)",
+        include_str!("builtin/flowseal/general (FAKE TLS AUTO ALT3).txt"),
+    ),
+    (
+        "general (FAKE TLS AUTO)",
+        include_str!("builtin/flowseal/general (FAKE TLS AUTO).txt"),
+    ),
+    (
         "general (Flowseal)",
         include_str!("builtin/flowseal/general (Flowseal).txt"),
+    ),
+    (
+        "general (SIMPLE FAKE ALT)",
+        include_str!("builtin/flowseal/general (SIMPLE FAKE ALT).txt"),
+    ),
+    (
+        "general (SIMPLE FAKE ALT2)",
+        include_str!("builtin/flowseal/general (SIMPLE FAKE ALT2).txt"),
+    ),
+    (
+        "general (SIMPLE FAKE)",
+        include_str!("builtin/flowseal/general (SIMPLE FAKE).txt"),
     ),
 ];
 

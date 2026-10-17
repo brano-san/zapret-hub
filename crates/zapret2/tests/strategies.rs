@@ -62,6 +62,8 @@ fn without_a_folder_there_are_the_built_in_ones() {
     );
     assert!(names.contains(&("general (ALT11)".to_owned(), true)));
     assert!(names.contains(&("general (Flowseal)".to_owned(), true)));
+    // general, general-sni and the 22 Flowseal copies.
+    assert_eq!(names.len(), 24, "{names:?}");
 }
 
 #[test]
