@@ -441,6 +441,18 @@ impl Waiting {
     fn covers(&self, dst: SocketAddrV4) -> bool {
         self.active.matches(Protocol::Tcp, dst).is_some() || self.held.contains(dst.ip())
     }
+
+    /// Puts a new filter in force and takes the held SYNs it covers (and unparsable ones, which
+    /// go out unchanged); the others stay held for the next filter (ruling R1).
+    fn activate(&mut self, active: Arc<Table>, held: Vec<Ipv4Addr>) -> Vec<(Vec<u8>, Address)> {
+        self.active = active;
+        self.held = held;
+        let (go, stay) = std::mem::take(&mut self.syns)
+            .into_iter()
+            .partition(|(p, _)| parse_tcp(p).is_none_or(|s| self.covers(s.dst)));
+        self.syns = stay;
+        go
+    }
 }
 
 /// One running session: handles, flows and counters; dropped whole on stop or pause.
@@ -473,6 +485,8 @@ struct Live {
     proxy_state: Mutex<ProxyState>,
     proxy_pid: Mutex<Option<u32>>,
     next_id: AtomicU16,
+    /// A spawned `recompose` has not started yet: more requests ride on it.
+    recompose_pending: AtomicBool,
 }
 
 /// Caches the exe of every process with a UDP socket: a program started before the session
@@ -542,6 +556,7 @@ impl Live {
             proxy_state: Mutex::new(ProxyState::Unknown),
             proxy_pid: Mutex::new(None),
             next_id: AtomicU16::new(0),
+            recompose_pending: AtomicBool::new(false),
         });
         if let Err(e) = live.apply(Some(table)) {
             live.shut();
@@ -561,6 +576,9 @@ impl Live {
                     continue;
                 }
                 owners.record(port, addr.socket_pid());
+                if addr.socket_protocol() == PROTO_TCP {
+                    continue;
+                }
                 // A program of a UDP rule appeared: its UDP joins the filter.
                 let table = l.table.read().unwrap().clone();
                 if table.idle_apps()
@@ -568,8 +586,7 @@ impl Live {
                         .get(addr.socket_pid())
                         .is_some_and(|exe| table.starts(&exe))
                 {
-                    let l = l.clone();
-                    spawn(move || l.recompose());
+                    l.recompose_soon();
                 }
             }
         });
@@ -1138,5 +1155,55 @@ impl Live {
             self.owners.forget(key.local_port);
         }
         self.stats.lock().unwrap().close(key, now);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn syn_to(dst: SocketAddrV4) -> (Vec<u8>, Address) {
+        let mut p = vec![
+            0x45, 0, 0, 40, 0, 1, 0x40, 0, 128, 6, 0, 0, 192, 168, 1, 5, 0, 0, 0, 0,
+        ];
+        p[16..20].copy_from_slice(&dst.ip().octets());
+        p.extend_from_slice(&[0xC3, 0x50]);
+        p.extend_from_slice(&dst.port().to_be_bytes());
+        p.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 0, 0x50, 0x02, 0xFA, 0xF0, 0, 0, 0, 0]);
+        (p, Address([0; 80]))
+    }
+
+    #[test]
+    fn a_new_filter_takes_only_the_held_syns_it_covers() {
+        let ruled: SocketAddrV4 = "1.1.1.1:443".parse().unwrap();
+        let held: SocketAddrV4 = "8.8.8.8:443".parse().unwrap();
+        let later: SocketAddrV4 = "9.9.9.9:443".parse().unwrap();
+        let table = Table::new(&[Rule {
+            name: "one".into(),
+            enabled: true,
+            protocol: Protocol::Tcp,
+            ports: vec![],
+            ips: vec!["1.1.1.1/32".into()],
+            domains: vec![],
+            apps: vec![],
+        }]);
+        let mut w = Waiting {
+            syns: vec![
+                syn_to(ruled),
+                syn_to(held),
+                syn_to(later),
+                (vec![1, 2, 3], Address([0; 80])),
+            ],
+            ..Waiting::default()
+        };
+        let go = w.activate(Arc::new(table), vec![*held.ip()]);
+        let dst = |s: &(Vec<u8>, Address)| parse_tcp(&s.0).map(|t| t.dst);
+        assert_eq!(
+            go.iter().map(dst).collect::<Vec<_>>(),
+            [Some(ruled), Some(held), None],
+            "covered and unparsable go"
+        );
+        assert_eq!(w.syns.iter().map(dst).collect::<Vec<_>>(), [Some(later)]);
+        assert!(w.covers(held) && !w.covers(later));
     }
 }

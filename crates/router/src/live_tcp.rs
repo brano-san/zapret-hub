@@ -4,12 +4,13 @@
 use std::io;
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpStream};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use crate::divert::{Address, Handle, MAX_PACKET};
 use crate::flows::{self, DirectReason, FlowKey, QUEUE, Via};
 use crate::owner::{self, PID_WAIT};
-use crate::packet::{self, Tcp, parse_tcp, parse_udp, rewrite_tcp};
+use crate::packet::{self, ACK, SYN, Tcp, parse_tcp, parse_udp, rewrite_tcp};
 use crate::rules::Protocol;
 use crate::socks::{self, OPEN_TIMEOUT, SocksError};
 use crate::tcp::{self, Verdict};
@@ -106,7 +107,14 @@ impl Live {
             dst: seg.dst,
         };
         match verdict {
-            Verdict::Rewrite { src, dst } => self.reflect(handle, packet, &addr, src, dst),
+            Verdict::Rewrite { src, dst } => {
+                // A retransmitted SYN of a held connection: the held one goes out once a filter
+                // covers its destination.
+                if seg.flags & (SYN | ACK) == SYN && !self.waiting.lock().unwrap().covers(seg.dst) {
+                    return;
+                }
+                self.reflect(handle, packet, &addr, src, dst)
+            }
             Verdict::Pass => self.out(handle, packet, &addr),
             Verdict::Drop => {}
             Verdict::Marked => {
@@ -168,8 +176,7 @@ impl Live {
             if !covered {
                 waiting.syns.push((packet.to_vec(), addr));
                 drop(waiting);
-                let l = self.clone();
-                spawn(move || l.recompose());
+                self.recompose_soon();
                 return;
             }
             verdict
@@ -179,17 +186,17 @@ impl Live {
         }
     }
 
-    /// Hands the held SYNs (admitted already) to the filter just put in force (`active` and its
-    /// held destinations); when it could not open, forgets their entries and sends them unchanged.
+    /// Hands the held SYNs (admitted already) the filter just put in force covers (`active` and
+    /// its held destinations) to it, keeping the rest; when it could not open, forgets their
+    /// entries and sends them unchanged.
     pub(crate) fn release(self: &Arc<Self>, active: Option<(Arc<Table>, Vec<Ipv4Addr>)>) {
         let opened = active.is_some();
         let syns = {
             let mut waiting = self.waiting.lock().unwrap();
-            if let Some((table, held)) = active {
-                waiting.active = table;
-                waiting.held = held;
+            match active {
+                Some((table, held)) => waiting.activate(table, held),
+                None => std::mem::take(&mut waiting.syns),
             }
-            std::mem::take(&mut waiting.syns)
         };
         let now = Instant::now();
         for (packet, addr) in syns {
@@ -220,12 +227,22 @@ impl Live {
 
     /// Re-applies the rules with the names known now; a refused filter shows as the rules error.
     pub(crate) fn recompose(self: &Arc<Self>) {
+        // Cleared before `apply` reads the NAT: a SYN admitted from now on asks again.
+        self.recompose_pending.store(false, Ordering::SeqCst);
         if self.is_stopped() {
             return;
         }
         let error = self.apply(None).err();
         if let Some(inner) = self.inner.upgrade() {
             inner.rules.lock().unwrap().filter_error = error;
+        }
+    }
+
+    /// Spawns one `recompose` for any number of requests made before it starts.
+    pub(crate) fn recompose_soon(self: &Arc<Self>) {
+        if !self.recompose_pending.swap(true, Ordering::SeqCst) {
+            let l = self.clone();
+            spawn(move || l.recompose());
         }
     }
 
