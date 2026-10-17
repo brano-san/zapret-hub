@@ -6,6 +6,8 @@
 # --dpi-desync-cutoff=nN -> --out-range=-n<N-1> (nfqws1 acts while the packet number is below N);
 # --dpi-desync-any-protocol -> --payload=known,unknown and payload=all on the call (TCP), payload=all (UDP);
 # TCP profiles without a cutoff get --out-range=-d10 (zapret2's convention: the hello comes first).
+# The ipset-all TCP profile has no --filter-l7, as in the .bat: other traffic to those addresses stays
+# in it with no action instead of falling through to the games profile (nfqws1 profile semantics).
 --wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP%
 --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP%
 --lua-init=@"%LUA%zapret-lib.lua" --lua-init=@"%LUA%zapret-antidpi.lua"
@@ -56,7 +58,7 @@
 --new
 
 # TLS and HTTP, ipset-all
---filter-tcp=80,443,8443 --filter-l7=tls,http --ipset="%LISTS%ipset-all.txt"
+--filter-tcp=80,443,8443 --ipset="%LISTS%ipset-all.txt"
 --hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt"
 --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
 --out-range=-d10 --payload=tls_client_hello,http_req

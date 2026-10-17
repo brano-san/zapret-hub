@@ -2,12 +2,15 @@
 # Changed in the port to zapret2: the strategy is rewritten as winws2 options (Lua desync instead of
 # --dpi-desync); Discord voice and STUN are caught by their ports in --wf-udp-out, as Flowseal does,
 # not by WinDivert filter files (--wf-raw-part).
-# Mapping: fooling ts -> tcp_ts=-600000 (nfqws1's default ts increment), md5sig -> tcp_md5;
+# Mapping: fooling ts -> tcp_ts=-600000:tcp_ts_up (nfqws1's default ts increment,
+# timestamp option first as nfqws1 sent it), md5sig -> tcp_md5;
 # hostfakesplit applies fooling and repeats to its fakes only, as nfqws1; host=X kept;
 # --ip-id=zero -> ip_id=zero on every call of the profile (winws2 has no --ip-id);
 # --dpi-desync-cutoff=nN -> --out-range=-n<N-1> (nfqws1 acts while the packet number is below N);
 # --dpi-desync-any-protocol -> --payload=known,unknown and payload=all on the call (TCP), payload=all (UDP);
 # TCP profiles without a cutoff get --out-range=-d10 (zapret2's convention: the hello comes first).
+# The ipset-all TCP profile has no --filter-l7, as in the .bat: other traffic to those addresses stays
+# in it with no action instead of falling through to the games profile (nfqws1 profile semantics).
 --wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP%
 --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP%
 --lua-init=@"%LUA%zapret-lib.lua" --lua-init=@"%LUA%zapret-antidpi.lua"
@@ -31,13 +34,13 @@
 # discord.media on its TLS ports
 --filter-tcp=2053,2083,2087,2096,8443 --filter-l7=tls --hostlist-domains=discord.media
 --out-range=-d10 --payload=tls_client_hello
---lua-desync=hostfakesplit:host=www.google.com:tcp_ts=-600000:repeats=4
+--lua-desync=hostfakesplit:host=www.google.com:tcp_ts=-600000:tcp_ts_up:repeats=4
 --new
 
 # Google / YouTube
 --filter-tcp=443 --filter-l7=tls --hostlist="%LISTS%list-google.txt"
 --out-range=-d10 --payload=tls_client_hello
---lua-desync=hostfakesplit:host=www.google.com:tcp_ts=-600000:repeats=4:ip_id=zero
+--lua-desync=hostfakesplit:host=www.google.com:tcp_ts=-600000:tcp_ts_up:repeats=4:ip_id=zero
 --new
 
 # General lists over TLS and HTTP
@@ -46,7 +49,7 @@
 --hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt"
 --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
 --out-range=-d10 --payload=tls_client_hello,http_req
---lua-desync=hostfakesplit:host=ozon.ru:tcp_ts=-600000:tcp_md5:repeats=4
+--lua-desync=hostfakesplit:host=ozon.ru:tcp_ts=-600000:tcp_ts_up:tcp_md5:repeats=4
 --new
 
 # QUIC, ipset-all
@@ -57,18 +60,18 @@
 --new
 
 # TLS and HTTP, ipset-all
---filter-tcp=80,443,8443 --filter-l7=tls,http --ipset="%LISTS%ipset-all.txt"
+--filter-tcp=80,443,8443 --ipset="%LISTS%ipset-all.txt"
 --hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt"
 --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
 --out-range=-d10 --payload=tls_client_hello,http_req
---lua-desync=hostfakesplit:host=ozon.ru:tcp_ts=-600000:repeats=4
+--lua-desync=hostfakesplit:host=ozon.ru:tcp_ts=-600000:tcp_ts_up:repeats=4
 --new
 
 # Games over TCP (hostfakesplit leaves a payload without a host as it is)
 --filter-tcp=%GameFilterTCP% --ipset="%LISTS%ipset-all.txt"
 --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
 --out-range=-n2 --payload=known,unknown
---lua-desync=hostfakesplit:host=ozon.ru:tcp_ts=-600000:repeats=4:payload=all
+--lua-desync=hostfakesplit:host=ozon.ru:tcp_ts=-600000:tcp_ts_up:repeats=4:payload=all
 --new
 
 # Games over UDP
