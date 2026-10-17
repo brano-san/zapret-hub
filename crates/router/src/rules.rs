@@ -14,7 +14,6 @@ pub struct Rule {
     pub protocol: Protocol,
     pub ports: Vec<String>,
     pub ips: Vec<String>,
-    #[serde(default)]
     pub domains: Vec<String>,
 }
 

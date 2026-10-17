@@ -551,7 +551,7 @@ export type Rule = {
 	protocol: Protocol,
 	ports: string[],
 	ips: string[],
-	domains?: string[],
+	domains: string[],
 };
 
 export type RuleRow = {

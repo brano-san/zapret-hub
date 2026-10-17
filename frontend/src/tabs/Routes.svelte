@@ -3,6 +3,7 @@
   import { commands, type FlowRow, type Preset, type RouterState, type RouterStatus, type RoutesView, type Rule } from "$lib/ipc/bindings";
   import { app, change } from "$lib/app.svelte";
   import { confirmation } from "$lib/confirm.svelte";
+  import { notices } from "$lib/notices.svelte";
   import { bytes, proxyLabel, routeSummary, trafficLabel, viaLabel } from "$lib/format";
   import { S } from "$lib/strings";
   import RouteEditor from "./RouteEditor.svelte";
@@ -16,10 +17,23 @@
   const on = $derived(status !== null && status.state.state !== "Off");
   const error = $derived(view?.error ?? status?.rules_error ?? null);
 
+  // Every read counts: an answer older than the latest asked (say, before «все» flipped) is dropped.
+  let asked = 0;
+  // One notice for a run of failed reads, not one a second.
+  let failing = false;
+
   // Latency and flows announce nothing: read once a second while the tab is open and the window is shown.
   async function refresh(): Promise<void> {
     if (document.hidden) return;
-    [status, view, flows] = await Promise.all([commands.routerStatus(), commands.listRoutes(), commands.routeFlows(all)]);
+    const mine = ++asked;
+    try {
+      const answer = await Promise.all([commands.routerStatus(), commands.listRoutes(), commands.routeFlows(all)]);
+      failing = false;
+      if (mine === asked) [status, view, flows] = answer;
+    } catch (err) {
+      if (!failing) notices.push({ level: "Error", title: S.failed.routes, text: String(err) });
+      failing = true;
+    }
   }
 
   onMount(() => {
@@ -148,7 +162,7 @@
       {/if}
       <div class="buttons">
         <button
-          onclick={() => (editing = { rule: { name: "", enabled: true, protocol: "udp", ports: [], ips: [] }, create: true })}
+          onclick={() => (editing = { rule: { name: "", enabled: true, protocol: "udp", ports: [], ips: [], domains: [] }, create: true })}
         >
           {S.routes.newRule}
         </button>
@@ -174,6 +188,7 @@
           <tr>
             <th>{S.routes.columns.protocol}</th>
             <th>{S.routes.columns.destination}</th>
+            <th>{S.routes.columns.domain}</th>
             <th>{S.routes.columns.rule}</th>
             <th>{S.routes.columns.via}</th>
             <th>{S.routes.columns.up}</th>
@@ -187,6 +202,7 @@
             <tr class:muted={flow.closed}>
               <td>{flow.protocol}</td>
               <td>{flow.destination}</td>
+              <td>{flow.domain ?? "—"}</td>
               <td>{flow.rule ?? "—"}</td>
               <td>{viaLabel(flow.via)}</td>
               <td>{bytes(flow.up ?? 0)}</td>

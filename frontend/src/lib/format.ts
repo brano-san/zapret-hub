@@ -1,4 +1,4 @@
-import type { CheckLevel, CheckStatus, DpiStatus, FolderCheck, Info, MergeNote, ProxyState, QuickCheck, Rule, StrategyResult, Suite, Traffic, Via } from "./ipc/bindings";
+import type { CheckLevel, CheckStatus, DpiStatus, FolderCheck, Info, MergeNote, Protocol, ProxyState, QuickCheck, Rule, StrategyResult, Suite, Traffic, Via } from "./ipc/bindings";
 import { plural, S } from "./strings";
 
 export function ms(value: number | null | undefined): string {
@@ -222,11 +222,26 @@ export function mergeNote(note: MergeNote, first: string): string {
   }
 }
 
-/** A rule's line in the list: `UDP · 2 подсети`. */
+/** A rule's line in the list: `UDP · 2 подсети · 1 домен`. */
 export function routeSummary(rule: Rule): string {
-  const protocol = rule.protocol === "both" ? "TCP/UDP" : rule.protocol.toUpperCase();
-  const n = rule.ips.length;
-  return `${protocol} · ${n} ${plural(n, ["подсеть", "подсети", "подсетей"])}`;
+  const parts = [rule.protocol === "both" ? "TCP/UDP" : rule.protocol.toUpperCase()];
+  const subnets = rule.ips.length;
+  const domains = rule.domains.length;
+  if (subnets > 0) parts.push(`${subnets} ${plural(subnets, ["подсеть", "подсети", "подсетей"])}`);
+  if (domains > 0) parts.push(`${domains} ${plural(domains, ["домен", "домена", "доменов"])}`);
+  return parts.join(" · ");
+}
+
+/** The non-empty trimmed lines of a text field. */
+export const lines = (text: string): string[] =>
+  text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+/** The rule the editor's fields make, as it is checked and saved. */
+export function routeDraft(form: { name: string; enabled: boolean; protocol: Protocol; ports: string; ips: string; domains: string }): Rule {
+  return { name: form.name.trim(), enabled: form.enabled, protocol: form.protocol, ports: lines(form.ports), ips: lines(form.ips), domains: lines(form.domains) };
 }
 
 /** `1536` → `1,5 КБ`. */
