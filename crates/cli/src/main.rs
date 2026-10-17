@@ -1373,7 +1373,7 @@ mod tests {
         );
         std::fs::write(
             &file,
-            "[rule]\nprotocol = \"udp\"\nips = [\"1.1.1.1\"]\ndomains = [\"discord.media\"]\n",
+            "[rule]\nprotocol = \"udp\"\nips = [\"1.1.1.1\"]\napps = [\"Discord.exe\"]\n",
         )
         .unwrap();
         let (outcome, asked) = drive(&["routes", "add", "v", "--file", path], Vec::new());
@@ -1381,7 +1381,7 @@ mod tests {
         let fail = outcome.err().unwrap();
         assert_eq!(fail.code, 2);
         assert!(
-            fail.error.contains("`domains` is not supported yet"),
+            fail.error.contains("`apps` is not supported yet"),
             "{}",
             fail.error
         );

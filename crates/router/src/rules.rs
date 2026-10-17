@@ -14,6 +14,8 @@ pub struct Rule {
     pub protocol: Protocol,
     pub ports: Vec<String>,
     pub ips: Vec<String>,
+    #[serde(default)]
+    pub domains: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, specta::Type)]
@@ -28,6 +30,7 @@ pub enum Protocol {
 #[serde(rename_all = "kebab-case")]
 pub enum Preset {
     DiscordVoice,
+    Discord,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
@@ -65,6 +68,23 @@ pub fn preset(preset: Preset) -> Rule {
             protocol: Protocol::Udp,
             ports: vec!["19294-19344".into(), "50000-65535".into()],
             ips: vec!["104.29.0.0/16".into(), "35.217.0.0/16".into()],
+            domains: vec!["discord.media".into()],
+        },
+        Preset::Discord => Rule {
+            name: "Discord целиком".into(),
+            enabled: true,
+            protocol: Protocol::Both,
+            ports: vec![],
+            ips: vec![],
+            domains: [
+                "discord.com",
+                "discord.gg",
+                "discordapp.com",
+                "discordapp.net",
+                "discord.media",
+            ]
+            .map(String::from)
+            .into(),
         },
     }
 }
@@ -97,6 +117,45 @@ fn valid_name(name: &str) -> bool {
             .all(|c| letter(c) || matches!(c, ' ' | '-' | '_' | '.'))
 }
 
+/// Why `d` is not an LDH host name with at least two labels, if it is not.
+fn domain_error(d: &str) -> Option<String> {
+    if d.starts_with("*.") {
+        return Some(format!(
+            "\"{d}\": write the domain itself, its subdomains are included"
+        ));
+    }
+    if !d.is_ascii() {
+        return Some(format!(
+            "\"{d}\": write an international domain in its xn-- form"
+        ));
+    }
+    let name = d.strip_suffix('.').unwrap_or(d);
+    let labels: Vec<&str> = name.split('.').collect();
+    let ldh = |l: &str| {
+        (1..=63).contains(&l.len())
+            && !l.starts_with('-')
+            && !l.ends_with('-')
+            && l.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+    };
+    if name.len() > 253 || labels.len() < 2 || !labels.iter().all(|l| ldh(l)) {
+        return Some(format!(
+            "\"{d}\" is not a domain: letters, digits and - in dot-separated labels, no scheme, port or path"
+        ));
+    }
+    if labels[labels.len() - 1].bytes().all(|c| c.is_ascii_digit()) {
+        return Some(format!("\"{d}\" is an IP address: put it in ips"));
+    }
+    None
+}
+
+/// Both already lowercase without a trailing dot: equal, or `name` is a subdomain of `domain`.
+pub fn covers(domain: &str, name: &str) -> bool {
+    name == domain
+        || name
+            .strip_suffix(domain)
+            .is_some_and(|head| head.ends_with('.'))
+}
+
 fn err(field: &str, message: impl Into<String>) -> FieldError {
     FieldError {
         field: field.into(),
@@ -110,17 +169,6 @@ pub fn check(rule: &Rule) -> Vec<FieldError> {
         out.push(err(
             "name",
             "1-40 characters: Latin or Cyrillic letters, digits, space, - _ .; starts with a letter or digit",
-        ));
-    }
-    if rule.protocol != Protocol::Udp {
-        let p = if rule.protocol == Protocol::Tcp {
-            "tcp"
-        } else {
-            "both"
-        };
-        out.push(err(
-            "protocol",
-            format!("protocol \"{p}\" is not supported yet: only \"udp\""),
         ));
     }
     for p in &rule.ports {
@@ -139,8 +187,16 @@ pub fn check(rule: &Rule) -> Vec<FieldError> {
             ));
         }
     }
-    if rule.ips.is_empty() {
-        out.push(err("ips", "a rule needs at least one target: ips"));
+    for d in &rule.domains {
+        if let Some(message) = domain_error(d) {
+            out.push(err("domains", message));
+        }
+    }
+    if rule.ips.is_empty() && rule.domains.is_empty() {
+        out.push(err(
+            "ips",
+            "a rule needs at least one target: ips or domains",
+        ));
     }
     out
 }
@@ -153,7 +209,7 @@ struct Raw {
     protocol: Spanned<Protocol>,
     ports: Option<Spanned<Vec<String>>>,
     ips: Option<Spanned<Vec<String>>>,
-    domains: Option<Spanned<toml::Value>>,
+    domains: Option<Spanned<Vec<String>>>,
     apps: Option<Spanned<toml::Value>>,
 }
 
@@ -185,14 +241,12 @@ fn syntax(text: &str, e: toml::de::Error) -> RulesError {
 fn build(text: &str, table: &Spanned<Raw>, name: Option<&str>) -> Result<Rule, RulesError> {
     let raw = table.get_ref();
     let at = |span: std::ops::Range<usize>| Some(line_of(text, span.start));
-    for (field, value) in [("domains", &raw.domains), ("apps", &raw.apps)] {
-        if let Some(v) = value {
-            return Err(RulesError {
-                line: at(v.span()),
-                field: Some(field.into()),
-                message: format!("`{field}` is not supported yet"),
-            });
-        }
+    if let Some(v) = &raw.apps {
+        return Err(RulesError {
+            line: at(v.span()),
+            field: Some("apps".into()),
+            message: "`apps` is not supported yet".into(),
+        });
     }
     let own = raw.name.as_ref();
     let rule_name = match (name, own) {
@@ -220,12 +274,18 @@ fn build(text: &str, table: &Spanned<Raw>, name: Option<&str>) -> Result<Rule, R
             .as_ref()
             .map(|p| p.get_ref().clone())
             .unwrap_or_default(),
+        domains: raw
+            .domains
+            .as_ref()
+            .map(|p| p.get_ref().clone())
+            .unwrap_or_default(),
     };
     if let Some(e) = check(&rule).into_iter().next() {
         let span = match e.field.as_str() {
             "name" => own.map(|v| v.span()),
             "protocol" => Some(raw.protocol.span()),
             "ports" => raw.ports.as_ref().map(|v| v.span()),
+            "domains" => raw.domains.as_ref().map(|v| v.span()),
             _ => raw.ips.as_ref().map(|v| v.span()),
         }
         .unwrap_or_else(|| table.span());
@@ -290,24 +350,49 @@ pub fn save(path: &Path, rules: &[Rule]) -> Result<()> {
     std::fs::rename(&tmp, path).with_context(|| format!("replacing {}", path.display()))
 }
 
-/// `ips` plus the new subnets of an ipset-style file (one per line, `#` comments), without repeats.
-pub fn import(ips: &[String], text: &str) -> Result<Vec<String>, RulesError> {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
+pub struct Imported {
+    pub ips: Vec<String>,
+    pub domains: Vec<String>,
+}
+
+/// `ips` and `domains` plus the new lines of a list file (one subnet or domain per line, `#`
+/// comments), without repeats.
+pub fn import(ips: &[String], domains: &[String], text: &str) -> Result<Imported, RulesError> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let mut out = ips.to_vec();
+    let mut out = Imported {
+        ips: ips.to_vec(),
+        domains: domains.to_vec(),
+    };
     for (i, line) in text.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if parse_net(line).is_none() {
-            return Err(RulesError {
-                line: Some(i as u32 + 1),
-                field: Some("ips".into()),
-                message: format!("\"{line}\" is not an IPv4 address or a.b.c.d/n subnet"),
-            });
-        }
-        if !out.iter().any(|x| x == line) {
-            out.push(line.to_string());
+        let at = |field: &str, message: String| RulesError {
+            line: Some(i as u32 + 1),
+            field: Some(field.into()),
+            message,
+        };
+        if parse_net(line).is_some() {
+            if !out.ips.iter().any(|x| x == line) {
+                out.ips.push(line.to_string());
+            }
+        } else if line
+            .bytes()
+            .all(|c| c.is_ascii_digit() || c == b'.' || c == b'/')
+        {
+            return Err(at(
+                "ips",
+                format!("\"{line}\" is not an IPv4 address or a.b.c.d/n subnet"),
+            ));
+        } else if let Some(message) = domain_error(line) {
+            return Err(at("domains", message));
+        } else {
+            let d = line.strip_suffix('.').unwrap_or(line).to_ascii_lowercase();
+            if !out.domains.iter().any(|x| x.eq_ignore_ascii_case(&d)) {
+                out.domains.push(d);
+            }
         }
     }
     Ok(out)
@@ -356,9 +441,25 @@ pub fn remove(rules: &mut Vec<Rule>, name: &str) -> Result<Rule> {
     }
 }
 
+/// Sorts and merges overlapping or adjacent inclusive ranges.
+fn merge(mut nets: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
+    nets.sort_unstable();
+    let mut ranges: Vec<(u32, u32)> = Vec::new();
+    for n in nets {
+        match ranges.last_mut() {
+            Some(cur) if n.0 <= cur.1.saturating_add(1) => cur.1 = cur.1.max(n.1),
+            _ => ranges.push(n),
+        }
+    }
+    ranges
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Compiled {
     pub name: String,
+    pub protocol: Protocol,
+    /// Lowercase, no trailing dot.
+    pub domains: Vec<String>,
     /// Empty means every port.
     pub ports: Vec<(u16, u16)>,
     /// Sorted, merged, inclusive.
@@ -376,21 +477,16 @@ impl Table {
         let rules = rules
             .iter()
             .filter(|r| r.enabled)
-            .map(|r| {
-                let mut nets: Vec<_> = r.ips.iter().filter_map(|s| parse_net(s)).collect();
-                nets.sort_unstable();
-                let mut ranges: Vec<(u32, u32)> = Vec::new();
-                for n in nets {
-                    match ranges.last_mut() {
-                        Some(cur) if n.0 <= cur.1.saturating_add(1) => cur.1 = cur.1.max(n.1),
-                        _ => ranges.push(n),
-                    }
-                }
-                Compiled {
-                    name: r.name.clone(),
-                    ports: r.ports.iter().filter_map(|s| parse_port(s)).collect(),
-                    ranges,
-                }
+            .map(|r| Compiled {
+                name: r.name.clone(),
+                protocol: r.protocol,
+                domains: r
+                    .domains
+                    .iter()
+                    .map(|d| d.strip_suffix('.').unwrap_or(d).to_ascii_lowercase())
+                    .collect(),
+                ports: r.ports.iter().filter_map(|s| parse_port(s)).collect(),
+                ranges: merge(r.ips.iter().filter_map(|s| parse_net(s)).collect()),
             })
             .collect();
         Table { rules }
@@ -400,16 +496,43 @@ impl Table {
         self.rules.is_empty()
     }
 
-    /// Name of the first rule (file order) that matches the destination.
-    pub fn match_udp(&self, dst: SocketAddrV4) -> Option<&str> {
+    /// Name of the first rule (file order) that matches a flow of `protocol` to the destination.
+    pub fn matches(&self, protocol: Protocol, dst: SocketAddrV4) -> Option<&str> {
         let ip = u32::from(*dst.ip());
         let port = dst.port();
         self.rules
             .iter()
             .find(|r| {
-                (r.ports.is_empty() || r.ports.iter().any(|&(a, b)| (a..=b).contains(&port)))
+                (r.protocol == Protocol::Both || r.protocol == protocol)
+                    && (r.ports.is_empty() || r.ports.iter().any(|&(a, b)| (a..=b).contains(&port)))
                     && r.ranges.iter().any(|&(a, b)| (a..=b).contains(&ip))
             })
             .map(|r| r.name.as_str())
+    }
+
+    pub fn match_udp(&self, dst: SocketAddrV4) -> Option<&str> {
+        self.matches(Protocol::Udp, dst)
+    }
+
+    /// Whether a domain of some rule covers `name` (lowercase).
+    pub fn wants(&self, name: &str) -> bool {
+        self.rules
+            .iter()
+            .any(|r| r.domains.iter().any(|d| covers(d, name)))
+    }
+
+    /// Adds each resolved IP to the rules whose domains cover its name.
+    pub fn with_names(mut self, names: &[(Ipv4Addr, String)]) -> Table {
+        for r in &mut self.rules {
+            let mut nets = std::mem::take(&mut r.ranges);
+            for (ip, name) in names {
+                let name = name.to_ascii_lowercase();
+                if r.domains.iter().any(|d| covers(d, &name)) {
+                    nets.push((u32::from(*ip), u32::from(*ip)));
+                }
+            }
+            r.ranges = merge(nets);
+        }
+        self
     }
 }

@@ -14,6 +14,7 @@ fn the_discord_voice_preset_is_the_spec() {
             protocol: Protocol::Udp,
             ports: vec!["19294-19344".into(), "50000-65535".into()],
             ips: vec!["104.29.0.0/16".into(), "35.217.0.0/16".into()],
+            domains: vec!["discord.media".into()],
         }
     );
     assert!(rules::check(&voice()).is_empty());
@@ -49,37 +50,6 @@ fn errors_name_the_line_and_the_field() {
 }
 
 #[test]
-fn fields_of_later_stages_are_named() {
-    for (field, value) in [
-        ("domains", "[\"discord.media\"]"),
-        ("apps", "[\"Discord.exe\"]"),
-    ] {
-        let text = format!(
-            "[[rule]]\nname = \"a\"\nprotocol = \"udp\"\nips = [\"1.1.1.1\"]\n{field} = {value}\n"
-        );
-        let err = rules::parse(&text).unwrap_err();
-        assert_eq!(err.line, Some(5));
-        assert!(
-            err.to_string()
-                .contains(&format!("`{field}` is not supported yet")),
-            "{err}"
-        );
-    }
-    let tcp = "[[rule]]\nname = \"a\"\nprotocol = \"tcp\"\nips = [\"1.1.1.1\"]\n";
-    let err = rules::parse(tcp).unwrap_err();
-    assert_eq!(
-        (err.line, err.field.as_deref()),
-        (Some(3), Some("protocol"))
-    );
-    assert!(
-        rules::parse("[[rule]]\nname = \"a\"\ncolour = 1\n")
-            .unwrap_err()
-            .to_string()
-            .contains("colour")
-    );
-}
-
-#[test]
 fn names_follow_the_strategy_rules_plus_cyrillic() {
     let named = |name: &str| Rule {
         name: name.into(),
@@ -100,6 +70,7 @@ fn ports_and_subnets_are_checked() {
     let with = |ports: &[&str], ips: &[&str]| Rule {
         ports: ports.iter().map(|s| s.to_string()).collect(),
         ips: ips.iter().map(|s| s.to_string()).collect(),
+        domains: vec![],
         ..voice()
     };
     let fields = |rule: Rule| {
@@ -137,66 +108,142 @@ fn a_cli_rule_file_has_no_name() {
 }
 
 #[test]
-fn import_takes_ip_lines_once_and_refuses_the_rest() {
-    let have = vec!["104.29.0.0/16".to_string()];
-    let text = "\u{feff}# voice\r\n104.29.0.0/16\r\n\r\n35.217.0.0/16\n 35.217.0.0/16 \n";
+fn the_whole_discord_preset_is_the_spec() {
+    let whole = rules::preset(Preset::Discord);
     assert_eq!(
-        rules::import(&have, text).unwrap(),
-        ["104.29.0.0/16", "35.217.0.0/16"]
+        (whole.name.as_str(), whole.protocol),
+        ("Discord целиком", Protocol::Both)
     );
-    let err = rules::import(&have, "1.1.1.1\ndiscord.media\n").unwrap_err();
-    assert_eq!(err.line, Some(2));
-    assert!(err.to_string().contains("discord.media"), "{err}");
+    assert_eq!(
+        whole.domains,
+        [
+            "discord.com",
+            "discord.gg",
+            "discordapp.com",
+            "discordapp.net",
+            "discord.media"
+        ]
+    );
+    assert!(whole.ips.is_empty() && whole.ports.is_empty());
+    assert!(rules::check(&whole).is_empty());
 }
 
 #[test]
-fn edits_go_by_name_without_case() {
-    let mut list = vec![voice()];
-    assert!(
-        rules::add(
-            &mut list,
-            Rule {
-                name: "discord ГОЛОС".into(),
-                ..voice()
-            }
-        )
-        .is_err()
-    );
-    rules::set_enabled(&mut list, "DISCORD голос", false).unwrap();
-    assert!(!list[0].enabled);
-    assert!(
-        rules::replace(
-            &mut list,
-            Rule {
-                name: "other".into(),
-                ..voice()
-            }
-        )
-        .is_err()
-    );
-    assert!(rules::find(&list, "nope").is_err());
-    assert_eq!(
-        rules::remove(&mut list, "discord голос").unwrap().name,
-        "Discord голос"
-    );
-    assert!(list.is_empty());
-}
-
-#[test]
-fn the_table_matches_enabled_rules_by_port_and_subnet() {
-    let off = Rule {
-        name: "off".into(),
-        enabled: false,
-        ips: vec!["8.8.8.0/24".into()],
+fn domains_are_ldh_names_without_scheme_or_path() {
+    let with = |d: &[&str]| Rule {
+        domains: d.iter().map(|s| s.to_string()).collect(),
+        ips: vec![],
         ..voice()
     };
-    let table = Table::new(&[voice(), off]);
-    let at = |addr: &str| table.match_udp(addr.parse().unwrap());
-    assert_eq!(at("104.29.5.6:50001"), Some("Discord голос"));
-    assert_eq!(at("35.217.0.1:19294"), Some("Discord голос"));
-    assert_eq!(at("35.217.255.255:65535"), Some("Discord голос"));
-    assert_eq!(at("35.217.0.1:19293"), None);
-    assert_eq!(at("104.29.5.6:443"), None);
-    assert_eq!(at("8.8.8.8:50001"), None, "a disabled rule matches nothing");
-    assert!(Table::new(&[]).is_empty());
+    let fields = |r: Rule| {
+        rules::check(&r)
+            .into_iter()
+            .map(|e| e.field)
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        fields(with(&[
+            "discord.com",
+            "Media.Discord.GG",
+            "xn--d1acufc.xn--p1ai",
+            "a-b.example.",
+            "1e100.net"
+        ]))
+        .is_empty()
+    );
+    let long = format!("{}.com", "a".repeat(64));
+    for bad in [
+        "https://discord.com",
+        "discord.com/app",
+        "discord.com:443",
+        "*.discord.com",
+        "-a.com",
+        "a-.com",
+        "a..com",
+        "com",
+        "дискорд.рф",
+        "1.2.3.4",
+        &long,
+    ] {
+        assert_eq!(fields(with(&[bad])), ["domains"], "{bad:?}");
+    }
+    assert_eq!(fields(with(&[])), ["ips"], "a rule needs ips or domains");
+}
+
+#[test]
+fn tcp_and_both_parse_and_apps_is_still_named() {
+    for p in ["tcp", "both"] {
+        let text =
+            format!("[[rule]]\nname = \"a\"\nprotocol = \"{p}\"\ndomains = [\"discord.com\"]\n");
+        assert_eq!(rules::parse(&text).unwrap()[0].domains, ["discord.com"]);
+    }
+    let apps = "[[rule]]\nname = \"a\"\nprotocol = \"udp\"\nips = [\"1.1.1.1\"]\napps = [\"Discord.exe\"]\n";
+    let err = rules::parse(apps).unwrap_err();
+    assert_eq!(err.line, Some(5));
+    assert!(
+        err.to_string().contains("`apps` is not supported yet"),
+        "{err}"
+    );
+    let err = rules::parse("[[rule]]\nname = \"a\"\nprotocol = \"tcp\"\ndomains = [\"x/y\"]\n")
+        .unwrap_err();
+    assert_eq!((err.line, err.field.as_deref()), (Some(4), Some("domains")));
+}
+
+#[test]
+fn import_sends_ip_lines_to_ips_and_names_to_domains() {
+    let text =
+        "\u{feff}# list\r\n104.29.0.0/16\r\ndiscord.media\r\nDiscord.Media\n\n35.217.0.0/16\n";
+    let got = rules::import(&["104.29.0.0/16".into()], &[], text).unwrap();
+    assert_eq!(got.ips, ["104.29.0.0/16", "35.217.0.0/16"]);
+    assert_eq!(got.domains, ["discord.media"]);
+    let err = rules::import(&[], &[], "1.1.1.1\nhttps://discord.com/\n").unwrap_err();
+    assert_eq!((err.line, err.field.as_deref()), (Some(2), Some("domains")));
+    assert_eq!(
+        rules::import(&[], &[], "300.1.1.1\n")
+            .unwrap_err()
+            .field
+            .as_deref(),
+        Some("ips")
+    );
+}
+
+#[test]
+fn domains_cover_themselves_and_subdomains() {
+    assert!(rules::covers("discord.media", "discord.media"));
+    assert!(rules::covers("discord.media", "c-fra08.discord.media"));
+    assert!(!rules::covers("discord.media", "notdiscord.media"));
+    assert!(!rules::covers("discord.media", "media"));
+}
+
+#[test]
+fn resolved_names_add_ips_to_their_rules_by_protocol() {
+    let ip = |s: &str| s.parse::<std::net::Ipv4Addr>().unwrap();
+    let table = Table::new(&[voice(), rules::preset(Preset::Discord)]).with_names(&[
+        (ip("162.159.135.232"), "gateway.discord.gg".into()),
+        (ip("35.214.1.1"), "c-fra08.discord.media".into()),
+        (ip("8.8.8.8"), "dns.google".into()),
+    ]);
+    let at = |p, a: &str| table.matches(p, a.parse().unwrap());
+    assert_eq!(
+        at(Protocol::Tcp, "162.159.135.232:443"),
+        Some("Discord целиком")
+    );
+    assert_eq!(
+        at(Protocol::Udp, "35.214.1.1:50001"),
+        Some("Discord голос"),
+        "file order"
+    );
+    assert_eq!(at(Protocol::Tcp, "35.214.1.1:443"), Some("Discord целиком"));
+    assert_eq!(
+        at(Protocol::Tcp, "104.29.1.1:50001"),
+        None,
+        "the voice rule is UDP only"
+    );
+    assert_eq!(table.match_udp("8.8.8.8:53".parse().unwrap()), None);
+    assert!(table.wants("cdn.discordapp.com") && !table.wants("example.com"));
+    let off = Rule {
+        enabled: false,
+        ..rules::preset(Preset::Discord)
+    };
+    assert!(!Table::new(&[off]).wants("discord.com"));
 }

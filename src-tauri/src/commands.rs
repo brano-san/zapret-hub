@@ -738,5 +738,7 @@ pub fn validate_route(rule: Rule) -> Vec<FieldError> {
 #[tauri::command]
 #[specta::specta]
 pub fn import_route_lines(ips: Vec<String>, text: String) -> Answer<Vec<String>> {
-    rules::import(&ips, &text).map_err(|err| err.to_string())
+    rules::import(&ips, &[], &text)
+        .map(|got| got.ips)
+        .map_err(|err| err.to_string())
 }

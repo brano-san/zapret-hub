@@ -7,6 +7,7 @@ fn rule(ports: &[&str], ips: &[&str]) -> Rule {
         name: "r".into(),
         ports: ports.iter().map(|s| s.to_string()).collect(),
         ips: ips.iter().map(|s| s.to_string()).collect(),
+        domains: vec![],
         ..rules::preset(Preset::DiscordVoice)
     }
 }

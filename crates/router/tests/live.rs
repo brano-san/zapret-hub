@@ -113,6 +113,7 @@ fn a_running_router_relays_a_flow_through_the_proxy() {
         protocol: Protocol::Udp,
         ports: vec!["53".into()],
         ips: vec!["1.1.1.1/32".into()],
+        domains: vec![],
     };
     r.edit(|list| rules::add(list, rule)).unwrap();
     let proxy = parse_proxy(std::env::var("ROUTER_SOCKS5").ok().as_deref()).unwrap();
