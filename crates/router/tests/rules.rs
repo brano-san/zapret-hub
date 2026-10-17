@@ -15,6 +15,7 @@ fn the_discord_voice_preset_is_the_spec() {
             ports: vec!["19294-19344".into(), "50000-65535".into()],
             ips: vec!["104.29.0.0/16".into(), "35.217.0.0/16".into()],
             domains: vec!["discord.media".into()],
+            apps: vec![],
         }
     );
     assert!(rules::check(&voice()).is_empty());
@@ -71,6 +72,7 @@ fn ports_and_subnets_are_checked() {
         ports: ports.iter().map(|s| s.to_string()).collect(),
         ips: ips.iter().map(|s| s.to_string()).collect(),
         domains: vec![],
+        apps: vec![],
         ..voice()
     };
     let fields = |rule: Rule| {
@@ -133,6 +135,7 @@ fn domains_are_ldh_names_without_scheme_or_path() {
     let with = |d: &[&str]| Rule {
         domains: d.iter().map(|s| s.to_string()).collect(),
         ips: vec![],
+        apps: vec![],
         ..voice()
     };
     let fields = |r: Rule| {
@@ -167,23 +170,20 @@ fn domains_are_ldh_names_without_scheme_or_path() {
     ] {
         assert_eq!(fields(with(&[bad])), ["domains"], "{bad:?}");
     }
-    assert_eq!(fields(with(&[])), ["ips"], "a rule needs ips or domains");
+    assert_eq!(
+        fields(with(&[])),
+        ["ips"],
+        "a rule needs ips, domains or apps"
+    );
 }
 
 #[test]
-fn tcp_and_both_parse_and_apps_is_still_named() {
+fn tcp_and_both_parse() {
     for p in ["tcp", "both"] {
         let text =
             format!("[[rule]]\nname = \"a\"\nprotocol = \"{p}\"\ndomains = [\"discord.com\"]\n");
         assert_eq!(rules::parse(&text).unwrap()[0].domains, ["discord.com"]);
     }
-    let apps = "[[rule]]\nname = \"a\"\nprotocol = \"udp\"\nips = [\"1.1.1.1\"]\napps = [\"Discord.exe\"]\n";
-    let err = rules::parse(apps).unwrap_err();
-    assert_eq!(err.line, Some(5));
-    assert!(
-        err.to_string().contains("`apps` is not supported yet"),
-        "{err}"
-    );
     let err = rules::parse("[[rule]]\nname = \"a\"\nprotocol = \"tcp\"\ndomains = [\"x/y\"]\n")
         .unwrap_err();
     assert_eq!((err.line, err.field.as_deref()), (Some(4), Some("domains")));
@@ -310,4 +310,154 @@ fn domain_length_limits_and_label_boundaries() {
     assert_eq!(rules::check(&with(long))[0].field, "domains");
     assert!(!rules::covers("discord.media", "xdiscord.media"));
     assert!(rules::covers("discord.media", "x.discord.media"));
+}
+
+const DBD: &str = r"D:\Steam\steamapps\common\Dead by Daylight\DeadByDaylight\Binaries\Win64\DeadByDaylight-Win64-Shipping.exe";
+
+fn app_rule(name: &str, protocol: Protocol, ports: &[&str], apps: &[&str]) -> Rule {
+    Rule {
+        name: name.into(),
+        enabled: true,
+        protocol,
+        ports: ports.iter().map(|s| s.to_string()).collect(),
+        ips: vec![],
+        domains: vec![],
+        apps: apps.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+#[test]
+fn the_dbd_preset_is_the_spec() {
+    let dbd = rules::preset(Preset::Dbd);
+    assert_eq!(
+        (dbd.name.as_str(), dbd.protocol),
+        ("Dead by Daylight", Protocol::Both)
+    );
+    assert_eq!(dbd.apps, ["DeadByDaylight-Win64-Shipping.exe"]);
+    assert_eq!(dbd.domains, ["bhvrdbd.com"]);
+    assert!(dbd.ips.is_empty() && dbd.ports.is_empty());
+    assert!(rules::check(&dbd).is_empty());
+}
+
+#[test]
+fn apps_are_exe_names_or_full_paths() {
+    let fields = |apps: &[&str]| {
+        rules::check(&app_rule("a", Protocol::Udp, &[], apps))
+            .into_iter()
+            .map(|e| e.field)
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        fields(&[
+            "Discord.exe",
+            "DeadByDaylight-Win64-Shipping.EXE",
+            r"C:\Games\DbD\x.exe",
+            "D:/Games/y.exe",
+            r"\\nas\games\z.exe"
+        ])
+        .is_empty()
+    );
+    for bad in [
+        "Discord",
+        "",
+        " ",
+        r"Games\x.exe",
+        "*.exe",
+        "a?.exe",
+        "x.exe:stream",
+        r"C:\Games\notes.txt",
+    ] {
+        assert_eq!(fields(&[bad]), ["apps"], "{bad:?}");
+    }
+    assert_eq!(fields(&[]), ["ips"], "a rule needs ips, domains or apps");
+}
+
+#[test]
+fn apps_parse_and_a_bad_one_names_its_line() {
+    let ok = "[[rule]]\nname = \"a\"\nprotocol = \"udp\"\napps = [\"Discord.exe\"]\n";
+    assert_eq!(rules::parse(ok).unwrap()[0].apps, ["Discord.exe"]);
+    let bad =
+        "[[rule]]\nname = \"a\"\nprotocol = \"udp\"\nips = [\"1.1.1.1\"]\napps = [\"Discord\"]\n";
+    let err = rules::parse(bad).unwrap_err();
+    assert_eq!((err.line, err.field.as_deref()), (Some(5), Some("apps")));
+    let old = "[[rule]]\nname = \"a\"\nprotocol = \"udp\"\nips = [\"1.1.1.1\"]\n";
+    assert!(
+        rules::parse(old).unwrap()[0].apps.is_empty(),
+        "a stage-2 file still loads"
+    );
+}
+
+#[test]
+fn a_flow_matches_by_program_name_or_full_path_without_case() {
+    let table = Table::new(&[
+        app_rule(
+            "by name",
+            Protocol::Udp,
+            &[],
+            &["deadbydaylight-win64-shipping.exe"],
+        ),
+        app_rule(
+            "by path",
+            Protocol::Tcp,
+            &["443"],
+            &[r"C:\Games\Discord.exe"],
+        ),
+    ]);
+    let dst = "52.1.1.1:7777".parse().unwrap();
+    let https = "1.1.1.1:443".parse().unwrap();
+    assert_eq!(
+        table.matches_flow(Protocol::Udp, dst, Some(DBD)),
+        Some("by name")
+    );
+    assert_eq!(
+        table.matches_flow(Protocol::Tcp, dst, Some(DBD)),
+        None,
+        "the rule is UDP only"
+    );
+    assert_eq!(
+        table.matches_flow(Protocol::Udp, dst, None),
+        None,
+        "no owner, no program"
+    );
+    assert_eq!(
+        table.matches_flow(Protocol::Tcp, https, Some(r"c:\games\DISCORD.exe")),
+        Some("by path")
+    );
+    assert_eq!(
+        table.matches_flow(Protocol::Tcp, https, Some(r"D:\Discord.exe")),
+        None,
+        "a full path is the whole path"
+    );
+    assert_eq!(
+        table.matches_flow(
+            Protocol::Tcp,
+            "1.1.1.1:80".parse().unwrap(),
+            Some(r"C:\Games\Discord.exe")
+        ),
+        None,
+        "ports still count"
+    );
+    assert_eq!(
+        table.matches(Protocol::Udp, dst),
+        None,
+        "address matching ignores programs"
+    );
+    assert!(table.wants_owner(Protocol::Udp, 7777) && table.wants_owner(Protocol::Tcp, 443));
+    assert!(
+        !table.wants_owner(Protocol::Tcp, 80)
+            && !Table::new(&[voice()]).wants_owner(Protocol::Udp, 50000)
+    );
+}
+
+#[test]
+fn a_udp_app_rule_runs_while_its_program_runs() {
+    let table = Table::new(&[rules::preset(Preset::Dbd)]);
+    assert!(table.idle_apps() && table.starts(DBD) && !table.starts(r"C:\x\chrome.exe"));
+    let running = table.with_running(&[r"C:\x\chrome.exe", DBD]);
+    assert!(running.rules[0].running && !running.idle_apps() && !running.starts(DBD));
+    let tcp = Table::new(&[app_rule("t", Protocol::Tcp, &[], &["x.exe"])]);
+    assert!(
+        !tcp.idle_apps() && !tcp.with_running(&[r"C:\x.exe"]).rules[0].running,
+        "TCP needs only SYNs"
+    );
 }

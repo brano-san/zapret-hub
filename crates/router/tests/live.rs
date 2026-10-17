@@ -138,6 +138,7 @@ fn a_running_router_relays_a_flow_through_the_proxy() {
         ports: vec!["53".into()],
         ips: vec!["1.1.1.1/32".into()],
         domains: vec![],
+        apps: vec![],
     });
     let out = std::process::Command::new("nslookup.exe")
         .args(["-timeout=5", "example.com", "1.1.1.1"])
@@ -172,6 +173,7 @@ fn a_running_router_carries_tcp_through_the_proxy() {
         ports: vec!["80".into()],
         ips: vec!["1.1.1.1/32".into()],
         domains: vec![],
+        apps: vec![],
     });
     let reply = curl("1.1.1.1", "1.1.1.1");
     assert!(reply.starts_with("HTTP/1.1"), "{reply}");
@@ -198,6 +200,7 @@ fn a_domain_rule_follows_dns() {
         ports: vec![],
         ips: vec![],
         domains: vec!["one.one.one.one".into()],
+        apps: vec![],
     });
     // Our own query, not the system resolver's cache.
     let mut query = vec![0x43, 0x21, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];

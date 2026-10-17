@@ -15,6 +15,7 @@ pub struct Rule {
     pub ports: Vec<String>,
     pub ips: Vec<String>,
     pub domains: Vec<String>,
+    pub apps: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
@@ -30,6 +31,8 @@ pub enum Protocol {
 pub enum Preset {
     DiscordVoice,
     Discord,
+    #[serde(rename = "dbd")]
+    Dbd,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
@@ -68,6 +71,7 @@ pub fn preset(preset: Preset) -> Rule {
             ports: vec!["19294-19344".into(), "50000-65535".into()],
             ips: vec!["104.29.0.0/16".into(), "35.217.0.0/16".into()],
             domains: vec!["discord.media".into()],
+            apps: vec![],
         },
         Preset::Discord => Rule {
             name: "Discord целиком".into(),
@@ -84,6 +88,16 @@ pub fn preset(preset: Preset) -> Rule {
             ]
             .map(String::from)
             .into(),
+            apps: vec![],
+        },
+        Preset::Dbd => Rule {
+            name: "Dead by Daylight".into(),
+            enabled: true,
+            protocol: Protocol::Both,
+            ports: vec![],
+            ips: vec![],
+            domains: vec!["bhvrdbd.com".into()],
+            apps: vec!["DeadByDaylight-Win64-Shipping.exe".into()],
         },
     }
 }
@@ -155,6 +169,30 @@ pub fn covers(domain: &str, name: &str) -> bool {
             .is_some_and(|head| head.ends_with('.'))
 }
 
+/// A file name or an absolute path, either ending in .exe.
+fn valid_app(a: &str) -> bool {
+    let stem = a.len().checked_sub(4).filter(|&i| a.is_char_boundary(i));
+    let named = stem.is_some_and(|i| i > 0 && a[i..].eq_ignore_ascii_case(".exe"));
+    named
+        && !a.contains(['*', '?', '"', '<', '>', '|'])
+        && (Path::new(a).is_absolute() || !a.contains(['\\', '/', ':']))
+}
+
+/// Lowercase with backslash separators: how programs are compared.
+fn norm_app(a: &str) -> String {
+    a.to_lowercase().replace('/', "\\")
+}
+
+/// Whether the executable exe is the program app (already norm_app): a full path or a file name.
+pub fn runs(app: &str, exe: &str) -> bool {
+    let exe = norm_app(exe);
+    if app.contains('\\') {
+        exe == app
+    } else {
+        exe.rsplit('\\').next() == Some(app)
+    }
+}
+
 fn err(field: &str, message: impl Into<String>) -> FieldError {
     FieldError {
         field: field.into(),
@@ -191,10 +229,20 @@ pub fn check(rule: &Rule) -> Vec<FieldError> {
             out.push(err("domains", message));
         }
     }
-    if rule.ips.is_empty() && rule.domains.is_empty() {
+    for a in &rule.apps {
+        if !valid_app(a) {
+            out.push(err(
+                "apps",
+                format!(
+                    "\"{a}\" is not a program: write its file name like Discord.exe or its full path like C:\\Games\\Discord.exe"
+                ),
+            ));
+        }
+    }
+    if rule.ips.is_empty() && rule.domains.is_empty() && rule.apps.is_empty() {
         out.push(err(
             "ips",
-            "a rule needs at least one target: ips or domains",
+            "a rule needs at least one target: ips, domains or apps",
         ));
     }
     out
@@ -209,7 +257,7 @@ struct Raw {
     ports: Option<Spanned<Vec<String>>>,
     ips: Option<Spanned<Vec<String>>>,
     domains: Option<Spanned<Vec<String>>>,
-    apps: Option<Spanned<toml::Value>>,
+    apps: Option<Spanned<Vec<String>>>,
 }
 
 #[derive(Deserialize)]
@@ -240,13 +288,6 @@ fn syntax(text: &str, e: toml::de::Error) -> RulesError {
 fn build(text: &str, table: &Spanned<Raw>, name: Option<&str>) -> Result<Rule, RulesError> {
     let raw = table.get_ref();
     let at = |span: std::ops::Range<usize>| Some(line_of(text, span.start));
-    if let Some(v) = &raw.apps {
-        return Err(RulesError {
-            line: at(v.span()),
-            field: Some("apps".into()),
-            message: "`apps` is not supported yet".into(),
-        });
-    }
     let own = raw.name.as_ref();
     let rule_name = match (name, own) {
         (Some(_), Some(n)) => {
@@ -278,6 +319,11 @@ fn build(text: &str, table: &Spanned<Raw>, name: Option<&str>) -> Result<Rule, R
             .as_ref()
             .map(|p| p.get_ref().clone())
             .unwrap_or_default(),
+        apps: raw
+            .apps
+            .as_ref()
+            .map(|p| p.get_ref().clone())
+            .unwrap_or_default(),
     };
     if let Some(e) = check(&rule).into_iter().next() {
         let span = match e.field.as_str() {
@@ -285,6 +331,7 @@ fn build(text: &str, table: &Spanned<Raw>, name: Option<&str>) -> Result<Rule, R
             "protocol" => Some(raw.protocol.span()),
             "ports" => raw.ports.as_ref().map(|v| v.span()),
             "domains" => raw.domains.as_ref().map(|v| v.span()),
+            "apps" => raw.apps.as_ref().map(|v| v.span()),
             _ => raw.ips.as_ref().map(|v| v.span()),
         }
         .unwrap_or_else(|| table.span());
@@ -463,6 +510,25 @@ pub struct Compiled {
     pub ports: Vec<(u16, u16)>,
     /// Sorted, merged, inclusive.
     pub ranges: Vec<(u32, u32)>,
+    /// Programs, lowercase with backslashes.
+    pub apps: Vec<String>,
+    /// A UDP rule's program is running, so its UDP is captured.
+    pub running: bool,
+}
+
+impl Compiled {
+    fn takes(&self, protocol: Protocol, port: u16) -> bool {
+        (self.protocol == Protocol::Both || self.protocol == protocol)
+            && (self.ports.is_empty() || self.ports.iter().any(|&(a, b)| (a..=b).contains(&port)))
+    }
+
+    fn runs_any(&self, exe: &str) -> bool {
+        self.apps.iter().any(|a| runs(a, exe))
+    }
+
+    fn udp_apps(&self) -> bool {
+        self.protocol != Protocol::Tcp && !self.apps.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -486,6 +552,8 @@ impl Table {
                     .collect(),
                 ports: r.ports.iter().filter_map(|s| parse_port(s)).collect(),
                 ranges: merge(r.ips.iter().filter_map(|s| parse_net(s)).collect()),
+                apps: r.apps.iter().map(|a| norm_app(a)).collect(),
+                running: false,
             })
             .collect();
         Table { rules }
@@ -507,6 +575,51 @@ impl Table {
                     && r.ranges.iter().any(|&(a, b)| (a..=b).contains(&ip))
             })
             .map(|r| r.name.as_str())
+    }
+
+    /// Like matches, and a rule with programs also takes the flow of its exe.
+    pub fn matches_flow(
+        &self,
+        protocol: Protocol,
+        dst: SocketAddrV4,
+        exe: Option<&str>,
+    ) -> Option<&str> {
+        let ip = u32::from(*dst.ip());
+        self.rules
+            .iter()
+            .find(|r| {
+                r.takes(protocol, dst.port())
+                    && (r.ranges.iter().any(|&(a, b)| (a..=b).contains(&ip))
+                        || exe.is_some_and(|e| r.runs_any(e)))
+            })
+            .map(|r| r.name.as_str())
+    }
+
+    /// Whether a rule with programs takes flows of protocol to port.
+    pub fn wants_owner(&self, protocol: Protocol, port: u16) -> bool {
+        self.rules
+            .iter()
+            .any(|r| !r.apps.is_empty() && r.takes(protocol, port))
+    }
+
+    /// Marks the UDP rules whose program is among exes as running.
+    pub fn with_running(mut self, exes: &[&str]) -> Table {
+        for r in self.rules.iter_mut().filter(|r| r.udp_apps()) {
+            r.running = exes.iter().any(|e| r.runs_any(e));
+        }
+        self
+    }
+
+    /// Some UDP rule with programs has none running.
+    pub fn idle_apps(&self) -> bool {
+        self.rules.iter().any(|r| r.udp_apps() && !r.running)
+    }
+
+    /// The exe is the program of a UDP rule not yet marked running.
+    pub fn starts(&self, exe: &str) -> bool {
+        self.rules
+            .iter()
+            .any(|r| r.udp_apps() && !r.running && r.runs_any(exe))
     }
 
     pub fn match_udp(&self, dst: SocketAddrV4) -> Option<&str> {
