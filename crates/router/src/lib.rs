@@ -25,7 +25,7 @@ use divert::{
 };
 use dns::Names;
 use flows::{DirectReason, FlowKey, FlowRow, Pending, ProxyState, Stats, Totals, Traffic, Via};
-use owner::{Owners, PID_WAIT};
+use owner::{Images, Owners, PID_WAIT};
 use packet::{build_udp, parse_socks_udp_from, parse_tcp, parse_udp, socks_header_to};
 use rules::{Protocol, Rule, Table};
 use socks::{OPEN_TIMEOUT, SocksError};
@@ -106,6 +106,8 @@ struct Inner {
     table: Mutex<Table>,
     /// Outlives sessions: programs keep resolved addresses cached across a pause.
     names: Arc<Mutex<Names>>,
+    /// Outlives sessions too: a program seen before a pause still counts as running.
+    images: Arc<Images>,
 }
 
 struct Ctl {
@@ -169,6 +171,7 @@ impl Router {
         Router(Arc::new(Inner {
             table,
             names: Arc::default(),
+            images: Arc::default(),
             path: routes,
             on_change: Mutex::new(None),
             ctl: Mutex::new(Ctl {
@@ -428,7 +431,16 @@ struct FilterState {
 struct Waiting {
     /// The table of the filter in force.
     active: Arc<Table>,
+    /// The held destinations (live NAT entries) of the filter in force.
+    held: Vec<Ipv4Addr>,
     syns: Vec<(Vec<u8>, Address)>,
+}
+
+impl Waiting {
+    /// The filter in force catches the connection's later segments.
+    fn covers(&self, dst: SocketAddrV4) -> bool {
+        self.active.matches(Protocol::Tcp, dst).is_some() || self.held.contains(dst.ip())
+    }
 }
 
 /// One running session: handles, flows and counters; dropped whole on stop or pause.
@@ -445,6 +457,7 @@ struct Live {
     base: Mutex<Table>,
     table: RwLock<Arc<Table>>,
     names: Arc<Mutex<Names>>,
+    images: Arc<Images>,
     waiting: Mutex<Waiting>,
     flows: Mutex<HashMap<FlowKey, FlowState>>,
     /// UDP ports; TCP ports have their own map, so a TCP socket event never replaces a UDP owner.
@@ -460,6 +473,16 @@ struct Live {
     proxy_state: Mutex<ProxyState>,
     proxy_pid: Mutex<Option<u32>>,
     next_id: AtomicU16,
+}
+
+/// Caches the exe of every process with a UDP socket: a program started before the session
+/// (or during a pause) sent no socket event the hub saw (ruling M1).
+// ponytail: a table read and an OpenProcess per UDP-owning process every 2 s while a UDP program
+// rule is idle; upgrade: look up only PIDs not yet in `Images`.
+fn learn_udp_programs(images: &Images) {
+    for pid in owner::udp_pids() {
+        images.get(pid);
+    }
 }
 
 fn spawn(f: impl FnOnce() + Send + 'static) {
@@ -491,6 +514,9 @@ impl Live {
             .map_err(|e| anyhow!("cannot open the local TCP acceptor: {e}"))?;
         let acceptor_port = acceptor.local_addr()?.port();
         inner.names.lock().unwrap().expire(Instant::now(), &[]);
+        if table.idle_apps() {
+            learn_udp_programs(&inner.images);
+        }
         let live = Arc::new(Live {
             inner: Arc::downgrade(inner),
             dll,
@@ -502,6 +528,7 @@ impl Live {
             base: Mutex::new(Table::default()),
             table: RwLock::new(Arc::new(Table::default())),
             names: inner.names.clone(),
+            images: inner.images.clone(),
             waiting: Mutex::new(Waiting::default()),
             flows: Mutex::new(HashMap::new()),
             owners: Owners::default(),
@@ -531,8 +558,18 @@ impl Live {
                 };
                 if addr.event() == divert::EVENT_SOCKET_CLOSE {
                     owners.forget(port);
-                } else {
-                    owners.record(port, addr.socket_pid());
+                    continue;
+                }
+                owners.record(port, addr.socket_pid());
+                // A program of a UDP rule appeared: its UDP joins the filter.
+                let table = l.table.read().unwrap().clone();
+                if table.idle_apps()
+                    && l.images
+                        .get(addr.socket_pid())
+                        .is_some_and(|exe| table.starts(&exe))
+                {
+                    let l = l.clone();
+                    spawn(move || l.recompose());
                 }
             }
         });
@@ -639,7 +676,11 @@ impl Live {
             }
             None => self.base.lock().unwrap().clone(),
         };
-        let table = base.with_names(&self.names.lock().unwrap().entries());
+        let exes = self.images.paths();
+        let exes: Vec<&str> = exes.iter().map(|e| &**e).collect();
+        let table = base
+            .with_names(&self.names.lock().unwrap().entries())
+            .with_running(&exes);
         // Live connections keep their destination captured (spec 7), matched or not.
         let held: Vec<Ipv4Addr> = self
             .nat
@@ -655,7 +696,7 @@ impl Live {
         *self.table.write().unwrap() = table.clone();
         if filter.opened.is_some() && text == filter.text {
             filter.failed = None;
-            self.release(Some(table));
+            self.release(Some((table, held)));
             return Ok(());
         }
         if let Some((failed, reason)) = &filter.failed
@@ -702,7 +743,7 @@ impl Live {
         if let Some(old) = old {
             old.shutdown();
         }
-        self.release(Some(table));
+        self.release(Some((table, held)));
         Ok(())
     }
 
@@ -755,10 +796,10 @@ impl Live {
             return;
         };
         let table = self.table.read().unwrap().clone();
-        let Some(rule) = table.match_udp(udp.dst) else {
+        if table.match_udp(udp.dst).is_none() && !table.wants_owner(Protocol::Udp, udp.dst.port()) {
             let _ = handle.send(packet, &addr);
             return;
-        };
+        }
         let key = FlowKey {
             protocol: rules::Protocol::Udp,
             local_port: udp.src.port(),
@@ -768,11 +809,38 @@ impl Live {
         if !self.flows.lock().unwrap().contains_key(&key) {
             // ponytail: waiting for the PID blocks capture up to 50 ms per new flow (new flows are
             // rare); upgrade: a deferred queue of first packets.
-            let pid = self.owners.wait(key.local_port, PID_WAIT);
+            let pid = self.owners.pid(key.local_port, PID_WAIT, |p| {
+                owner::table_pid(Protocol::Udp, p)
+            });
+            let exe = pid.and_then(|p| self.images.get(p));
+            let now = Instant::now();
+            let Some(rule) = table.matches_flow(Protocol::Udp, udp.dst, exe.as_deref()) else {
+                // Caught for a program rule, not its program: remembered, sent unchanged.
+                let mut flows = self.flows.lock().unwrap();
+                let new = match flows.entry(key) {
+                    Entry::Vacant(e) => {
+                        e.insert(FlowState::Direct(DirectReason::NoRule));
+                        true
+                    }
+                    Entry::Occupied(_) => false,
+                };
+                drop(flows);
+                let mut stats = self.stats.lock().unwrap();
+                if new {
+                    let reason = DirectReason::NoRule;
+                    stats.open(key, "", Via::Direct { reason }, now);
+                    if let Some(exe) = &exe {
+                        stats.set_program(key, exe.to_string());
+                    }
+                }
+                stats.add(key, up, 0, now);
+                drop(stats);
+                let _ = handle.send(packet, &addr);
+                return;
+            };
             let state = self.proxy_state.lock().unwrap().clone();
             let proxy_pid = *self.proxy_pid.lock().unwrap();
             let reason = flows::decide(&state, pid, std::process::id(), proxy_pid);
-            let now = Instant::now();
             let domain = self.domain_of(udp.dst, now);
             let mut flows = self.flows.lock().unwrap();
             if let Entry::Vacant(e) = flows.entry(key) {
@@ -784,6 +852,9 @@ impl Live {
                         stats.open(key, rule, Via::Direct { reason }, now);
                         if let Some(d) = domain {
                             stats.set_domain(key, d);
+                        }
+                        if let Some(exe) = &exe {
+                            stats.set_program(key, exe.to_string());
                         }
                         stats.add(key, up, 0, now);
                         drop(stats);
@@ -797,6 +868,9 @@ impl Live {
                         stats.open(key, rule, Via::Opening, now);
                         if let Some(d) = domain.clone() {
                             stats.set_domain(key, d);
+                        }
+                        if let Some(exe) = &exe {
+                            stats.set_program(key, exe.to_string());
                         }
                         drop(stats);
                         drop(flows);
@@ -1026,7 +1100,7 @@ impl Live {
     }
 
     /// Every tick: close idle flows, drop old closed rows, expire names and NAT entries; every
-    /// 2 s: re-read the rules.
+    /// 2 s: forget exited programs, look for a UDP rule's program not yet seen, re-read the rules.
     fn housekeeping(self: &Arc<Self>) {
         let mut tick = 0u32;
         while self.sleep(TICK) {
@@ -1039,6 +1113,11 @@ impl Live {
             self.stats.lock().unwrap().rows(now, true);
             self.tcp_tick(now);
             if tick.is_multiple_of(RULES_CHECK_TICKS) {
+                // Exited programs leave; the next recompose drops their UDP part.
+                self.images.prune(owner::process_start);
+                if self.table.read().unwrap().idle_apps() {
+                    learn_udp_programs(&self.images);
+                }
                 match self.inner.upgrade() {
                     Some(inner) => inner.refresh(),
                     None => return,

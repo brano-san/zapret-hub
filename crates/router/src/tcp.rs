@@ -164,6 +164,11 @@ impl Nat {
         gone
     }
 
+    /// Removes the entry without marking its destination (its SYN goes out unchanged).
+    pub fn forget(&mut self, client_port: u16) -> Option<SocketAddrV4> {
+        self.entries.remove(&client_port).map(|e| e.orig)
+    }
+
     pub fn mark_direct(&mut self, dst: SocketAddrV4, now: Instant) {
         self.marks.insert(dst, now);
     }

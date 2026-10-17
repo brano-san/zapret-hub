@@ -270,6 +270,14 @@ fn the_owner_of_a_bound_port_is_found_in_the_tables() {
 }
 
 #[test]
+fn the_udp_table_lists_this_process() {
+    let _udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let pids = owner::udp_pids();
+    assert!(pids.contains(&std::process::id()), "{pids:?}");
+    assert!(!pids.contains(&0));
+}
+
+#[test]
 fn a_process_image_is_cached_by_pid_and_start_time() {
     let images = Images::default();
     let dbd = r"C:\Games\DeadByDaylight-Win64-Shipping.exe";

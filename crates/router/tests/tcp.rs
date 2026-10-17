@@ -345,3 +345,16 @@ fn reset_sends_an_rst() {
         ErrorKind::ConnectionReset
     );
 }
+
+#[test]
+fn a_forgotten_entry_leaves_no_mark() {
+    let (t0, mut nat) = (Instant::now(), Nat::default());
+    nat.admit(&seg(CLIENT, SERVER, SYN), AP, t0);
+    assert_eq!(nat.forget(50000), Some(sa(SERVER)));
+    assert!(nat.destinations().is_empty());
+    assert_eq!(
+        nat.from_client(&seg(CLIENT, SERVER, SYN), AP, t0),
+        Verdict::Syn,
+        "not marked direct"
+    );
+}

@@ -80,12 +80,12 @@ const AF_INET: u32 = 2;
 const AF_INET6: u32 = 23;
 const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
 
-/// Runs a Windows owner-PID table call (retrying while the table grows) and returns the first
-/// row `pick` maps to a value. `rows_at` is the offset of the row array in the table struct.
+/// Runs a Windows owner-PID table call (retrying while the table grows) and returns what `pick`
+/// makes of its rows. `rows_at` is the offset of the row array in the table struct.
 fn owner_rows<Row, T>(
     fetch: impl Fn(Option<*mut c_void>, &mut u32) -> u32,
     rows_at: usize,
-    pick: impl Fn(&Row) -> Option<T>,
+    pick: impl Fn(&[Row]) -> Option<T>,
 ) -> Option<T> {
     let mut size = 0u32;
     // First call only reports the needed size.
@@ -108,8 +108,9 @@ fn owner_rows<Row, T>(
             let count = base.cast::<u32>().read() as usize;
             std::slice::from_raw_parts(base.add(rows_at).cast::<Row>(), count)
         };
-        // ponytail: first matching row wins; several rows can share a port, fine for an owner guess
-        return rows.iter().find_map(pick);
+        // ponytail: port lookups take the first matching row; several rows can share a port,
+        // fine for an owner guess
+        return pick(rows);
     }
     None
 }
@@ -126,7 +127,10 @@ fn tcp_pid(class: TCP_TABLE_CLASS, port: u16) -> Option<u32> {
             unsafe { GetExtendedTcpTable(table, size, false, AF_INET, class, 0) }
         },
         std::mem::offset_of!(MIB_TCPTABLE_OWNER_PID, table),
-        |r: &MIB_TCPROW_OWNER_PID| row_owner(r.dwLocalPort, r.dwOwningPid, port),
+        |rows: &[MIB_TCPROW_OWNER_PID]| {
+            rows.iter()
+                .find_map(|r| row_owner(r.dwLocalPort, r.dwOwningPid, port))
+        },
     )
     .or_else(|| {
         // Dual-stack sockets (bound on [::]) show up only in the IPv6 table.
@@ -136,7 +140,10 @@ fn tcp_pid(class: TCP_TABLE_CLASS, port: u16) -> Option<u32> {
                 unsafe { GetExtendedTcpTable(table, size, false, AF_INET6, class, 0) }
             },
             std::mem::offset_of!(MIB_TCP6TABLE_OWNER_PID, table),
-            |r: &MIB_TCP6ROW_OWNER_PID| row_owner(r.dwLocalPort, r.dwOwningPid, port),
+            |rows: &[MIB_TCP6ROW_OWNER_PID]| {
+                rows.iter()
+                    .find_map(|r| row_owner(r.dwLocalPort, r.dwOwningPid, port))
+            },
         )
     })
 }
@@ -148,7 +155,10 @@ fn udp_pid(port: u16) -> Option<u32> {
             unsafe { GetExtendedUdpTable(table, size, false, AF_INET, UDP_TABLE_OWNER_PID, 0) }
         },
         std::mem::offset_of!(MIB_UDPTABLE_OWNER_PID, table),
-        |r: &MIB_UDPROW_OWNER_PID| row_owner(r.dwLocalPort, r.dwOwningPid, port),
+        |rows: &[MIB_UDPROW_OWNER_PID]| {
+            rows.iter()
+                .find_map(|r| row_owner(r.dwLocalPort, r.dwOwningPid, port))
+        },
     )
     .or_else(|| {
         owner_rows(
@@ -157,9 +167,45 @@ fn udp_pid(port: u16) -> Option<u32> {
                 unsafe { GetExtendedUdpTable(table, size, false, AF_INET6, UDP_TABLE_OWNER_PID, 0) }
             },
             std::mem::offset_of!(MIB_UDP6TABLE_OWNER_PID, table),
-            |r: &MIB_UDP6ROW_OWNER_PID| row_owner(r.dwLocalPort, r.dwOwningPid, port),
+            |rows: &[MIB_UDP6ROW_OWNER_PID]| {
+                rows.iter()
+                    .find_map(|r| row_owner(r.dwLocalPort, r.dwOwningPid, port))
+            },
         )
     })
+}
+
+/// PIDs owning UDP sockets now, IPv4 and IPv6 tables, sorted and without duplicates.
+pub fn udp_pids() -> Vec<u32> {
+    let v4 = owner_rows(
+        |table, size| {
+            // SAFETY: `table` is None (size query) or a buffer of at least `*size` bytes.
+            unsafe { GetExtendedUdpTable(table, size, false, AF_INET, UDP_TABLE_OWNER_PID, 0) }
+        },
+        std::mem::offset_of!(MIB_UDPTABLE_OWNER_PID, table),
+        |rows: &[MIB_UDPROW_OWNER_PID]| {
+            Some(rows.iter().map(|r| r.dwOwningPid).collect::<Vec<u32>>())
+        },
+    );
+    let v6 = owner_rows(
+        |table, size| {
+            // SAFETY: as above.
+            unsafe { GetExtendedUdpTable(table, size, false, AF_INET6, UDP_TABLE_OWNER_PID, 0) }
+        },
+        std::mem::offset_of!(MIB_UDP6TABLE_OWNER_PID, table),
+        |rows: &[MIB_UDP6ROW_OWNER_PID]| {
+            Some(rows.iter().map(|r| r.dwOwningPid).collect::<Vec<u32>>())
+        },
+    );
+    let mut pids: Vec<u32> = v4
+        .into_iter()
+        .chain(v6)
+        .flatten()
+        .filter(|&p| p != 0)
+        .collect();
+    pids.sort_unstable();
+    pids.dedup();
+    pids
 }
 
 /// PID of the process listening on the TCP `port`.

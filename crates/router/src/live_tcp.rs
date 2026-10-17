@@ -2,13 +2,13 @@
 //! names learned from sniffed DNS answers.
 
 use std::io;
-use std::net::{Shutdown, SocketAddr, SocketAddrV4, TcpStream};
+use std::net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpStream};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::divert::{Address, Handle, MAX_PACKET};
 use crate::flows::{self, DirectReason, FlowKey, QUEUE, Via};
-use crate::owner::PID_WAIT;
+use crate::owner::{self, PID_WAIT};
 use crate::packet::{self, Tcp, parse_tcp, parse_udp, rewrite_tcp};
 use crate::rules::Protocol;
 use crate::socks::{self, OPEN_TIMEOUT, SocksError};
@@ -50,18 +50,29 @@ impl Live {
             .map(str::to_owned)
     }
 
-    fn open_row(&self, key: FlowKey, rule: &str, via: Via, now: Instant) {
+    /// `rule` is empty for a connection caught for a program rule that matches none.
+    fn open_row(&self, key: FlowKey, rule: &str, exe: Option<&str>, via: Via, now: Instant) {
         let domain = self.domain_of(key.dst, now);
         let mut stats = self.stats.lock().unwrap();
         stats.open(key, rule, via, now);
         if let Some(d) = domain {
             stats.set_domain(key, d);
         }
+        if let Some(exe) = exe {
+            stats.set_program(key, exe.to_owned());
+        }
     }
 
     /// A connection left alone: its row opens and closes at once (no NAT entry ends it later).
-    fn direct_row(&self, key: FlowKey, rule: &str, reason: DirectReason, now: Instant) {
-        self.open_row(key, rule, Via::Direct { reason }, now);
+    fn direct_row(
+        &self,
+        key: FlowKey,
+        rule: &str,
+        exe: Option<&str>,
+        reason: DirectReason,
+        now: Instant,
+    ) {
+        self.open_row(key, rule, exe, Via::Direct { reason }, now);
         self.stats.lock().unwrap().close(key, now);
     }
 
@@ -101,7 +112,7 @@ impl Live {
             Verdict::Marked => {
                 let table = self.table.read().unwrap().clone();
                 if let Some(rule) = table.matches(Protocol::Tcp, seg.dst) {
-                    self.direct_row(key, rule, DirectReason::Marked, now);
+                    self.direct_row(key, rule, None, DirectReason::Marked, now);
                 }
                 self.out(handle, packet, &addr);
             }
@@ -119,50 +130,91 @@ impl Live {
         now: Instant,
     ) {
         let table = self.table.read().unwrap().clone();
-        let Some(rule) = table.matches(Protocol::Tcp, seg.dst) else {
+        if table.matches(Protocol::Tcp, seg.dst).is_none()
+            && !table.wants_owner(Protocol::Tcp, seg.dst.port())
+        {
+            return self.out(handle, packet, &addr);
+        }
+        // ponytail: like a new UDP flow, an owner missing from events and tables blocks capture up
+        // to 50 ms per SYN (once per port).
+        let pid = self.tcp_owners.pid(key.local_port, PID_WAIT, |p| {
+            owner::table_pid(Protocol::Tcp, p)
+        });
+        let exe = pid.and_then(|p| self.images.get(p));
+        let exe = exe.as_deref();
+        let Some(rule) = table.matches_flow(Protocol::Tcp, seg.dst, exe) else {
+            self.direct_row(key, "", exe, DirectReason::NoRule, now);
             return self.out(handle, packet, &addr);
         };
-        {
-            let mut waiting = self.waiting.lock().unwrap();
-            if waiting.active.matches(Protocol::Tcp, seg.dst).is_none() {
-                if waiting.syns.len() < QUEUE {
-                    waiting.syns.push((packet.to_vec(), addr));
-                    return;
-                }
-                drop(waiting);
-                return self.out(handle, packet, &addr);
-            }
-        }
-        // ponytail: like a new UDP flow, waiting for the PID blocks capture up to 50 ms per SYN.
-        let pid = self.tcp_owners.wait(key.local_port, PID_WAIT);
         let state = self.proxy_state.lock().unwrap().clone();
         let proxy_pid = *self.proxy_pid.lock().unwrap();
         if let Some(reason) = flows::decide(&state, pid, std::process::id(), proxy_pid) {
-            self.direct_row(key, rule, reason, now);
+            self.direct_row(key, rule, exe, reason, now);
             return self.out(handle, packet, &addr);
         }
-        let verdict = self.nat.lock().unwrap().admit(seg, self.acceptor_port, now);
-        self.open_row(key, rule, Via::Opening, now);
+        // ponytail: a program rule's connection to a new address waits for a filter reopen (its
+        // address joins the held part); a browser in `apps` reopens it per address. Upgrade: a
+        // `tcp.SrcPort == p` part for the ports of matched sockets.
+        let verdict = {
+            // Held under one lock with the admit, so `release` cannot miss this SYN.
+            let mut waiting = self.waiting.lock().unwrap();
+            let covered = waiting.covers(seg.dst);
+            if !covered && waiting.syns.len() >= QUEUE {
+                drop(waiting);
+                return self.out(handle, packet, &addr);
+            }
+            let verdict = self.nat.lock().unwrap().admit(seg, self.acceptor_port, now);
+            self.open_row(key, rule, exe, Via::Opening, now);
+            if !covered {
+                waiting.syns.push((packet.to_vec(), addr));
+                drop(waiting);
+                let l = self.clone();
+                spawn(move || l.recompose());
+                return;
+            }
+            verdict
+        };
         if let Verdict::Rewrite { src, dst } = verdict {
             self.reflect(handle, packet, &addr, src, dst);
         }
     }
 
-    /// Hands the held SYNs to the filter just put in force (`active`), or sends them unchanged
-    /// when it could not open.
-    pub(crate) fn release(self: &Arc<Self>, active: Option<Arc<Table>>) {
+    /// Hands the held SYNs (admitted already) to the filter just put in force (`active` and its
+    /// held destinations); when it could not open, forgets their entries and sends them unchanged.
+    pub(crate) fn release(self: &Arc<Self>, active: Option<(Arc<Table>, Vec<Ipv4Addr>)>) {
+        let opened = active.is_some();
         let syns = {
             let mut waiting = self.waiting.lock().unwrap();
-            if let Some(a) = &active {
-                waiting.active = a.clone();
+            if let Some((table, held)) = active {
+                waiting.active = table;
+                waiting.held = held;
             }
             std::mem::take(&mut waiting.syns)
         };
+        let now = Instant::now();
         for (packet, addr) in syns {
-            match parse_tcp(&packet).filter(|_| active.is_some()) {
-                Some(seg) => self.on_tcp(None, &packet, &seg, addr),
-                None => self.inject(&packet, &addr),
+            let Some(seg) = parse_tcp(&packet) else {
+                self.inject(&packet, &addr);
+                continue;
+            };
+            if opened {
+                self.on_tcp(None, &packet, &seg, addr);
+                continue;
             }
+            self.nat.lock().unwrap().forget(seg.src.port());
+            let key = FlowKey {
+                protocol: Protocol::Tcp,
+                local_port: seg.src.port(),
+                dst: seg.dst,
+            };
+            let reason = DirectReason::Failed {
+                error: "the capture filter did not open".into(),
+            };
+            let mut stats = self.stats.lock().unwrap();
+            stats.set_via(key, Via::Direct { reason });
+            stats.close(key, now);
+            drop(stats);
+            self.inject(&packet, &addr);
         }
     }
 

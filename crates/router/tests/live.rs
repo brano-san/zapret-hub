@@ -230,6 +230,53 @@ fn a_domain_rule_follows_dns() {
 }
 
 #[test]
+#[ignore = "opens WinDivert: run elevated with WINDIVERT_DLL and ROUTER_SOCKS5 (a working proxy) set"]
+fn an_app_rule_follows_curl() {
+    use router::flows::Via;
+    use router::rules::{Protocol, Rule};
+
+    let (_dir, r) = running(Rule {
+        name: "curl".into(),
+        enabled: true,
+        protocol: Protocol::Tcp,
+        ports: vec!["80".into()],
+        ips: vec![],
+        domains: vec![],
+        apps: vec!["curl.exe".into()],
+    });
+    let is_curl = |p: &Option<String>| {
+        p.as_deref()
+            .is_some_and(|p| p.to_lowercase().ends_with("curl.exe"))
+    };
+    let reply = curl("1.1.1.1", "1.1.1.1");
+    assert!(reply.starts_with("HTTP/1.1"), "{reply}");
+    let rows = r.flows(false);
+    let row = rows
+        .iter()
+        .find(|f| f.protocol == "tcp" && f.destination == "1.1.1.1:80")
+        .unwrap_or_else(|| panic!("no flow row: {rows:?}"));
+    assert_eq!(row.via, Via::Proxy, "{row:?}");
+    assert!(is_curl(&row.program), "{row:?}");
+
+    r.edit(|list| {
+        list[0].apps = vec!["nothing-here.exe".into()];
+        Ok(())
+    })
+    .unwrap();
+    let ruled = r.flows(false).len();
+    let reply = curl("1.1.1.1", "1.1.1.1");
+    assert!(reply.starts_with("HTTP/1.1"), "{reply}");
+    let rows = r.flows(true);
+    assert!(
+        rows.iter()
+            .any(|f| f.destination == "1.1.1.1:80" && f.rule.is_none() && is_curl(&f.program)),
+        "no rule-less row: {rows:?}"
+    );
+    assert_eq!(r.flows(false).len(), ruled, "no new ruled rows");
+    r.stop();
+}
+
+#[test]
 #[ignore = "loads WinDivert.dll (no elevation needed): run with WINDIVERT_DLL set"]
 fn the_largest_capture_filters_compile() {
     use router::divert::{capture_filter, filter};
