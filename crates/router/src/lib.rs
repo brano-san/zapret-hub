@@ -1137,7 +1137,7 @@ impl Live {
             for key in idle {
                 self.close_flow(key, now);
             }
-            self.stats.lock().unwrap().rows(now, true);
+            self.stats.lock().unwrap().prune(now);
             self.tcp_tick(now);
             if tick.is_multiple_of(RULES_CHECK_TICKS) {
                 // Exited programs leave; the next recompose drops their UDP part.

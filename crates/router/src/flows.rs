@@ -244,13 +244,18 @@ impl Stats {
             .collect()
     }
 
-    /// Open flows and those closed less than `KEEP_CLOSED` ago; older closed ones are dropped.
-    /// Rule-less flows are listed only with `all`, the oldest beyond `MAX_UNRULED` left out.
-    pub fn rows(&mut self, now: Instant, all: bool) -> Vec<FlowRow> {
+    /// Drops the flows closed `KEEP_CLOSED` ago or more.
+    pub fn prune(&mut self, now: Instant) {
         self.0.retain(|_, f| {
             f.closed
                 .is_none_or(|c| now.saturating_duration_since(c) < KEEP_CLOSED)
         });
+    }
+
+    /// Open flows and those closed less than `KEEP_CLOSED` ago; older closed ones are dropped.
+    /// Rule-less flows are listed only with `all`, the oldest beyond `MAX_UNRULED` left out.
+    pub fn rows(&mut self, now: Instant, all: bool) -> Vec<FlowRow> {
+        self.prune(now);
         let mut rows: Vec<(Instant, FlowRow)> = self
             .0
             .iter()

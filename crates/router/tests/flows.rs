@@ -102,6 +102,25 @@ fn the_listener_of_a_port_is_found() {
 }
 
 #[test]
+fn prune_drops_only_old_closed_flows() {
+    let t0 = Instant::now();
+    let key = |port| FlowKey {
+        protocol: Protocol::Udp,
+        local_port: port,
+        dst: "104.29.1.1:50001".parse().unwrap(),
+    };
+    let mut stats = Stats::default();
+    stats.open(key(1), "voice", Via::Opening, t0);
+    stats.open(key(2), "voice", Via::Opening, t0);
+    stats.close(key(1), t0);
+    stats.prune(t0 + Duration::from_secs(29));
+    assert_eq!(stats.rows(t0, true).len(), 2);
+    stats.prune(t0 + Duration::from_secs(30));
+    let rows = stats.rows(t0, true);
+    assert_eq!((rows.len(), rows[0].local_port), (1, 2));
+}
+
+#[test]
 fn closed_flows_stay_30_seconds_and_traffic_adds_up() {
     let t0 = Instant::now();
     let key = |port| FlowKey {
