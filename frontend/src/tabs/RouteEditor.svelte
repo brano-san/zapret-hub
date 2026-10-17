@@ -34,15 +34,20 @@
   const draft = $derived(routeDraft({ name, enabled, protocol, ports, ips, domains }));
 
   // Checked on every change; an answer for an older draft is dropped.
+  // Plain variable: one IPC failure gives one notice, not one per keystroke.
+  let validateFailing = false;
   $effect(() => {
     const asked = draft;
     commands
       .validateRoute(asked)
       .then((list) => {
+        validateFailing = false;
         if (asked === draft) errors = list;
       })
       .catch((err: unknown) => {
-        if (asked === draft) notices.push({ level: "Error", title: S.failed.validate, text: String(err) });
+        if (asked !== draft || validateFailing) return;
+        validateFailing = true;
+        notices.push({ level: "Error", title: S.failed.validate, text: String(err) });
       });
   });
 
