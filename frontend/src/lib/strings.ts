@@ -550,7 +550,7 @@ export const S = {
     noRules: "Правил ещё нет",
     newRule: "Новое правило",
     addPreset: "Добавить из профиля",
-    presets: { "discord-voice": "Discord голос", discord: "Discord целиком" } satisfies Record<Preset, string>,
+    presets: { "discord-voice": "Discord голос", discord: "Discord целиком", dbd: "Dead by Daylight" } satisfies Record<Preset, string>,
     edit: "Изменить",
     delete: "Удалить",
     deleteTitle: (name: string) => `Удалить правило «${name}»?`,
@@ -562,6 +562,9 @@ export const S = {
     ports: "Порты (по одному в строке, пусто — все)",
     ips: "Подсети IPv4 (по одной в строке)",
     domains: "Домены (по одному в строке, поддомены входят)",
+    apps: "Программы (имя файла .exe или полный путь, по одному в строке)",
+    appsHint:
+      "Правило по программе без портов: пока программа запущена, весь исходящий UDP компьютера идёт через хаб, а он отправляет чужие пакеты дальше без изменений. Укажите порты, если они известны.",
     dohHint:
       "Домены узнаются из ответов DNS. Если браузер или программа включает «безопасный DNS» (DNS по HTTPS), выключите его или добавьте подсети.",
     import: "Импорт из файла…",
@@ -569,7 +572,7 @@ export const S = {
     onlyRules: "только по правилам",
     all: "все",
     noFlows: "Потоков нет",
-    columns: { protocol: "Протокол", destination: "Назначение", domain: "Домен", rule: "Правило", via: "Маршрут", up: "↑", down: "↓", time: "Время" },
+    columns: { protocol: "Протокол", destination: "Назначение", domain: "Домен", program: "Программа", rule: "Правило", via: "Маршрут", up: "↑", down: "↓", time: "Время" },
     viaProxy: "прокси",
     viaOpening: "открывается",
     viaDirect: (reason: string) => `напрямую: ${reason}`,
@@ -581,6 +584,7 @@ export const S = {
       Loop: "трафик прокси или хаба",
       Marked: "прокси недавно не открыл это соединение",
       NotAccepted: "брандмауэр Windows не пропустил соединение к хабу",
+      NoRule: "нет правила",
     } satisfies Record<Exclude<DirectReason["kind"], "Failed">, string>,
   },
   names: {

@@ -4,7 +4,7 @@
   import { app, change } from "$lib/app.svelte";
   import { confirmation } from "$lib/confirm.svelte";
   import { notices } from "$lib/notices.svelte";
-  import { bytes, proxyLabel, routeSummary, trafficLabel, viaLabel } from "$lib/format";
+  import { bytes, programName, proxyLabel, routeSummary, trafficLabel, viaLabel } from "$lib/format";
   import { S } from "$lib/strings";
   import RouteEditor from "./RouteEditor.svelte";
 
@@ -162,7 +162,7 @@
       {/if}
       <div class="buttons">
         <button
-          onclick={() => (editing = { rule: { name: "", enabled: true, protocol: "udp", ports: [], ips: [], domains: [] }, create: true })}
+          onclick={() => (editing = { rule: { name: "", enabled: true, protocol: "udp", ports: [], ips: [], domains: [], apps: [] }, create: true })}
         >
           {S.routes.newRule}
         </button>
@@ -189,6 +189,7 @@
             <th>{S.routes.columns.protocol}</th>
             <th>{S.routes.columns.destination}</th>
             <th>{S.routes.columns.domain}</th>
+            <th>{S.routes.columns.program}</th>
             <th>{S.routes.columns.rule}</th>
             <th>{S.routes.columns.via}</th>
             <th>{S.routes.columns.up}</th>
@@ -203,6 +204,7 @@
               <td>{flow.protocol}</td>
               <td>{flow.destination}</td>
               <td>{flow.domain ?? "—"}</td>
+              <td title={flow.program ?? undefined}>{programName(flow.program)}</td>
               <td>{flow.rule ?? "—"}</td>
               <td>{viaLabel(flow.via)}</td>
               <td>{bytes(flow.up ?? 0)}</td>

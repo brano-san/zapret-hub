@@ -229,6 +229,8 @@ export function routeSummary(rule: Rule): string {
   const domains = rule.domains.length;
   if (subnets > 0) parts.push(`${subnets} ${plural(subnets, ["подсеть", "подсети", "подсетей"])}`);
   if (domains > 0) parts.push(`${domains} ${plural(domains, ["домен", "домена", "доменов"])}`);
+  const apps = rule.apps.length;
+  if (apps > 0) parts.push(`${apps} ${plural(apps, ["программа", "программы", "программ"])}`);
   return parts.join(" · ");
 }
 
@@ -240,9 +242,12 @@ export const lines = (text: string): string[] =>
     .filter(Boolean);
 
 /** The rule the editor's fields make, as it is checked and saved. */
-export function routeDraft(form: { name: string; enabled: boolean; protocol: Protocol; ports: string; ips: string; domains: string }): Rule {
-  return { name: form.name.trim(), enabled: form.enabled, protocol: form.protocol, ports: lines(form.ports), ips: lines(form.ips), domains: lines(form.domains) };
+export function routeDraft(form: { name: string; enabled: boolean; protocol: Protocol; ports: string; ips: string; domains: string; apps: string }): Rule {
+  return { name: form.name.trim(), enabled: form.enabled, protocol: form.protocol, ports: lines(form.ports), ips: lines(form.ips), domains: lines(form.domains), apps: lines(form.apps) };
 }
+
+/** The file name of a program path; `—` when unknown. */
+export const programName = (path: string | null): string => (path ? (path.split(/[\\/]/).pop() ?? path) : "—");
 
 /** `1536` → `1,5 КБ`. */
 export function bytes(n: number): string {

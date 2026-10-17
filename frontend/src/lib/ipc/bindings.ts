@@ -239,7 +239,9 @@ export type DirectReason = { kind: "ProxyDown" } | { kind: "AuthRequired" } | { 
 /**  The address is sent direct for a while after the proxy refused a connection to it. */
 { kind: "Marked" } | 
 /**  The SYN never reached the local acceptor. */
-{ kind: "NotAccepted" };
+{ kind: "NotAccepted" } | 
+/**  Caught for a program rule, but this flow matches no rule. */
+{ kind: "NoRule" };
 
 /**  A release download from the window: bytes so far and the zip's size (0 when GitHub gave none). */
 export type DownloadProgress = {
@@ -297,6 +299,8 @@ export type FieldError = {
 export type FlowRow = {
 	protocol: string,
 	domain: string | null,
+	/**  Full path of the program's exe, when known. */
+	program: string | null,
 	destination: string,
 	local_port: number,
 	rule: string | null,
@@ -472,7 +476,7 @@ export type Pass = {
 	score: Score,
 };
 
-export type Preset = "discord-voice" | "discord";
+export type Preset = "discord-voice" | "discord" | "dbd";
 
 /**  A profile as the card and the builder show it. */
 export type Profile = {
@@ -552,6 +556,7 @@ export type Rule = {
 	ports: string[],
 	ips: string[],
 	domains: string[],
+	apps: string[],
 };
 
 export type RuleRow = {

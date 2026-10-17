@@ -28,10 +28,12 @@
   let ips = $state(rule.ips.join("\n"));
   // svelte-ignore state_referenced_locally
   let domains = $state(rule.domains.join("\n"));
+  // svelte-ignore state_referenced_locally
+  let apps = $state(rule.apps.join("\n"));
   let errors = $state<FieldError[]>([]);
   let picker = $state<HTMLInputElement>();
 
-  const draft = $derived(routeDraft({ name, enabled, protocol, ports, ips, domains }));
+  const draft = $derived(routeDraft({ name, enabled, protocol, ports, ips, domains, apps }));
 
   // Checked on every change; an answer for an older draft is dropped.
   // Plain variable: one IPC failure gives one notice, not one per keystroke.
@@ -96,6 +98,10 @@
 <label for="route-domains">{S.routes.domains}</label>
 <textarea id="route-domains" rows="6" bind:value={domains}></textarea>
 {@render fieldErrors("domains")}
+<label for="route-apps">{S.routes.apps}</label>
+<textarea id="route-apps" rows="3" bind:value={apps}></textarea>
+{@render fieldErrors("apps")}
+{#if draft.apps.length > 0 && draft.ports.length === 0}<p class="muted hint">{S.routes.appsHint}</p>{/if}
 {#if draft.domains.length > 0}<p class="muted hint">{S.routes.dohHint}</p>{/if}
 <input bind:this={picker} type="file" accept=".txt" hidden onchange={importFile} />
 <div class="buttons">

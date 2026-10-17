@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Rule, StrategyResult } from "./ipc/bindings";
-import { blockSummary, bytes, proxyLabel, routeDraft, routeSummary, viaLabel, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, foldersReady, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
+import { blockSummary, bytes, programName, proxyLabel, routeDraft, routeSummary, viaLabel, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, foldersReady, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
 import { S } from "./strings";
 
 describe("blockSummary", () => {
@@ -160,14 +160,14 @@ describe("circular labels", () => {
 });
 
 describe("routes", () => {
-  const voice = { name: "Discord голос", enabled: true, protocol: "udp", ports: ["19294-19344", "50000-65535"], ips: ["104.29.0.0/16", "35.217.0.0/16"], domains: [] } as const;
+  const voice = { name: "Discord голос", enabled: true, protocol: "udp", ports: ["19294-19344", "50000-65535"], ips: ["104.29.0.0/16", "35.217.0.0/16"], domains: [], apps: [] } as const;
   it("sums a rule up by protocol and subnets", () => {
-    expect(routeSummary({ ...voice, ports: [...voice.ports], ips: [...voice.ips], domains: [] })).toBe("UDP · 2 подсети");
-    expect(routeSummary({ ...voice, ports: [], ips: ["1.1.1.1"], domains: [] })).toBe("UDP · 1 подсеть");
-    expect(routeSummary({ ...voice, ports: [], ips: ["1", "2", "3", "4", "5"], domains: [] })).toBe("UDP · 5 подсетей");
+    expect(routeSummary({ ...voice, ports: [...voice.ports], ips: [...voice.ips], domains: [], apps: [] })).toBe("UDP · 2 подсети");
+    expect(routeSummary({ ...voice, ports: [], ips: ["1.1.1.1"], domains: [], apps: [] })).toBe("UDP · 1 подсеть");
+    expect(routeSummary({ ...voice, ports: [], ips: ["1", "2", "3", "4", "5"], domains: [], apps: [] })).toBe("UDP · 5 подсетей");
   });
   it("sums a rule up by protocol, subnets and domains", () => {
-    const rule = (over: Partial<Rule>): Rule => ({ ...voice, ports: [...voice.ports], ips: [...voice.ips], domains: [], ...over });
+    const rule = (over: Partial<Rule>): Rule => ({ ...voice, ports: [...voice.ports], ips: [...voice.ips], domains: [], apps: [], ...over });
     expect(routeSummary(rule({ domains: ["discord.media"] }))).toBe("UDP · 2 подсети · 1 домен");
     expect(routeSummary(rule({ protocol: "both", ips: [], domains: ["a.com", "b.com", "c.com", "d.com", "e.com"] }))).toBe("TCP/UDP · 5 доменов");
     expect(routeSummary(rule({ protocol: "tcp", ips: [], domains: ["a.com", "b.com"] }))).toBe("TCP · 2 домена");
@@ -177,9 +177,17 @@ describe("routes", () => {
     expect(viaLabel({ via: "Direct", reason: { kind: "NotAccepted" } })).toBe("напрямую: брандмауэр Windows не пропустил соединение к хабу");
   });
   it("saves what the editor shows, domains included", () => {
-    const form = { name: " Discord целиком ", enabled: true, protocol: "both", ports: "", ips: "", domains: " discord.com\n\ndiscord.media \n" } as const;
-    expect(routeDraft(form)).toEqual({ name: "Discord целиком", enabled: true, protocol: "both", ports: [], ips: [], domains: ["discord.com", "discord.media"] });
+    const form = { name: " Discord целиком ", enabled: true, protocol: "both", ports: "", ips: "", domains: " discord.com\n\ndiscord.media \n", apps: "" } as const;
+    expect(routeDraft(form)).toEqual({ name: "Discord целиком", enabled: true, protocol: "both", ports: [], ips: [], domains: ["discord.com", "discord.media"], apps: [] });
     expect(routeDraft({ ...form, ips: "1.1.1.0/24\r\n2.2.2.2", domains: "" })).toMatchObject({ ips: ["1.1.1.0/24", "2.2.2.2"], domains: [] });
+  });
+  it("counts programs and names a program by its file", () => {
+    const dbd: Rule = { name: "Dead by Daylight", enabled: true, protocol: "both", ports: [], ips: [], domains: ["bhvrdbd.com"], apps: ["DeadByDaylight-Win64-Shipping.exe"] };
+    expect(routeSummary(dbd)).toBe("TCP/UDP · 1 домен · 1 программа");
+    expect(routeSummary({ ...dbd, domains: [], apps: ["a.exe", "b.exe"] })).toBe("TCP/UDP · 2 программы");
+    expect(programName("C:\\Games\\DbD\\DeadByDaylight-Win64-Shipping.exe")).toBe("DeadByDaylight-Win64-Shipping.exe");
+    expect(programName(null)).toBe("—");
+    expect(viaLabel({ via: "Direct", reason: { kind: "NoRule" } })).toBe("напрямую: нет правила");
   });
   it("counts bytes the Russian way", () => {
     expect(bytes(512)).toBe("512 Б");
