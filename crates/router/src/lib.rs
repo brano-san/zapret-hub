@@ -35,6 +35,8 @@ const PROXY_CHECK: Duration = Duration::from_secs(10);
 const TICK: Duration = Duration::from_millis(500);
 const RULES_CHECK_TICKS: u32 = 4;
 const REOPEN_GAP: Duration = Duration::from_secs(1);
+/// On a stop, time for the acceptor's FINs to pass the capture before it shuts down.
+const FIN_DRAIN: Duration = Duration::from_millis(100);
 /// The largest UDP payload an IPv4 packet carries (`build_udp` refuses more).
 const MAX_PAYLOAD: usize = 65507;
 
@@ -574,16 +576,22 @@ impl Live {
         {
             h.shutdown();
         }
-        // Nobody rewrites the redirected connections any more: they end (programs reconnect).
-        *self.nat.lock().unwrap_or_else(PoisonError::into_inner) = tcp::Nat::default();
-        for (_, (a, b)) in self
+        // The redirected connections end (programs reconnect). Their NAT entries stay, so the
+        // capture still reflects the acceptor's FIN to each client before it shuts down.
+        let conns: Vec<_> = self
             .conns
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .drain()
-        {
+            .collect();
+        for (_, (a, b)) in &conns {
             let _ = a.shutdown(std::net::Shutdown::Both);
             let _ = b.shutdown(std::net::Shutdown::Both);
+        }
+        if !conns.is_empty() {
+            // ponytail: a fixed wait for the FINs to reach the capture; upgrade: wait until the
+            // capture has reflected one per connection.
+            std::thread::sleep(FIN_DRAIN);
         }
         // Wakes the acceptor, which then sees `stopped`.
         let _ = TcpStream::connect_timeout(

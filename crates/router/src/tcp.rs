@@ -62,7 +62,9 @@ impl Entry {
 }
 
 /// Entries by client port. Every removal is reported as `(client port, original destination)`
-/// by `expire` or `unaccepted`, so the caller can close its flow row.
+/// by `expire` or `unaccepted`, so the caller can close its flow row. An idle entry is reported
+/// once more when it starts lingering, so the caller ends its connection while the acceptor's
+/// FIN can still be reflected to the client.
 // ponytail: keyed by client port alone; the same local port to another destination replaces a
 // live entry. Upgrade: key by (client port, original destination) if that shows up.
 #[derive(Default)]
@@ -170,12 +172,16 @@ impl Nat {
         self.marks.clear();
     }
 
-    /// Removes closed entries past `LINGER`, idle ones and old marks; returns the removed entries.
+    /// Closes idle entries (they linger too), removes closed entries past `LINGER` and old marks;
+    /// returns the newly idle and the removed entries.
     pub fn expire(&mut self, now: Instant) -> Vec<(u16, SocketAddrV4)> {
         let mut gone = std::mem::take(&mut self.replaced);
         self.entries.retain(|port, e| {
-            let ended = e.closed.is_some_and(|c| now.duration_since(c) >= LINGER)
-                || now.duration_since(e.last) >= IDLE;
+            if e.closed.is_none() && now.duration_since(e.last) >= IDLE {
+                e.closed = Some(now);
+                gone.push((*port, e.orig));
+            }
+            let ended = e.closed.is_some_and(|c| now.duration_since(c) >= LINGER);
             if ended {
                 gone.push((*port, e.orig));
             }

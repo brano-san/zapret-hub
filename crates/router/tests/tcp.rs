@@ -174,10 +174,29 @@ fn entries_end_after_fin_both_ways_or_a_reset_and_idle_ones_after_2_minutes() {
         AP,
         t0 + Duration::from_secs(60),
     );
-    assert_eq!(nat.expire(t0 + IDLE), [(50003, sa(SERVER))]);
+    assert_eq!(
+        nat.expire(t0 + IDLE),
+        [(50003, sa(SERVER))],
+        "an idle entry is reported"
+    );
+    assert_eq!(nat.destinations().len(), 2, "and lingers");
+    assert!(
+        matches!(
+            nat.from_acceptor(&reply(50003, FIN | ACK), t0 + IDLE),
+            Verdict::Rewrite { .. }
+        ),
+        "so the acceptor's FIN still reaches the client"
+    );
+    let mut gone = nat.expire(t0 + Duration::from_secs(60) + IDLE);
+    gone.sort();
+    assert_eq!(
+        gone,
+        [(50003, sa(SERVER)), (50004, sa(SERVER))],
+        "the lingering one goes, the other one idles"
+    );
     assert_eq!(nat.destinations().len(), 1);
     assert_eq!(
-        nat.expire(t0 + Duration::from_secs(60) + IDLE),
+        nat.expire(t0 + Duration::from_secs(60) + IDLE + LINGER),
         [(50004, sa(SERVER))]
     );
     assert!(nat.destinations().is_empty());
