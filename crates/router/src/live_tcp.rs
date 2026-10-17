@@ -419,6 +419,7 @@ impl Live {
             self.end_conn(key(port, dst));
             self.stats.lock().unwrap().close(key(port, dst), now);
         }
+        self.waiting.lock().unwrap().forget(&unaccepted);
         for (port, dst) in unaccepted {
             log::warn!(
                 "the local acceptor never saw the connection to {dst}: Windows Firewall may block \

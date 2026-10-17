@@ -453,6 +453,13 @@ impl Waiting {
         self.syns = stay;
         go
     }
+
+    /// Drops the held SYNs of connections given up (source port, destination): a later filter
+    /// must not replay them.
+    fn forget(&mut self, gone: &[(u16, SocketAddrV4)]) {
+        self.syns
+            .retain(|(p, _)| parse_tcp(p).is_none_or(|s| !gone.contains(&(s.src.port(), s.dst))));
+    }
 }
 
 /// One running session: handles, flows and counters; dropped whole on stop or pause.
@@ -1208,5 +1215,18 @@ mod tests {
         );
         assert_eq!(w.syns.iter().map(dst).collect::<Vec<_>>(), [Some(later)]);
         assert!(w.covers(held) && !w.covers(later));
+    }
+
+    #[test]
+    fn forgetting_a_connection_drops_only_its_held_syn() {
+        let a: SocketAddrV4 = "1.1.1.1:443".parse().unwrap();
+        let b: SocketAddrV4 = "2.2.2.2:443".parse().unwrap();
+        let mut w = Waiting {
+            syns: vec![syn_to(a), syn_to(b), (vec![1, 2, 3], Address([0; 80]))],
+            ..Waiting::default()
+        };
+        w.forget(&[(50000, a)]);
+        let dst = |s: &(Vec<u8>, Address)| parse_tcp(&s.0).map(|t| t.dst);
+        assert_eq!(w.syns.iter().map(dst).collect::<Vec<_>>(), [Some(b), None]);
     }
 }
