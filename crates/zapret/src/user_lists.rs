@@ -38,12 +38,27 @@ impl UserList {
     }
 }
 
-pub fn ensure_defaults(folder: &Folder) -> std::io::Result<()> {
+/// Domains the hub keeps in `list-general-user.txt`: missing ones are added back on every start.
+pub const HUB_GENERAL: &str = include_str!("default-general-user.txt");
+
+pub fn ensure_defaults(folder: &Folder) -> anyhow::Result<()> {
     for list in UserList::ALL {
         let path = folder.lists().join(list.file_name());
         if !path.exists() {
             std::fs::write(&path, list.default_content())?;
         }
+    }
+    let mut lines = read(folder, UserList::General)?;
+    let missing: Vec<String> = HUB_GENERAL
+        .lines()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .filter(|d| !lines.iter().any(|l| l.trim().eq_ignore_ascii_case(d)))
+        .map(str::to_owned)
+        .collect();
+    if !missing.is_empty() {
+        lines.extend(missing);
+        save(folder, UserList::General, &lines)?;
     }
     Ok(())
 }

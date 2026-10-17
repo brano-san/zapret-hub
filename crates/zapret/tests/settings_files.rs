@@ -245,10 +245,22 @@ fn user_lists_start_with_service_bat_defaults() {
     let dir = common::fake_zapret();
     let folder = common::folder(&dir);
     zapret::user_lists::ensure_defaults(&folder).unwrap();
+    let general = zapret::user_lists::read(&folder, UserList::General).unwrap();
     assert_eq!(
-        zapret::user_lists::read(&folder, UserList::General).unwrap(),
+        general[..2],
         ["# Never leave this file empty", "domain.example.abc"]
     );
+    let hub: Vec<&str> = zapret::user_lists::HUB_GENERAL.lines().collect();
+    assert_eq!(general[2..], hub[..]);
+    for domain in &hub {
+        zapret::user_lists::normalize(UserList::General, domain).unwrap();
+    }
+    // A removed hub domain comes back, nothing is doubled.
+    zapret::user_lists::remove(&folder, UserList::General, "x.com").unwrap();
+    zapret::user_lists::ensure_defaults(&folder).unwrap();
+    let again = zapret::user_lists::read(&folder, UserList::General).unwrap();
+    assert_eq!(again.len(), general.len());
+    assert!(again.iter().any(|l| l == "x.com"));
     assert_eq!(
         zapret::user_lists::read(&folder, UserList::IpsetExclude).unwrap(),
         ["203.0.113.113/32"]
