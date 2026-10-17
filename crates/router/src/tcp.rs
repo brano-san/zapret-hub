@@ -204,8 +204,10 @@ fn to_acceptor(seg: &Tcp, acceptor: u16) -> Verdict {
     }
 }
 
-/// Copies `from` into `to` until EOF, then half-closes `to`. Checks `stop` every second; the
-/// caller's `stop` should also turn true once the NAT entry is gone.
+/// Copies `from` into `to` until EOF, then half-closes `to`. Checks `stop` every second while
+/// reading; the caller's `stop` should also turn true once the NAT entry is gone. A write to a
+/// peer that does not read blocks: the caller unblocks it with `shutdown(Both)` on both sockets
+/// (a write timeout on Windows leaves the socket indeterminate, so none is set).
 pub fn pipe(
     from: &TcpStream,
     to: &TcpStream,
@@ -213,29 +215,16 @@ pub fn pipe(
     count: &mut dyn FnMut(u64),
 ) -> std::io::Result<()> {
     from.set_read_timeout(Some(Duration::from_secs(1)))?;
-    to.set_write_timeout(Some(Duration::from_secs(1)))?;
-    let timed_out =
-        |e: &std::io::Error| matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut);
     let (mut from, mut to) = (from, to);
     let mut buf = [0u8; 16 * 1024];
     loop {
         match from.read(&mut buf) {
             Ok(0) => return to.shutdown(Shutdown::Write),
             Ok(n) => {
-                let mut sent = 0;
-                while sent < n {
-                    match to.write(&buf[sent..n]) {
-                        Ok(0) => return Err(ErrorKind::WriteZero.into()),
-                        Ok(k) => sent += k,
-                        Err(e) if timed_out(&e) && !stop() => {}
-                        Err(e) if timed_out(&e) => return Ok(()),
-                        Err(e) if e.kind() == ErrorKind::Interrupted => {}
-                        Err(e) => return Err(e),
-                    }
-                }
+                to.write_all(&buf[..n])?;
                 count(n as u64);
             }
-            Err(e) if timed_out(&e) => {
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
                 if stop() {
                     return Ok(());
                 }
