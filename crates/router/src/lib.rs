@@ -277,7 +277,8 @@ impl Router {
     }
 
     pub fn flows(&self, all: bool) -> Vec<FlowRow> {
-        match self.0.snapshot.lock().unwrap().1.clone() {
+        let live = self.0.snapshot.lock().unwrap().1.clone();
+        match live {
             Some(l) => l.stats.lock().unwrap().rows(Instant::now(), all),
             None => Vec::new(),
         }
