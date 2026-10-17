@@ -1,4 +1,5 @@
 pub mod divert;
+pub mod dns;
 pub mod flows;
 pub mod owner;
 pub mod packet;
