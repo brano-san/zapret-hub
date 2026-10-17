@@ -18,10 +18,64 @@ const BUILTIN: [(&str, &str); 2] = [
 
 /// Flowseal's strategies ported to zapret2 (names without the prefix): read-only like `BUILTIN`, but
 /// left out of the tests that run without names.
-const FLOWSEAL: [(&str, &str); 1] = [(
-    "general (ALT11)",
-    include_str!("builtin/flowseal/general (ALT11).txt"),
-)];
+const FLOWSEAL: [(&str, &str); 14] = [
+    (
+        "general (ALT)",
+        include_str!("builtin/flowseal/general (ALT).txt"),
+    ),
+    (
+        "general (ALT2)",
+        include_str!("builtin/flowseal/general (ALT2).txt"),
+    ),
+    (
+        "general (ALT3)",
+        include_str!("builtin/flowseal/general (ALT3).txt"),
+    ),
+    (
+        "general (ALT4)",
+        include_str!("builtin/flowseal/general (ALT4).txt"),
+    ),
+    (
+        "general (ALT5)",
+        include_str!("builtin/flowseal/general (ALT5).txt"),
+    ),
+    (
+        "general (ALT6)",
+        include_str!("builtin/flowseal/general (ALT6).txt"),
+    ),
+    (
+        "general (ALT7)",
+        include_str!("builtin/flowseal/general (ALT7).txt"),
+    ),
+    (
+        "general (ALT8)",
+        include_str!("builtin/flowseal/general (ALT8).txt"),
+    ),
+    (
+        "general (ALT9)",
+        include_str!("builtin/flowseal/general (ALT9).txt"),
+    ),
+    (
+        "general (ALT10)",
+        include_str!("builtin/flowseal/general (ALT10).txt"),
+    ),
+    (
+        "general (ALT11)",
+        include_str!("builtin/flowseal/general (ALT11).txt"),
+    ),
+    (
+        "general (ALT12)",
+        include_str!("builtin/flowseal/general (ALT12).txt"),
+    ),
+    (
+        "general (ALT13)",
+        include_str!("builtin/flowseal/general (ALT13).txt"),
+    ),
+    (
+        "general (Flowseal)",
+        include_str!("builtin/flowseal/general (Flowseal).txt"),
+    ),
+];
 
 /// The placeholders that come from the Flowseal folder.
 const FLOWSEAL_VARS: [&str; 5] = [

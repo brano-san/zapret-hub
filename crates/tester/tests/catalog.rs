@@ -129,6 +129,15 @@ fn rows_carry_custom_active_errors_and_stale_results() {
     assert_eq!(detail.source, "");
 }
 
+/// zapret2's built-in strategies as rows name them: bol-van's two, then the Flowseal copies.
+fn built_in() -> Vec<String> {
+    zapret2::strategies::list(tempfile::tempdir().unwrap().path())
+        .unwrap()
+        .into_iter()
+        .map(|s| s.full_name())
+        .collect()
+}
+
 #[test]
 fn zapret2_rows_follow_flowseals_with_their_checks_and_results() {
     let zapret_dir = fake_zapret();
@@ -163,24 +172,19 @@ fn zapret2_rows_follow_flowseals_with_their_checks_and_results() {
     )
     .unwrap();
     let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
-    assert_eq!(
-        names,
-        [
-            "general",
-            "helper",
-            "zapret2:general",
-            "zapret2:general-sni",
-            "zapret2:general (ALT11)",
-            "zapret2:mine"
-        ]
-    );
+    let expected: Vec<String> = ["general".to_owned(), "helper".to_owned()]
+        .into_iter()
+        .chain(built_in())
+        .chain(["zapret2:mine".to_owned()])
+        .collect();
+    assert_eq!(names, expected);
     let builtin = &rows[2];
     assert!(!builtin.custom && !builtin.active);
     assert!(
         builtin.error.as_deref().unwrap().contains("multidisorder"),
         "{builtin:?}"
     );
-    let mine = &rows[5];
+    let mine = rows.last().unwrap();
     assert!(!rows[3].flowseal_copy && rows[4].flowseal_copy);
     assert!(
         mine.custom && mine.active && mine.error.is_none(),
@@ -222,7 +226,7 @@ fn zapret2_rows_follow_flowseals_with_their_checks_and_results() {
     let rows =
         tester::catalog::rows(Some(&folder), Some(&engine), &store, data.path(), None).unwrap();
     assert!(
-        rows[5].last.as_ref().unwrap().stale,
+        rows.last().unwrap().last.as_ref().unwrap().stale,
         "an edit makes the result stale"
     );
 }
@@ -238,15 +242,11 @@ fn zapret2_alone_lists_its_strategies_and_names_what_needs_flowseal() {
     zapret2::strategies::write(engine_dir.path(), "mine", text).unwrap();
     let rows = tester::catalog::rows(None, Some(&engine), &store, data.path(), None).unwrap();
     let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
-    assert_eq!(
-        names,
-        [
-            "zapret2:general",
-            "zapret2:general-sni",
-            "zapret2:general (ALT11)",
-            "zapret2:mine"
-        ]
-    );
+    let expected: Vec<String> = built_in()
+        .into_iter()
+        .chain(["zapret2:mine".to_owned()])
+        .collect();
+    assert_eq!(names, expected);
     // The built-in ones run on Flowseal's lists.
     assert!(
         rows[0].error.as_deref().unwrap().contains("%LISTS%"),
@@ -254,7 +254,7 @@ fn zapret2_alone_lists_its_strategies_and_names_what_needs_flowseal() {
         rows[0]
     );
     assert!(rows[2].flowseal_copy && rows[2].error.is_some());
-    assert_eq!(rows[3].error, None);
+    assert_eq!(rows.last().unwrap().error, None);
     let detail = tester::catalog::detail(
         None,
         Some(&engine),

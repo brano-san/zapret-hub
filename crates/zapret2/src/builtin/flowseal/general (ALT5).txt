@@ -1,0 +1,55 @@
+# From Flowseal/zapret-discord-youtube 1.10.3, general (ALT5).bat (MIT License, Copyright (c) Flowseal).
+# Changed in the port to zapret2: the strategy is rewritten as winws2 options (Lua desync instead of
+# --dpi-desync); Discord voice and STUN are caught by their ports in --wf-udp-out, as Flowseal does,
+# not by WinDivert filter files (--wf-raw-part).
+# Mapping: multidisorder -> multidisorder_legacy (nfqws1's segment order), nfqws1's default split
+# position 2; syndata keeps nfqws1's default fake, 16 zero bytes, and stops by itself after the SYN;
+# the syndata profiles have no --filter-l7: the SYN comes before any payload;
+# --dpi-desync-cutoff=nN -> --out-range=-n<N-1> (nfqws1 acts while the packet number is below N);
+# --dpi-desync-any-protocol -> --payload=known,unknown and payload=all on the call (TCP), payload=all (UDP);
+# TCP profiles without a cutoff get --out-range=-d10 (zapret2's convention: the hello comes first).
+--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP%
+--wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP%
+--lua-init=@"%LUA%zapret-lib.lua" --lua-init=@"%LUA%zapret-antidpi.lua"
+--blob=quic_google:@"%BIN%quic_initial_www_google_com.bin"
+--blob=discord_udp:@"%BIN%ACTIVE_DISCORD_UDP.bin"
+--blob=game_udp:@"%BIN%ACTIVE_GAME_UDP.bin"
+
+# QUIC, general lists
+--filter-udp=443 --filter-l7=quic
+--hostlist="%LISTS%list-general.txt" --hostlist="%LISTS%list-general-user.txt"
+--hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt"
+--ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
+--payload=quic_initial --lua-desync=fake:blob=quic_google:repeats=6
+--new
+
+# Discord voice
+--filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun
+--payload=discord_ip_discovery,stun --lua-desync=fake:blob=discord_udp:repeats=6
+--new
+
+# All TCP on the web and Discord ports, IPv4
+--filter-l3=ipv4 --filter-tcp=80,443,2053,2083,2087,2096,8443
+--ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
+--out-range=-d10 --lua-desync=syndata
+--payload=tls_client_hello,http_req --lua-desync=multidisorder_legacy
+--new
+
+# Games over TCP
+--filter-tcp=%GameFilterTCP% --ipset="%LISTS%ipset-all.txt"
+--ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
+--out-range=-n3 --lua-desync=syndata
+--payload=known,unknown --lua-desync=multidisorder_legacy:payload=all
+--new
+
+# QUIC, ipset-all
+--filter-udp=443 --filter-l7=quic --ipset="%LISTS%ipset-all.txt"
+--hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt"
+--ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
+--payload=quic_initial --lua-desync=fake:blob=quic_google:repeats=6
+--new
+
+# Games over UDP
+--filter-udp=%GameFilterUDP% --ipset="%LISTS%ipset-all.txt"
+--ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
+--out-range=-n2 --lua-desync=fake:blob=game_udp:repeats=14:payload=all

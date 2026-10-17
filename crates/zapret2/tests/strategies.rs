@@ -20,6 +20,11 @@ fn names(data: &Path) -> Vec<(String, bool)> {
         .collect()
 }
 
+/// The built-in ones: bol-van's two, then the Flowseal copies.
+fn built_in() -> Vec<(String, bool)> {
+    names(tempfile::tempdir().unwrap().path())
+}
+
 #[test]
 fn built_in_ones_come_first_then_the_users_in_natural_order() {
     let data = tempfile::tempdir().unwrap();
@@ -29,18 +34,14 @@ fn built_in_ones_come_first_then_the_users_in_natural_order() {
         fs::write(own.join(file), "--wf-tcp-out=443").unwrap();
     }
     fs::write(own.join("bom.txt"), "\u{feff}--wf-tcp-out=80").unwrap();
-    let expected: Vec<(String, bool)> = [
-        ("general", true),
-        ("general-sni", true),
-        ("general (ALT11)", true),
-        ("a", false),
-        ("b 9", false),
-        ("b 10", false),
-        ("bom", false),
-    ]
-    .iter()
-    .map(|(name, builtin)| (name.to_string(), *builtin))
-    .collect();
+    let expected: Vec<(String, bool)> = built_in()
+        .into_iter()
+        .chain(
+            ["a", "b 9", "b 10", "bom"]
+                .iter()
+                .map(|name| (name.to_string(), false)),
+        )
+        .collect();
     assert_eq!(names(data.path()), expected);
     let bom = strategies::find(data.path(), "BOM").unwrap();
     assert_eq!(bom.text, "--wf-tcp-out=80");
@@ -60,6 +61,21 @@ fn without_a_folder_there_are_the_built_in_ones() {
         ]
     );
     assert!(names.contains(&("general (ALT11)".to_owned(), true)));
+    assert!(names.contains(&("general (Flowseal)".to_owned(), true)));
+}
+
+#[test]
+fn flowseal_copies_are_listed_in_natural_order() {
+    let data = tempfile::tempdir().unwrap();
+    let copies: Vec<String> = strategies::list(data.path())
+        .unwrap()
+        .into_iter()
+        .filter(|s| s.flowseal_copy)
+        .map(|s| s.name)
+        .collect();
+    let mut sorted = copies.clone();
+    sorted.sort_by_key(|name| zapret::strategies::natural_key(name));
+    assert_eq!(copies, sorted);
 }
 
 #[test]
@@ -125,9 +141,8 @@ fn a_file_that_cannot_be_read_is_skipped_and_the_rest_still_works() {
     assert!(fs::read(&locked).is_err());
     // The built-in ones, then these of the user's.
     let listed = |users: &[&str]| -> Vec<(String, bool)> {
-        ["general", "general-sni", "general (ALT11)"]
-            .iter()
-            .map(|name| (name.to_string(), true))
+        built_in()
+            .into_iter()
             .chain(users.iter().map(|name| (name.to_string(), false)))
             .collect()
     };
@@ -396,8 +411,8 @@ fn files_that_are_not_strategies_are_reported_not_hidden() {
     );
     assert_eq!(
         names(home.path()).len(),
-        4,
-        "two built-in ones, the ALT11 copy and ok"
+        built_in().len() + 1,
+        "the built-in ones and ok"
     );
 }
 
