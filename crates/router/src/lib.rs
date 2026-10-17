@@ -604,6 +604,7 @@ impl Live {
             return;
         };
         let key = FlowKey {
+            protocol: rules::Protocol::Udp,
             local_port: udp.src.port(),
             dst: udp.dst,
         };

@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::divert::Address;
+use crate::rules::Protocol;
 use crate::socks::SocksError;
 
 pub const QUEUE: usize = 64;
@@ -30,8 +31,14 @@ pub enum DirectReason {
     AuthRequired,
     NoUdp,
     Timeout,
-    Failed { error: String },
+    Failed {
+        error: String,
+    },
     Loop,
+    /// The address is sent direct for a while after the proxy refused a connection to it.
+    Marked,
+    /// The SYN never reached the local acceptor.
+    NotAccepted,
 }
 
 impl From<&SocksError> for DirectReason {
@@ -72,6 +79,7 @@ pub struct Totals {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 pub struct FlowRow {
     pub protocol: String,
+    pub domain: Option<String>,
     pub destination: String,
     pub local_port: u16,
     pub rule: Option<String>,
@@ -146,12 +154,14 @@ pub fn checked(current: &ProxyState, new: ProxyState, failures: &mut u32) -> Opt
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FlowKey {
+    pub protocol: Protocol,
     pub local_port: u16,
     pub dst: SocketAddrV4,
 }
 
 struct Flow {
     rule: String,
+    domain: Option<String>,
     via: Via,
     up: u64,
     down: u64,
@@ -173,6 +183,7 @@ impl Stats {
     pub fn open(&mut self, key: FlowKey, rule: &str, via: Via, now: Instant) {
         let flow = Flow {
             rule: rule.to_owned(),
+            domain: None,
             via,
             up: 0,
             down: 0,
@@ -186,6 +197,12 @@ impl Stats {
     pub fn set_via(&mut self, key: FlowKey, via: Via) {
         if let Some(f) = self.0.get_mut(&key) {
             f.via = via;
+        }
+    }
+
+    pub fn set_domain(&mut self, key: FlowKey, domain: String) {
+        if let Some(f) = self.0.get_mut(&key) {
+            f.domain = Some(domain);
         }
     }
 
@@ -203,12 +220,12 @@ impl Stats {
         }
     }
 
-    /// Open flows without packets for `IDLE` or more.
+    /// Open UDP flows without packets for `IDLE` or more; TCP ends with its connection.
     pub fn idle(&self, now: Instant) -> Vec<FlowKey> {
         let quiet = |f: &Flow| f.closed.is_none() && now.saturating_duration_since(f.last) >= IDLE;
         self.0
             .iter()
-            .filter(|(_, f)| quiet(f))
+            .filter(|(k, f)| k.protocol == Protocol::Udp && quiet(f))
             .map(|(k, _)| *k)
             .collect()
     }
@@ -227,7 +244,12 @@ impl Stats {
             .map(|(k, f)| {
                 let end = f.closed.unwrap_or(now);
                 let row = FlowRow {
-                    protocol: "udp".into(),
+                    protocol: match k.protocol {
+                        Protocol::Tcp => "tcp",
+                        Protocol::Udp | Protocol::Both => "udp",
+                    }
+                    .into(),
+                    domain: f.domain.clone(),
                     destination: k.dst.to_string(),
                     local_port: k.local_port,
                     rule: Some(f.rule.clone()),

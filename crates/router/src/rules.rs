@@ -18,7 +18,7 @@ pub struct Rule {
     pub domains: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, specta::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum Protocol {
     Tcp,

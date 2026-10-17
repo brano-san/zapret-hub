@@ -1,6 +1,7 @@
 use router::divert::Address;
 use router::flows::{self, DirectReason, FlowKey, Pending, ProxyState, Stats, Via};
 use router::owner::{self, Owners, PID_WAIT};
+use router::rules::Protocol;
 use std::time::{Duration, Instant};
 
 #[test]
@@ -104,6 +105,7 @@ fn the_listener_of_a_port_is_found() {
 fn closed_flows_stay_30_seconds_and_traffic_adds_up() {
     let t0 = Instant::now();
     let key = |port| FlowKey {
+        protocol: Protocol::Udp,
         local_port: port,
         dst: "104.29.1.1:50001".parse().unwrap(),
     };
@@ -188,4 +190,31 @@ fn only_flows_sent_direct_by_a_proxy_failure_retry_it() {
     ] {
         assert!(!reason.proxy_failure(), "{reason:?}");
     }
+}
+
+#[test]
+fn tcp_flows_never_go_idle_and_rows_name_protocol_and_domain() {
+    let t0 = Instant::now();
+    let tcp = FlowKey {
+        protocol: Protocol::Tcp,
+        local_port: 50000,
+        dst: "162.159.135.232:443".parse().unwrap(),
+    };
+    let udp = FlowKey {
+        protocol: Protocol::Udp,
+        ..tcp
+    };
+    let mut stats = Stats::default();
+    stats.open(tcp, "Discord целиком", Via::Proxy, t0);
+    stats.open(udp, "Discord целиком", Via::Proxy, t0);
+    stats.set_domain(tcp, "discord.com".into());
+    assert_eq!(
+        stats.idle(t0 + Duration::from_secs(600)),
+        [udp],
+        "a quiet TCP connection is still open"
+    );
+    let rows = stats.rows(t0, true);
+    assert_eq!(rows.len(), 2, "same port and address, two protocols");
+    let row = rows.iter().find(|r| r.protocol == "tcp").unwrap();
+    assert_eq!(row.domain.as_deref(), Some("discord.com"));
 }
