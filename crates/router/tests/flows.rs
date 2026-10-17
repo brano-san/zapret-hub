@@ -1,5 +1,5 @@
 use router::divert::Address;
-use router::flows::{self, DirectReason, FlowKey, Pending, ProxyState, Stats, Via};
+use router::flows::{self, DirectReason, FlowKey, MAX_UNRULED, Pending, ProxyState, Stats, Via};
 use router::owner::{self, Images, Owners, PID_WAIT, table_pid};
 use router::rules::Protocol;
 use std::time::{Duration, Instant};
@@ -188,6 +188,7 @@ fn only_flows_sent_direct_by_a_proxy_failure_retry_it() {
         DirectReason::Loop,
         DirectReason::Marked,
         DirectReason::NotAccepted,
+        DirectReason::NoRule,
         DirectReason::Failed { error: "x".into() },
     ] {
         assert!(!reason.proxy_failure(), "{reason:?}");
@@ -338,4 +339,48 @@ fn a_failed_image_lookup_is_cached() {
     assert_eq!(images.lookup(4, 1, || None), None);
     assert_eq!(images.lookup(4, 1, || panic!("cached miss")), None);
     assert!(images.paths().is_empty());
+}
+
+#[test]
+fn rule_less_flows_show_only_in_all_with_their_program() {
+    let t0 = Instant::now();
+    let key = |local_port| FlowKey {
+        protocol: Protocol::Udp,
+        local_port,
+        dst: "8.8.8.8:443".parse().unwrap(),
+    };
+    let none = || Via::Direct {
+        reason: DirectReason::NoRule,
+    };
+    let mut stats = Stats::default();
+    stats.open(key(1), "Dead by Daylight", Via::Proxy, t0);
+    stats.set_program(key(1), r"C:\Games\DeadByDaylight-Win64-Shipping.exe".into());
+    stats.open(key(2), "", none(), t0);
+    stats.set_program(key(2), r"C:\x\chrome.exe".into());
+    stats.add(key(2), 100, 0, t0);
+    let ruled = stats.rows(t0, false);
+    assert_eq!(ruled.len(), 1);
+    assert_eq!(
+        ruled[0].program.as_deref(),
+        Some(r"C:\Games\DeadByDaylight-Win64-Shipping.exe")
+    );
+    let rows = stats.rows(t0, true);
+    let row = rows.iter().find(|r| r.local_port == 2).unwrap();
+    assert_eq!(
+        (row.rule.as_deref(), row.program.as_deref()),
+        (None, Some(r"C:\x\chrome.exe"))
+    );
+    assert_eq!(
+        (stats.totals().direct.flows, stats.totals().proxied.flows),
+        (0, 1),
+        "rule-less flows are not in the totals"
+    );
+    for port in 0..MAX_UNRULED as u16 + 10 {
+        stats.open(key(100 + port), "", none(), t0);
+    }
+    assert_eq!(
+        stats.rows(t0, true).len(),
+        MAX_UNRULED + 1,
+        "rule-less rows are capped"
+    );
 }

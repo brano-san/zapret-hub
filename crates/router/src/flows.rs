@@ -13,6 +13,8 @@ use crate::socks::SocksError;
 pub const QUEUE: usize = 64;
 pub const IDLE: Duration = Duration::from_secs(30);
 pub const KEEP_CLOSED: Duration = Duration::from_secs(30);
+/// Most rule-less rows listed with `all`.
+pub const MAX_UNRULED: usize = 500;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "state")]
@@ -39,6 +41,8 @@ pub enum DirectReason {
     Marked,
     /// The SYN never reached the local acceptor.
     NotAccepted,
+    /// Caught for a program rule, but this flow matches no rule.
+    NoRule,
 }
 
 impl From<&SocksError> for DirectReason {
@@ -80,6 +84,8 @@ pub struct Totals {
 pub struct FlowRow {
     pub protocol: String,
     pub domain: Option<String>,
+    /// Full path of the program's exe, when known.
+    pub program: Option<String>,
     pub destination: String,
     pub local_port: u16,
     pub rule: Option<String>,
@@ -162,6 +168,7 @@ pub struct FlowKey {
 struct Flow {
     rule: String,
     domain: Option<String>,
+    program: Option<String>,
     via: Via,
     up: u64,
     down: u64,
@@ -184,6 +191,7 @@ impl Stats {
         let flow = Flow {
             rule: rule.to_owned(),
             domain: None,
+            program: None,
             via,
             up: 0,
             down: 0,
@@ -203,6 +211,12 @@ impl Stats {
     pub fn set_domain(&mut self, key: FlowKey, domain: String) {
         if let Some(f) = self.0.get_mut(&key) {
             f.domain = Some(domain);
+        }
+    }
+
+    pub fn set_program(&mut self, key: FlowKey, program: String) {
+        if let Some(f) = self.0.get_mut(&key) {
+            f.program = Some(program);
         }
     }
 
@@ -231,7 +245,7 @@ impl Stats {
     }
 
     /// Open flows and those closed less than `KEEP_CLOSED` ago; older closed ones are dropped.
-    /// Stage 1 gives every flow a rule, so `all` changes nothing yet (stage 3 adds rule-less flows).
+    /// Rule-less flows are listed only with `all`, the oldest beyond `MAX_UNRULED` left out.
     pub fn rows(&mut self, now: Instant, all: bool) -> Vec<FlowRow> {
         self.0.retain(|_, f| {
             f.closed
@@ -250,9 +264,10 @@ impl Stats {
                     }
                     .into(),
                     domain: f.domain.clone(),
+                    program: f.program.clone(),
                     destination: k.dst.to_string(),
                     local_port: k.local_port,
-                    rule: Some(f.rule.clone()),
+                    rule: Some(f.rule.clone()).filter(|r| !r.is_empty()),
                     via: f.via.clone(),
                     up: f.up as f64,
                     down: f.down as f64,
@@ -263,12 +278,22 @@ impl Stats {
             })
             .collect();
         rows.sort_by_key(|(started, r)| (*started, r.local_port));
+        let mut excess = rows
+            .iter()
+            .filter(|(_, r)| r.rule.is_none())
+            .count()
+            .saturating_sub(MAX_UNRULED);
+        rows.retain(|(_, r)| {
+            let drop = r.rule.is_none() && excess > 0;
+            excess -= drop as usize;
+            !drop
+        });
         rows.into_iter().map(|(_, r)| r).collect()
     }
 
     pub fn totals(&self) -> Totals {
         let mut t = Totals::default();
-        for f in self.0.values() {
+        for f in self.0.values().filter(|f| !f.rule.is_empty()) {
             let side = if f.proxied() {
                 &mut t.proxied
             } else {
