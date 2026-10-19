@@ -39,6 +39,8 @@
 
 ## Установка и запуск
 
+Архив `zapret-hub-<версия>.zip` — на странице [релизов](https://github.com/brano-san/zapret-hub/releases).
+
 1. Распакуйте архив в отдельную папку, например `C:\Tools\ZapretHub`. Настройки и данные лежат рядом с exe.
    С автозапуском берите папку, куда без прав администратора не записать, например внутри `C:\Program Files\`:
    задача автозапуска запускает exe с наивысшими правами без запроса UAC, а exe в папке, открытой для записи
@@ -332,3 +334,7 @@ npm run tauri build
 `powershell -NoProfile -ExecutionPolicy Bypass -File tools\package.ps1` собирает оба exe и кладёт в
 `dist\zapret-hub-<версия>.zip` вместе с README и `cli.md`. `npm run tauri dev` запускается из терминала с правами
 администратора; сборка, тесты, `npm run check` и `zapret-hub-cli` — из обычного.
+
+Выпуск: поднять версию в `Cargo.toml` и `package.json`, раздел версии в `CHANGELOG.md`, затем тег `v<версия>`
+(`git tag v0.7.0 && git push origin v0.7.0`). CI (`.github/workflows/release.yml`) прогоняет тесты, собирает zip
+и создаёт релиз с этим разделом CHANGELOG. Ручной запуск в Actions только собирает zip (артефакт).
