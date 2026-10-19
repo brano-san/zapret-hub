@@ -207,7 +207,13 @@ fn the_pipe_lets_in_system_administrators_and_this_user_only() {
         sddl
     };
     let sid = pipe::current_user_sid().unwrap();
-    assert!(sddl.contains(&format!(";;;{sid})")), "{sddl}");
+    // SDDL writes the built-in Administrator (RID 500, the CI runner's user) as `LA`, not its SID.
+    let user = if sid.ends_with("-500") {
+        "LA".to_owned()
+    } else {
+        sid
+    };
+    assert!(sddl.contains(&format!(";;;{user})")), "{sddl}");
     assert!(sddl.contains(";;;SY)") && sddl.contains(";;;BA)"), "{sddl}");
     assert_eq!(sddl.matches("(A;").count(), 3, "nobody else: {sddl}");
     assert!(sddl.contains("(ML;;NWNR;;;ME)"), "{sddl}");
