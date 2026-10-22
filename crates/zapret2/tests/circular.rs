@@ -486,3 +486,33 @@ fn a_text_with_crlf_line_ends_keeps_them() {
     assert_eq!(out.matches("\r\n").count(), out.matches('\n').count());
     assert!(out.ends_with("--lua-desync=fake:strategy=1\r\n"), "{out}");
 }
+
+#[test]
+fn widen_adds_the_missing_ports_and_keeps_an_exclusion() {
+    use zapret2::circular::widen;
+    assert_eq!(
+        widen("--wf-udp-in=443", "50000-50100,443"),
+        "--wf-udp-in=443,50000-50100"
+    );
+    assert_eq!(widen("--wf-udp-in=", "443"), "--wf-udp-in=443");
+    assert_eq!(widen("--wf-udp-out=~1-100", "443"), "--wf-udp-out=~1-100");
+    assert_eq!(widen("--wf-udp-out", "443"), "--wf-udp-out");
+}
+
+#[test]
+fn a_quoted_wf_list_is_widened_where_it_stands_not_in_a_comment() {
+    let strategy = |desync: &str| {
+        format!(
+            "\"--wf-udp-out=443\"\n# was --wf-udp-out=443 before\n--filter-tcp=443\n--lua-desync=multisplit\n--new\n--filter-udp=50000-50100\n--payload=discord_ip_discovery --lua-desync={desync}\n"
+        )
+    };
+    let merged = merge(&[
+        ("a".into(), strategy("fake:blob=x:repeats=6")),
+        ("b".into(), strategy("fake:blob=y:repeats=2")),
+    ])
+    .unwrap();
+    let text = &merged.text;
+    assert!(text.contains("\n--wf-udp-out=443,50000-50100\n"), "{text}");
+    assert!(text.contains("\n# was --wf-udp-out=443 before\n"), "{text}");
+    assert_eq!(text.matches("--wf-udp-out=").count(), 2, "{text}");
+}

@@ -182,6 +182,29 @@ pub fn widen(token: &str, ports: &str) -> String {
     format!("{option}={}", items.join(","))
 }
 
+/// `old` replaced by `new` where it last stands as a whole token on a line that is not a comment.
+fn replace_last_token(text: &mut String, old: &str, new: &str) {
+    let starts: Vec<usize> = std::iter::once(0)
+        .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+        .collect();
+    for (i, &start) in starts.iter().enumerate().rev() {
+        let end = starts.get(i + 1).copied().unwrap_or(text.len());
+        let line = &text[start..end];
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
+        let whole = |at: usize| {
+            let before = line[..at].chars().next_back();
+            let after = line[at + old.len()..].chars().next();
+            before.is_none_or(char::is_whitespace) && after.is_none_or(char::is_whitespace)
+        };
+        if let Some((at, _)) = line.rmatch_indices(old).find(|&(at, _)| whole(at)) {
+            text.replace_range(start + at..start + at + old.len(), new);
+            return;
+        }
+    }
+}
+
 /// `fake:blob=x:strategy=2:final` → (`fake:blob=x`, `Some("2")`, true).
 fn untag(call: &str) -> (String, Option<String>, bool) {
     let mut strategy = None;
@@ -779,20 +802,20 @@ pub fn merge(sources: &[(String, String)]) -> anyhow::Result<Merged> {
     let mut base = sources[0].1.trim_start_matches('\u{feff}').to_owned();
     for option in UDP_WF {
         let prefix = format!("{option}=");
-        // winws2 keeps the last one.
+        // winws2 keeps the last one; it may be quoted.
         let last = quoted_tokens(&args(&base))
             .into_iter()
-            .rfind(|t| t.starts_with(&prefix));
+            .rfind(|t| t.replace('"', "").starts_with(&prefix));
+        let bare = last.as_deref().map(|t| t.replace('"', ""));
         let token = udp.iter().fold(
-            last.clone().unwrap_or_else(|| prefix.clone()),
+            bare.clone().unwrap_or_else(|| prefix.clone()),
             |token, ports| widen(&token, ports),
         );
         match last {
-            Some(last) => {
-                if let Some(at) = base.rfind(&last) {
-                    base.replace_range(at..at + last.len(), &token);
-                }
+            Some(last) if bare.as_ref() != Some(&token) => {
+                replace_last_token(&mut base, &last, &token);
             }
+            Some(_) => {}
             None if token != prefix => added.push(token),
             None => {}
         }
