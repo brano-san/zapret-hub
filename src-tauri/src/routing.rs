@@ -64,7 +64,7 @@ pub fn sync(app: &AppHandle) {
 pub fn set_enabled(app: &AppHandle, enabled: bool) -> anyhow::Result<RouterStatus> {
     let state = state(app);
     // Diagnostics drive the router themselves and put it back as they found it.
-    anyhow::ensure!(!state.diagnosing(), crate::state::DIAGNOSING);
+    state.not_diagnosing()?;
     let saved = {
         let _saving = state.saving();
         let switched = if enabled {

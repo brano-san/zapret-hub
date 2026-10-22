@@ -243,6 +243,29 @@ impl AppState {
         self.diagnosing.store(false, Ordering::SeqCst);
     }
 
+    /// `end_diag` when dropped: held by the diagnostics thread, so even a panic in its end ends
+    /// them.
+    pub fn diag_ends(&self) -> impl Drop + '_ {
+        struct Ends<'a>(&'a AppState);
+        impl Drop for Ends<'_> {
+            fn drop(&mut self) {
+                self.0.end_diag();
+            }
+        }
+        Ends(self)
+    }
+
+    /// Refuses a change while diagnostics run: they put back what they found.
+    pub fn not_diagnosing(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.diagnosing(), DIAGNOSING);
+        Ok(())
+    }
+
+    /// Drops a reply sent before the next question: called before the question is shown.
+    pub fn clear_diag_reply(&self) {
+        *lock(&self.diag_reply) = None;
+    }
+
     /// Also wakes a wait for an answer.
     pub fn cancel_diag(&self) {
         self.diag_cancel.store(true, Ordering::SeqCst);
@@ -279,8 +302,6 @@ impl AppState {
     ) -> Option<T> {
         let deadline = std::time::Instant::now() + timeout;
         let mut reply = lock(&self.diag_reply);
-        // A reply from before the question is stale.
-        *reply = None;
         loop {
             if self.diag_canceled() {
                 return None;
@@ -341,7 +362,7 @@ impl AppState {
         f: impl FnOnce(Option<&Folder>) -> anyhow::Result<T>,
     ) -> anyhow::Result<T> {
         anyhow::ensure!(!self.testing(), TESTING);
-        anyhow::ensure!(!self.diagnosing(), DIAGNOSING);
+        self.not_diagnosing()?;
         let _turn = self.turn();
         let folder = self.folder_if_set()?;
         anyhow::ensure!(
@@ -586,7 +607,11 @@ mod tests {
             state.begin_diag(live()).is_err(),
             "a second one must not start"
         );
-        state.end_diag();
+        // The check `save_settings` and `routing::set_enabled` make.
+        let err = state.not_diagnosing().unwrap_err();
+        assert_eq!(format!("{err:#}"), DIAGNOSING);
+        drop(state.diag_ends());
+        assert!(state.not_diagnosing().is_ok());
         assert!(state.change_any(|_| Ok(())).is_ok());
         assert_eq!(state.diag_live(), None);
     }
@@ -606,24 +631,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = std::sync::Arc::new(state(dir.path()));
         state.begin_diag(live()).unwrap();
+        let choice = |r: &Reply| match r {
+            Reply::Choice(keys) => Some(keys.clone()),
+            Reply::Answer(_) => None,
+        };
+        let short = Duration::from_millis(50);
+        // A reply sent between the question and the wait is kept.
+        state.diag_reply(Reply::Choice(vec!["a".into()])).unwrap();
+        assert_eq!(
+            state.wait_diag_reply(short, choice),
+            Some(vec!["a".to_owned()])
+        );
+        // One from before the question is cleared with it.
+        state.diag_reply(Reply::Choice(vec!["old".into()])).unwrap();
+        state.clear_diag_reply();
+        assert_eq!(state.wait_diag_reply(short, choice), None);
+        // One that comes while waiting wakes the wait.
         let s = state.clone();
-        let waiter = std::thread::spawn(move || {
-            s.wait_diag_reply(Duration::from_secs(10), |r| match r {
-                Reply::Choice(keys) => Some(keys.clone()),
-                Reply::Answer(_) => None,
-            })
-        });
-        // Until the waiter clears and takes it; a stale reply would be dropped.
-        let mut got = None;
-        for _ in 0..100 {
-            std::thread::sleep(Duration::from_millis(20));
-            state.diag_reply(Reply::Choice(vec!["a".into()])).unwrap();
-            if waiter.is_finished() {
-                got = waiter.join().unwrap();
-                break;
-            }
-        }
-        assert_eq!(got, Some(vec!["a".to_owned()]));
+        let waiter = std::thread::spawn(move || s.wait_diag_reply(Duration::from_secs(10), choice));
+        std::thread::sleep(short);
+        state.diag_reply(Reply::Choice(vec!["b".into()])).unwrap();
+        assert_eq!(waiter.join().unwrap(), Some(vec!["b".to_owned()]));
         state.cancel_diag();
         assert_eq!(
             state.wait_diag_reply(Duration::from_secs(10), |_| Some(())),

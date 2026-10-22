@@ -124,6 +124,8 @@ pub fn check_flowseal_update(app: &AppHandle) -> anyhow::Result<Option<String>> 
 /// zapret2 spec 10).
 pub fn save_settings(app: &AppHandle, settings: Settings, pipe: bool) -> anyhow::Result<()> {
     let state = state(app);
+    // Diagnostics read the settings in force and put the state back as they found it.
+    state.not_diagnosing()?;
     let _saving = state.saving();
     let old = state.settings();
     let mut settings = crate::settings::to_save(&old, settings, pipe)?;
