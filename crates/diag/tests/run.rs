@@ -162,7 +162,10 @@ fn order_follows_spec() {
     assert_eq!(rule.name, "diag-dbd");
     assert_eq!(rule.ips, ["1.2.3.0/24"]);
     assert_eq!(rule.ports, ["443"]);
-    assert_eq!(rule.apps, [DBD]);
+    assert!(
+        rule.apps.is_empty(),
+        "the address picks the culprit, not the program"
+    );
 }
 
 #[test]

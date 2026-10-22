@@ -72,6 +72,9 @@ pub struct Ctx {
     pub profile: Profile,
 }
 
+/// The culprit's addresses or domain and ports, for every program: rules match an address OR a
+/// program, so the profile's programs would take all their traffic on those ports. The check
+/// adds the hub and curl itself (`router_with`).
 fn point_rule(group: &Group, profile: &Profile) -> Rule {
     let (ips, domains) = if is_subnet(&group.key) {
         (vec![group.key.clone()], vec![])
@@ -85,7 +88,7 @@ fn point_rule(group: &Group, profile: &Profile) -> Rule {
         ports: group.ports.iter().map(u16::to_string).collect(),
         ips,
         domains,
-        apps: profile.apps.clone(),
+        apps: Vec::new(),
     }
 }
 
