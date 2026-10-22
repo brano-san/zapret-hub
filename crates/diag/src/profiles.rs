@@ -50,12 +50,17 @@ pub fn builtin() -> Vec<Profile> {
 /// Built-ins, with `<dir>\<id>.toml` replacing the built-in of the same id and new ids appended.
 pub fn load(dir: &Path) -> anyhow::Result<Vec<Profile>> {
     let mut all = builtin();
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return Ok(all);
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(all),
+        Err(e) => return Err(e).with_context(|| format!("profiles {}", dir.display())),
     };
     let mut files: Vec<_> = rd
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+        .filter(|p| {
+            p.extension()
+                .is_some_and(|x| x.eq_ignore_ascii_case("toml"))
+        })
         .collect();
     files.sort();
     for path in files {

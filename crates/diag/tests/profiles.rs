@@ -32,6 +32,26 @@ fn override_replaces_by_id_and_adds_new() {
 }
 
 #[test]
+fn a_missing_folder_gives_the_builtins_and_other_files_are_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(load(&dir.path().join("none")).unwrap(), builtin());
+    std::fs::write(dir.path().join("notes.txt"), "id = [").unwrap();
+    let mut dbd = builtin().remove(1);
+    dbd.hint = "Y".into();
+    std::fs::write(dir.path().join("DBD.TOML"), toml::to_string(&dbd).unwrap()).unwrap();
+    let all = load(dir.path()).unwrap();
+    assert_eq!((all.len(), all[1].hint.as_str()), (3, "Y"));
+}
+
+#[test]
+fn a_folder_that_is_a_file_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("profiles");
+    std::fs::write(&file, "").unwrap();
+    assert!(load(&file).is_err());
+}
+
+#[test]
 fn broken_override_names_the_file() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("bad.toml"), "id = [").unwrap();
