@@ -1,0 +1,10 @@
+[2026-10-18 00:37:55.138] [info]  [Connection(default)] Creating connection to 104.29.149.39:19327 with audio ssrc: 11029
+[2026-10-18 00:37:55.399] [info]  [Connection(default)] Connected with local address 203.0.113.10:16444 and protocol: udp
+[2026-10-18 00:37:55.402] [info]  [RTCConnection(821089735656734790, default)] RTC connected to media server: 104.29.149.39:19327
+[2026-10-18 00:37:55.403] [info]  [Connection(default)] Creating user: 821089735656734790 with audio SSRC: 11029 and video SSRCs: 
+[2026-10-18 00:37:55.403] [info]  [Connection(default)] Creating user: 593477977443008555 with audio SSRC: 10923 and video SSRCs: 
+[2026-10-18 00:37:55.493] [info]  [RTCConnection(821089735656734790, default)] DAVE protocol init with protocol version: 1
+[2026-10-18 00:37:55.506] [info]  [Connection(default)] DAVE protocol state update: {"version":1,"epochAuthenticator":""}
+[2026-10-18 00:37:55.507] [info]  [RTCControlSocket(default)] Sending MLS key package
+[2026-10-18 00:37:55.700] [info]  [RTCControlSocket(default)] Received MLS commit for transition ID 0
+[2026-10-18 00:38:15.600] [info]  [RTCControlSocket(default)] Sending heartbeat with last received sequence number: 6
