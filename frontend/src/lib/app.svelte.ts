@@ -1,9 +1,9 @@
-import { commands, events, type LiveRun, type Overview, type Settings, type Theme } from "./ipc/bindings";
+import { commands, events, type DiagLive, type LiveRun, type Overview, type Settings, type Theme } from "./ipc/bindings";
 import { call, type Answer } from "./api";
 import { notices } from "./notices.svelte";
 import { S } from "./strings";
 
-export type Tab = "overview" | "strategies" | "tests" | "zapret" | "routes" | "settings";
+export type Tab = "overview" | "strategies" | "tests" | "zapret" | "routes" | "diag" | "settings";
 
 class App {
   tab = $state<Tab>("overview");
@@ -14,6 +14,10 @@ class App {
   live = $state<LiveRun | null>(null);
   /** The run that just finished, for the Tests tab to open. */
   finished = $state<string | null>(null);
+  /** Running diagnostics, as `diagLive` last told. */
+  diagLive = $state<DiagLive | null>(null);
+  /** The report of the diagnostics that just finished, for the Diag tab to open. */
+  diagFinished = $state<string | null>(null);
   pending = $state(0);
 
   /** A command the user waits on is running: the buttons that change zapret stay off. */
@@ -63,6 +67,15 @@ export async function refreshLive(): Promise<void> {
   if (seen === finishes) app.live = live;
 }
 
+let diagFinishes = 0;
+
+/** As `refreshLive`: an answer that crossed `DiagFinished` is stale. */
+export async function refreshDiag(): Promise<void> {
+  const seen = diagFinishes;
+  const live = await commands.diagLive();
+  if (seen === diagFinishes) app.diagLive = live;
+}
+
 async function pullNotices(): Promise<void> {
   for (const notice of await commands.takeNotices()) notices.push(notice);
 }
@@ -83,10 +96,16 @@ export async function start(): Promise<void> {
       app.live = null;
       app.finished = payload.run_id;
     });
+    await events.diagProgress.listen(() => void refreshDiag());
+    await events.diagFinished.listen(({ payload }) => {
+      diagFinishes++;
+      app.diagLive = null;
+      app.diagFinished = payload.id;
+    });
     await loadSettings();
-    await Promise.all([pullNotices(), refreshOverview(), refreshLive()]);
+    await Promise.all([pullNotices(), refreshOverview(), refreshLive(), refreshDiag()]);
   } catch (err) {
-    // `listen`, `getSettings`, `takeNotices` and `testLive` return no `Answer`: they reject only when the IPC is broken.
+    // `listen`, `getSettings`, `takeNotices`, `testLive` and `diagLive` return no `Answer`: they reject only when the IPC is broken.
     notices.push({ level: "Error", title: S.failed.start, text: String(err) });
   }
 }

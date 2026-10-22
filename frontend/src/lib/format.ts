@@ -1,4 +1,4 @@
-import type { CheckLevel, CheckStatus, DpiStatus, FolderCheck, Info, MergeNote, Protocol, ProxyState, QuickCheck, Rule, StrategyResult, Suite, Traffic, Via } from "./ipc/bindings";
+import type { CheckLevel, CheckStatus, DiagScore, DpiStatus, Fault, Fix, FolderCheck, Info, MergeNote, PathKind, Pattern, Protocol, ProxyState, QuickCheck, Rule, StrategyResult, Suite, Traffic, Via } from "./ipc/bindings";
 import { plural, S } from "./strings";
 
 export function ms(value: number | null | undefined): string {
@@ -286,3 +286,69 @@ export function viaLabel(via: Via): string {
 export function proxyLabel(proxy: ProxyState): string {
   return proxy.state === "Ok" ? S.routes.proxy.Ok(proxy.latency_ms) : S.routes.proxy[proxy.state];
 }
+
+/** A diagnostics path as the reports name it (`PathKind::label` in crates/diag). */
+export function pathLabel(path: PathKind): string {
+  const text = S.diag.paths;
+  switch (path.kind) {
+    case "Strategy":
+      return text.Strategy(path.name);
+    case "Trick":
+      return text.Trick(path.candidate.source, path.candidate.profile + 1);
+    case "ExtendRule":
+      return text.ExtendRule(path.rule, S.diag.protocols[path.protocol]);
+    default:
+      return text[path.kind];
+  }
+}
+
+/** What diagnostics saw of a culprit (`summary::fault_text` in crates/diag, shorter). */
+export function faultText(fault: Fault): string {
+  const text = S.diag.faults;
+  switch (fault.kind) {
+    case "SynUnanswered":
+      return text.SynUnanswered(fault.syns);
+    case "DataRetrans":
+      return text.DataRetrans(fault.count);
+    case "UdpNoReply":
+      return text.UdpNoReply(fault.up, fault.down);
+    case "Slow":
+      return text.Slow(fault.median_ms);
+    case "Lossy":
+      return text.Lossy(fault.loss_pct);
+    default:
+      return text[fault.kind];
+  }
+}
+
+/** The heading of a failure pattern, Р1–Р6 of the diag spec 16. */
+export const patternTitle = (pattern: Pattern): string => S.diag.patternTitles[pattern.id];
+
+/** «Работает» as `evaluate::works` decides it: the user's answer first, else 2 of 3 probes. */
+export function scoreWorks(score: DiagScore): boolean {
+  if (score.answer === "Yes") return true;
+  if (score.answer === "No") return false;
+  return score.total > 0 && score.ok * 3 >= score.total * 2;
+}
+
+/** A fix of a report in a line; `Manual` is its text. */
+export function fixText(fix: Fix): string {
+  const text = S.diag.fix;
+  switch (fix.kind) {
+    case "AddRule":
+      return text.AddRule(fix.rule.name, routeSummary(fix.rule));
+    case "EditRule":
+      return text.EditRule(fix.name, S.diag.protocols[fix.protocol]);
+    case "ApplyStrategy":
+      return text.ApplyStrategy(fix.name);
+    case "ApplyHubCircular":
+      return text.ApplyHubCircular(fix.tricks.length, fix.filter);
+    case "TurnOff":
+      return text.TurnOff(fix.text);
+    case "Manual":
+      return fix.text;
+  }
+}
+
+/** Fixes «Применить» can do; the rest are for the user (diag spec 8). */
+export const fixApplies = (fix: Fix): boolean => fix.kind !== "Manual" && fix.kind !== "TurnOff";

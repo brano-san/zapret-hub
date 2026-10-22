@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Rule, StrategyResult } from "./ipc/bindings";
-import { copyStem, defaultTestable, blockSummary, bytes, programName, proxyLabel, routeDraft, routeSummary, viaLabel, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, foldersReady, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
+import { copyStem, faultText, fixApplies, fixText, pathLabel, patternTitle, scoreWorks, defaultTestable, blockSummary, bytes, programName, proxyLabel, routeDraft, routeSummary, viaLabel, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, foldersReady, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
 import { S } from "./strings";
 
 describe("blockSummary", () => {
@@ -221,5 +221,55 @@ describe("routes", () => {
   it("says how the proxy is", () => {
     expect(proxyLabel({ state: "Ok", latency_ms: 4 })).toBe("прокси отвечает · 4 мс");
     expect(proxyLabel({ state: "Down", error: "refused" })).toBe("прокси недоступен, трафик идёт напрямую");
+  });
+});
+
+describe("diagnostics", () => {
+  const rule: Rule = { name: "diag-discord", enabled: true, protocol: "udp", ports: [], ips: ["1.2.3.0/24"], domains: [], apps: [] };
+
+  it("names every path as the reports do", () => {
+    expect(pathLabel({ kind: "Current" })).toBe("Как сейчас");
+    expect(pathLabel({ kind: "Direct" })).toBe("Напрямую мимо всего");
+    expect(pathLabel({ kind: "ProxyPoint", rule })).toBe("Прокси точечно");
+    expect(pathLabel({ kind: "ProxyNoZapret", rule })).toBe("Прокси без zapret");
+    expect(pathLabel({ kind: "Strategy", name: "general (ALT11)" })).toBe("Стратегия general (ALT11)");
+    expect(pathLabel({ kind: "Trick", candidate: { source: "zapret2:ALT11", profile: 0, text: "" } })).toBe(
+      "Приём zapret2: zapret2:ALT11, профиль 1",
+    );
+    expect(pathLabel({ kind: "ExtendRule", rule: "DBD Process", protocol: "both" })).toBe(
+      "Расширить правило «DBD Process» до TCP и UDP",
+    );
+  });
+
+  it("says what was seen of a culprit", () => {
+    expect(faultText({ kind: "UdpNoReply", up: 40, down: 0 })).toMatch(/^UDP уходит, ответов нет/);
+    expect(faultText({ kind: "SynUnanswered", syns: 3 })).toBe("SYN без ответа (3)");
+    expect(faultText({ kind: "ResetEarly" })).toBe("сброс (RST) в начале ответа");
+    expect(faultText({ kind: "Lossy", loss_pct: 12 })).toBe("потери 12 %");
+  });
+
+  it("titles the patterns Р1–Р6", () => {
+    const titles = [
+      patternTitle({ id: "R1RuleMissesProtocol", rule: "DBD Process", has: "udp", needs: "tcp" }),
+      patternTitle({ id: "R2VoiceUdp", server: "104.29.1.1", via_vpn: false }),
+      patternTitle({ id: "R3SlowProxyDns", median_ms: 5000, direct_dns: "doh.pub" }),
+      patternTitle({ id: "R4DnsSpoofed", domain: "youtube.com" }),
+      patternTitle({ id: "R5Whitelist" }),
+      patternTitle({ id: "R6DaveStalled", alone: false, control_route: null, direct: true }),
+    ];
+    expect(titles.map((title) => title.slice(0, 3))).toEqual(["Р1.", "Р2.", "Р3.", "Р4.", "Р5.", "Р6."]);
+    expect(titles[0]).toBe("Р1. Правило программы не покрывает протокол");
+  });
+
+  it("judges a path as the reports do and offers «Применить» only for what the hub can do", () => {
+    const score = { ok: 2, total: 3, median_ms: 80, loss_pct: null, answer: null };
+    expect(scoreWorks(score)).toBe(true);
+    expect(scoreWorks({ ...score, ok: 1 })).toBe(false);
+    expect(scoreWorks({ ...score, ok: 0, answer: "Yes" })).toBe(true);
+    expect(scoreWorks({ ...score, total: 0, ok: 0 })).toBe(false);
+    expect(fixApplies({ kind: "AddRule", rule })).toBe(true);
+    expect(fixApplies({ kind: "Manual", text: "x" })).toBe(false);
+    expect(fixApplies({ kind: "TurnOff", target: "zapret", text: "службу zapret" })).toBe(false);
+    expect(fixText({ kind: "AddRule", rule })).toBe("Правило маршрута «diag-discord» (UDP · 1 подсеть) и включить маршрутизацию");
   });
 });

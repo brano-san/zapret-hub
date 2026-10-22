@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import Diag from "./tabs/Diag.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
   import Notices from "./components/Notices.svelte";
   import Overview from "./tabs/Overview.svelte";
@@ -10,6 +11,7 @@
   import Zapret from "./tabs/Zapret.svelte";
   import Wizard from "./Wizard.svelte";
   import { app, refreshOverview, start, type Tab } from "$lib/app.svelte";
+  import { events } from "$lib/ipc/bindings";
   import { S } from "$lib/strings";
 
   const TABS = [
@@ -18,12 +20,23 @@
     { id: "tests", label: S.tabs.tests, view: Tests },
     { id: "zapret", label: S.tabs.zapret, view: Zapret },
     { id: "routes", label: S.tabs.routes, view: Routes },
+    { id: "diag", label: S.tabs.diag, view: Diag },
     { id: "settings", label: S.tabs.settings, view: Settings },
   ] satisfies { id: Tab; label: string; view: unknown }[];
 
   const current = $derived(TABS.find((tab) => tab.id === app.tab) ?? TABS[0]!);
 
-  onMount(() => void start());
+  /** The tray's «Диагностика…»: `OpenTab` to an open page, `#diag` to a new one. */
+  function openTab(tab: string): void {
+    const wanted = TABS.find((item) => item.id === tab);
+    if (wanted) app.tab = wanted.id;
+  }
+
+  onMount(() => {
+    openTab(location.hash.slice(1));
+    void events.openTab.listen(({ payload }) => openTab(payload.tab));
+    void start();
+  });
 
   // Files dropped into a strategies folder by hand announce nothing: coming back to the window reads everything again.
   function onFocus(): void {
@@ -43,6 +56,7 @@
         <button class="tab" class:active={tab.id === current.id} onclick={() => (app.tab = tab.id)}>{tab.label}</button>
       {/each}
       {#if app.live}<span class="testing warn">{S.overview.testing}</span>{/if}
+      {#if app.diagLive}<span class="testing warn">{S.diag.running}</span>{/if}
     </nav>
     <main>
       <current.view />

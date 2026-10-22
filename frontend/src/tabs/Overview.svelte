@@ -54,24 +54,19 @@
       <p>{S.overview.strategy}: <strong>{o.strategy ?? S.overview.noStrategy}</strong></p>
       {#if o.service === "Running" && !o.winws_running}<p class="warn">{S.overview.winwsMissing}</p>{/if}
       {#if o.service === "StopPending" || o.windivert === "StopPending"}<p class="warn">{S.overview.stopPending}</p>{/if}
+      <!-- The quick check itself lives on the Diag tab (diag spec 10): here only its state, a link there. -->
       <p>
-        {S.overview.quick}:
+        <button class="link" title={S.overview.quickWhere} onclick={() => (app.tab = "diag")}>{S.overview.quick}</button>:
         {#if o.quick}
           <span class={o.quick.ok ? "ok" : "bad"}>{o.quick.ok ? S.overview.quickOk : S.overview.quickFailed}</span>
         {:else}
           <span class="muted">{S.overview.quickNever}</span>
         {/if}
       </p>
-      {#if o.quick}
-        {#each o.quick.checks as item (item.name)}
-          <p class="muted">{item.name} — {item.status === "Ok" ? ms(item.time_ms) : S.status[item.status]}</p>
-        {/each}
-      {/if}
       <div class="buttons">
         <button disabled={locked} onclick={() => change(S.failed.restart, () => commands.restartZapret())}>
           {S.overview.restart}
         </button>
-        <button disabled={locked} onclick={() => change(S.failed.quick, () => commands.quickCheck())}>{S.overview.quick}</button>
       </div>
     </section>
 

@@ -33,11 +33,14 @@ vi.mock("./ipc/bindings", () => {
       noticesChanged: { listen },
       testProgress: { listen },
       testsFinished: { listen },
+      diagProgress: { listen },
+      diagFinished: { listen },
     },
     commands: {
       getSettings: read("getSettings", () => ipc.settings),
       takeNotices: read("takeNotices", () => []),
       testLive: read("testLive", () => null),
+      diagLive: read("diagLive", () => null),
       getOverview: read("getOverview", () => ({ status: "ok", data: {} })),
     },
   };
@@ -52,11 +55,11 @@ beforeEach(() => {
 
 test("start listens before it reads and stays quiet when nothing fails", async () => {
   await start();
-  expect(ipc.log.slice(0, 5)).toEqual(["listen", "listen", "listen", "listen", "getSettings"]);
+  expect(ipc.log.slice(0, 7)).toEqual(["listen", "listen", "listen", "listen", "listen", "listen", "getSettings"]);
   expect(notices.items).toEqual([]);
 });
 
-test.each(["getSettings", "takeNotices", "testLive"])("a rejected %s becomes an Error notice with the error as is", async (name) => {
+test.each(["getSettings", "takeNotices", "testLive", "diagLive"])("a rejected %s becomes an Error notice with the error as is", async (name) => {
   ipc.failing = name;
   await start();
   expect(notices.items).toEqual([{ level: "Error", title: S.failed.start, text: `Error: ${name} is down` }]);
