@@ -661,23 +661,18 @@ fn targets(group: &Group, probe: &ProbeSpec) -> Vec<Target> {
     let reps = &group.representatives;
     match probe.kind {
         ProbeKind::Https if group.protocol != Protocol::Udp => {
-            if !observed {
-                // Pinned only to a representative of that very name.
-                let ip = reps
-                    .iter()
-                    .find(|r| {
-                        r.sni.as_deref().or(r.domain.as_deref()) == Some(probe.target.as_str())
-                    })
-                    .and_then(ipv4_of);
-                return vec![Target::Https {
-                    host: probe.target.clone(),
-                    ip: ip.map(IpAddr::V4),
-                }];
-            }
+            // The culprit itself (spec 7): a representative by its own name and address; one
+            // without a name gets the profile's host pinned to its address, so a valid SNI
+            // reaches the culprit. Observed probes have no host to lend.
             reps.iter()
                 .filter_map(|r| {
+                    let host = r
+                        .sni
+                        .clone()
+                        .or_else(|| r.domain.clone())
+                        .or_else(|| (!observed).then(|| probe.target.clone()))?;
                     Some(Target::Https {
-                        host: r.sni.clone().or_else(|| r.domain.clone())?,
+                        host,
                         ip: ipv4_of(r).map(IpAddr::V4),
                     })
                 })
@@ -944,20 +939,19 @@ mod tests {
             flow("162.159.1.2:443", None),
         ];
         let tcp = group(Protocol::Tcp, reps.clone());
-        // A named host is pinned only to its own representative.
-        assert_eq!(
-            targets(&tcp, &spec(ProbeKind::Https, "discord.com")),
-            [Target::Https {
-                host: "discord.com".into(),
-                ip: Some("162.159.1.1".parse().unwrap())
-            }]
-        );
+        // Every representative is probed at its own address; a nameless one under the named host.
         assert_eq!(
             targets(&tcp, &spec(ProbeKind::Https, "discord.gg")),
-            [Target::Https {
-                host: "discord.gg".into(),
-                ip: None
-            }]
+            [
+                Target::Https {
+                    host: "discord.com".into(),
+                    ip: Some("162.159.1.1".parse().unwrap())
+                },
+                Target::Https {
+                    host: "discord.gg".into(),
+                    ip: Some("162.159.1.2".parse().unwrap())
+                }
+            ]
         );
         // Observed: representatives with a name only.
         assert_eq!(targets(&tcp, &spec(ProbeKind::Https, "observed")).len(), 1);
@@ -972,6 +966,24 @@ mod tests {
             ]
         );
         assert_eq!(targets(&udp, &spec(ProbeKind::Ping, "observed")).len(), 2);
+    }
+
+    #[test]
+    fn a_named_probe_hits_the_culprit() {
+        let tcp = Group {
+            key: "x.googlevideo.com".into(),
+            ..group(
+                Protocol::Tcp,
+                vec![flow("173.194.1.5:443", Some("x.googlevideo.com"))],
+            )
+        };
+        assert_eq!(
+            targets(&tcp, &spec(ProbeKind::Https, "www.youtube.com")),
+            [Target::Https {
+                host: "x.googlevideo.com".into(),
+                ip: Some("173.194.1.5".parse().unwrap())
+            }]
+        );
     }
 
     #[test]
