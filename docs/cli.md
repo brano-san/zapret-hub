@@ -64,7 +64,7 @@ stdout — один JSON-документ с отступами, в UTF-8. Пр�
 | 1 | приложение выполнило команду с ошибкой, или прогон тестов завершился ошибкой |
 | 2 | ошибка в аргументах или нет `--yes`: CLI отклонил команду сам, ничего не изменено |
 | 3 | приложение недоступно или отказало, команда не выполнялась: не запущено, CLI выключен, канал занят дольше 10 с, версии CLI и приложения не совпадают. Исключение: ``Zapret Hub closed the connection without a full answer, so the command may have run: check with `zapret-hub-cli status` `` — команда могла выполниться |
-| 4 | `tests wait` или `tests run --wait` упёрлись в `--timeout` |
+| 4 | `tests wait`, `tests run --wait` или `diag run --wait` упёрлись в `--timeout` |
 
 Код 0 значит, что команда выполнена, а не что проверка прошла: `apply`, `apply-best`, `restart`, `quick-check`
 (и `custom save` активной стратегии) печатают итог быстрой проверки, `proxy check` — итог проверки прокси, и
@@ -145,7 +145,7 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `routes preset discord-voice\|discord\|dbd` | добавляет готовое правило «Discord голос», «Discord целиком» или «Dead by Daylight» | `add_route_preset` |
 | `routes flows [--all]` | открытые потоки и закрытые за последние 30 с; `--all` — и потоки без правила, пойманные ради правил по программе | `route_flows` |
 | `diag profiles` | профили диагностики | `diag_profiles` |
-| `diag run (--profile <id>\|--app <exe>) [--mode auto\|ask] [--observe <с>] [--budget <мин>] [--wait]` | запускает диагностику (раздел «Диагностика») | `start_diag` |
+| `diag run (--profile <id>\|--app <exe>) [--mode auto\|ask] [--observe <с>] [--budget <мин>] [--wait] [--timeout <s>]` | запускает диагностику (раздел «Диагностика») | `start_diag` |
 | `diag status` | идёт ли диагностика, её шаг, вопрос и список виновников для выбора | `diag_live` |
 | `diag answer yes\|no\|skip` | ответ на вопрос «Работает?» режима `ask` | `diag_answer` |
 | `diag choose <key>…` | проверить только эти группы виновников | `diag_choose` |

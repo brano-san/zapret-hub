@@ -32,7 +32,7 @@ const USAGE: u8 = 2;
 /// The app is not running, refused (the CLI is off, another protocol) or cannot be read: fix the
 /// setup, not the command.
 const UNAVAILABLE: u8 = 3;
-/// `tests wait` or `tests run --wait` reached `--timeout`.
+/// `tests wait`, `tests run --wait` or `diag run --wait` reached `--timeout`.
 const TIMED_OUT: u8 = 4;
 
 const ERROR_FILE_NOT_FOUND: i32 = 2;
@@ -278,6 +278,9 @@ enum DiagCommand {
         /// Wait for the end and print the report; the progress goes to stderr.
         #[arg(long)]
         wait: bool,
+        /// Stop waiting after this many seconds (exit code 4); the diagnostics go on.
+        #[arg(long, requires = "wait")]
+        timeout: Option<u64>,
     },
     /// The step, the progress and the question, if it waits for an answer.
     Status,
@@ -795,6 +798,7 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
             observe,
             budget,
             wait,
+            timeout,
         }) => {
             let request = DiagRequest {
                 profile,
@@ -811,7 +815,7 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
                 request: request.clone(),
             })?;
             if wait {
-                return wait_for_diag(call, before, request.mode, note);
+                return wait_for_diag(call, before, request.mode, timeout, note);
             }
             return Ok(Done::Json(json!({ "started": true, "request": request })));
         }
@@ -1113,7 +1117,15 @@ fn diag_step(step: &DiagStep) -> Option<String> {
 /// Asks `diag_status` every 2 s until the run is over, then prints its report. The progress and the
 /// question go to stderr, each once. In `auto` the app takes every culprit itself; in `ask` the
 /// culprits wait for `diag choose` (else all after 120 s).
-fn wait_for_diag(call: Call, before: Option<String>, mode: Mode, note: Note) -> Result<Done, Fail> {
+fn wait_for_diag(
+    call: Call,
+    before: Option<String>,
+    mode: Mode,
+    timeout: Option<u64>,
+    note: Note,
+) -> Result<Done, Fail> {
+    // As in `wait_for_run`: a deadline the clock cannot reach is no deadline.
+    let deadline = timeout.and_then(|secs| Instant::now().checked_add(Duration::from_secs(secs)));
     let mut last = (None, None, false);
     loop {
         let live: Option<DiagLive> = read(call(Request::DiagStatus)?)?;
@@ -1136,7 +1148,17 @@ fn wait_for_diag(call: Call, before: Option<String>, mode: Mode, note: Note) -> 
             );
         }
         last.2 = choosing;
-        std::thread::sleep(DIAG_POLL);
+        let left = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+        if left.is_some_and(|left| left.is_zero()) {
+            return Err(Fail::new(
+                TIMED_OUT,
+                format!(
+                    "the diagnostics are still going after {} s: follow them with `zapret-hub-cli diag status`",
+                    timeout.unwrap_or_default()
+                ),
+            ));
+        }
+        std::thread::sleep(left.map_or(DIAG_POLL, |left| left.min(DIAG_POLL)));
     }
     match newest_report(call)? {
         Some(id) if Some(&id) != before.as_ref() => {
@@ -2169,6 +2191,28 @@ mod tests {
                 id: "2026-10-22_10-00-00".into()
             }
         );
+    }
+
+    #[test]
+    fn diag_run_wait_stops_at_the_timeout() {
+        let (outcome, asked) = drive(
+            &[
+                "diag",
+                "run",
+                "--profile",
+                "discord",
+                "--wait",
+                "--timeout",
+                "0",
+            ],
+            vec![
+                Ok(json!([])),
+                Ok(Value::Null),
+                Ok(diag_live(DiagStep::Rechecking, None, false)),
+            ],
+        );
+        assert_eq!(code(outcome), TIMED_OUT);
+        assert_eq!(asked.len(), 3);
     }
 
     #[test]
