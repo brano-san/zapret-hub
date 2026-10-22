@@ -16,6 +16,13 @@ pub struct ServiceSnap {
     pub running: bool,
 }
 
+/// The router as it ran: the app puts it back (`zapret` knows nothing of the router).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RouterSnap {
+    pub enabled: bool,
+    pub paused: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Snapshot {
     /// The operation it guards: `apply`, `tests`, `ipset`, `game_filter`, `remove_service`.
@@ -44,6 +51,9 @@ pub struct Snapshot {
     /// The flag file `utils\game_filter.enabled`, which the `game_filter` operation writes
     /// before it reinstalls the service.
     pub game_filter: Option<GameFilter>,
+    /// Filled by the app; a `pending.json` from before it has none.
+    #[serde(default)]
+    pub router: Option<RouterSnap>,
 }
 
 /// `data/state/pending.json`
@@ -101,6 +111,7 @@ impl Snapshot {
             ipset: folder.map(ipset::try_mode).transpose()?,
             ipset_backup: folder.is_some_and(ipset::has_backup),
             game_filter: folder.map(game_filter::try_read).transpose()?,
+            router: None,
         })
     }
 

@@ -106,6 +106,8 @@ struct Inner {
     /// State and session as `control` left them: `status` and `flows` never wait for a launch.
     snapshot: Mutex<(RouterState, Option<Arc<Live>>)>,
     rules: Mutex<RulesFile>,
+    /// A rule held in memory only (a diagnostics run): on top of the file rules, never saved.
+    temporary: Mutex<Option<Rule>>,
     /// The table in force; a launch starts from it.
     table: Mutex<Table>,
     /// Outlives sessions: programs keep resolved addresses cached across a pause.
@@ -171,9 +173,9 @@ impl Router {
             filter_error: None,
         };
         reload(&routes, &mut file, true);
-        let table = Mutex::new(Table::new(&file.list));
         Router(Arc::new(Inner {
-            table,
+            table: Mutex::new(Table::new(&file.list)),
+            temporary: Mutex::new(None),
             names: Arc::default(),
             images: Arc::default(),
             path: routes,
@@ -233,10 +235,14 @@ impl Router {
 
     /// The pause flag survives: only `resume` clears it (ruling F4).
     pub fn stop(&self) {
-        self.control(|_, ctl| {
+        self.control(|inner, ctl| {
             halt(ctl);
             ctl.setup = None;
             ctl.state = RouterState::Off;
+            if inner.temporary.lock().unwrap().take().is_some() {
+                let table = inner.table_of(&inner.rules.lock().unwrap().list);
+                *inner.table.lock().unwrap() = table;
+            }
         });
     }
 
@@ -292,10 +298,38 @@ impl Router {
                     rule: r.clone(),
                     traffic: traffic(&r.name),
                 })
+                .chain(self.0.temporary.lock().unwrap().iter().map(|r| RuleRow {
+                    rule: r.clone(),
+                    traffic: traffic(&r.name),
+                }))
                 .collect(),
             error: file.error(),
             system_doh: doh::system_doh(),
         }
+    }
+
+    /// Puts a rule on top of the file rules (`None` takes it off) without saving it; a running
+    /// session routes it at once. `stop` drops it, `pause` keeps it.
+    pub fn set_temporary(&self, rule: Option<Rule>) -> Result<()> {
+        self.0.refresh();
+        let file = self.0.rules.lock().unwrap();
+        if let Some(rule) = &rule {
+            if let Some(e) = rules::check(rule).first() {
+                bail!("{}: {}: {}", rule.name, e.field, e.message);
+            }
+            if file.list.iter().any(|r| r.name == rule.name) {
+                bail!("a rule named {} already exists", rule.name);
+            }
+        }
+        *self.0.temporary.lock().unwrap() = rule;
+        let table = self.0.table_of(&file.list);
+        drop(file);
+        self.0.apply(table);
+        Ok(())
+    }
+
+    pub fn temporary(&self) -> Option<Rule> {
+        self.0.temporary.lock().unwrap().clone()
     }
 
     pub fn flows(&self, all: bool) -> Vec<FlowRow> {
@@ -318,7 +352,7 @@ impl Router {
         let mut file = self.0.rules.lock().unwrap();
         if reload(&self.0.path, &mut file, false) {
             // Changed again since `refresh`: apply it too (not under the rules lock).
-            let table = Table::new(&file.list);
+            let table = self.0.table_of(&file.list);
             drop(file);
             self.0.apply(table);
             file = self.0.rules.lock().unwrap();
@@ -336,7 +370,7 @@ impl Router {
         rules::save(&self.0.path, &list)?;
         file.modified = modified(&self.0.path);
         file.list = list;
-        let table = Table::new(&file.list);
+        let table = self.0.table_of(&file.list);
         drop(file);
         self.0.apply(table);
         Ok(out)
@@ -384,10 +418,17 @@ impl Inner {
     fn refresh(&self) {
         let mut file = self.rules.lock().unwrap();
         if reload(&self.path, &mut file, false) {
-            let table = Table::new(&file.list);
+            let table = self.table_of(&file.list);
             drop(file);
             self.apply(table);
         }
+    }
+
+    /// The file rules with the temporary one on top.
+    fn table_of(&self, list: &[Rule]) -> Table {
+        let mut list = list.to_vec();
+        list.extend(self.temporary.lock().unwrap().clone());
+        Table::new(&list)
     }
 
     fn apply(&self, table: Table) {

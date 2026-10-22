@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use zapret::game_filter::{self, GameFilter, GameFilterMode};
 use zapret::ipset::IpsetMode;
 use zapret::procs::Proc;
-use zapret::snapshot::{self, ServiceSnap, Snapshot, pending_path};
+use zapret::snapshot::{self, RouterSnap, ServiceSnap, Snapshot, pending_path};
 
 fn filter(mode: GameFilterMode, tcp: &str, udp: &str) -> GameFilter {
     GameFilter {
@@ -45,6 +45,7 @@ fn sample(ipset: IpsetMode) -> Snapshot {
         ipset: Some(ipset),
         ipset_backup: false,
         game_filter: Some(filter(GameFilterMode::Tcp, "2000-2100", "1024-65535")),
+        router: None,
     }
 }
 
@@ -95,6 +96,43 @@ fn a_pending_json_from_before_zapret2_still_loads() {
     assert_eq!(snap.strategy2, None);
     assert!(snap.manual_winws2.is_empty());
     assert!(!snap.zapret2, "its restore leaves zapret2 alone");
+}
+
+#[test]
+fn old_pending_without_router_loads() {
+    let json = serde_json::to_string(&sample(IpsetMode::Loaded)).unwrap();
+    let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    value.as_object_mut().unwrap().remove("router");
+    let snap: Snapshot = serde_json::from_value(value).unwrap();
+    assert_eq!(snap.router, None);
+}
+
+#[test]
+fn router_section_roundtrips() {
+    let snap = Snapshot {
+        router: Some(RouterSnap {
+            enabled: true,
+            paused: false,
+        }),
+        ..sample(IpsetMode::Loaded)
+    };
+    let back: Snapshot = serde_json::from_str(&serde_json::to_string(&snap).unwrap()).unwrap();
+    assert_eq!(back, snap);
+}
+
+#[test]
+fn recover_restores_router_section() {
+    let data = tempfile::tempdir().unwrap();
+    let path = pending_path(data.path());
+    let snap = Snapshot {
+        router: Some(RouterSnap {
+            enabled: true,
+            paused: true,
+        }),
+        ..sample(IpsetMode::Loaded)
+    };
+    snap.save(&path).unwrap();
+    assert_eq!(Snapshot::load(&path).unwrap(), Some(snap));
 }
 
 #[test]

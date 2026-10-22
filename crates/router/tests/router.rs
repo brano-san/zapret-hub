@@ -239,3 +239,55 @@ fn an_app_rule_is_saved_with_its_programs() {
         ["DeadByDaylight-Win64-Shipping.exe"]
     );
 }
+
+fn temp_rule() -> rules::Rule {
+    let mut rule = rules::preset(Preset::DiscordVoice);
+    rule.name = "diag-1".into();
+    rule
+}
+
+#[test]
+fn temporary_rule_not_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("routes.toml");
+    let r = router(dir.path());
+    r.set_temporary(Some(temp_rule())).unwrap();
+    assert!(!path.exists(), "routes.toml is not written");
+    assert_eq!(r.rules().rules[0].rule.name, "diag-1");
+    assert_eq!(r.temporary().unwrap().name, "diag-1");
+    assert_eq!(
+        r.table().match_udp("104.29.1.1:50000".parse().unwrap()),
+        Some("diag-1")
+    );
+    r.set_temporary(None).unwrap();
+    assert!(r.rules().rules.is_empty() && r.temporary().is_none() && r.table().is_empty());
+}
+
+#[test]
+fn temporary_rule_checked() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = router(dir.path());
+    let mut empty = temp_rule();
+    empty.ips.clear();
+    empty.domains.clear();
+    empty.apps.clear();
+    assert!(r.set_temporary(Some(empty)).is_err());
+    r.edit(|list| rules::add(list, rules::preset(Preset::DiscordVoice)))
+        .unwrap();
+    let mut same = temp_rule();
+    same.name = r.rules().rules[0].rule.name.clone();
+    let err = r.set_temporary(Some(same)).unwrap_err();
+    assert!(format!("{err:#}").contains("already exists"), "{err:#}");
+    assert!(r.temporary().is_none());
+}
+
+#[test]
+fn stop_clears_temporary_and_pause_keeps_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = router(dir.path());
+    r.set_temporary(Some(temp_rule())).unwrap();
+    r.pause();
+    assert!(r.temporary().is_some());
+    r.stop();
+    assert!(r.temporary().is_none() && r.table().is_empty());
+}
