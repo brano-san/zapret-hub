@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Rule, StrategyResult } from "./ipc/bindings";
-import { copyStem, blockSummary, bytes, programName, proxyLabel, routeDraft, routeSummary, viaLabel, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, foldersReady, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
+import { copyStem, defaultTestable, blockSummary, bytes, programName, proxyLabel, routeDraft, routeSummary, viaLabel, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, foldersReady, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
 import { S } from "./strings";
 
 describe("blockSummary", () => {
@@ -31,6 +31,14 @@ describe("copyStem", () => {
     expect(copyStem("zapret2:general (Flowseal)")).toBe("Flowseal");
     expect(copyStem("zapret2:mine")).toBe("mine");
     expect(copyStem("general (ALT11)")).toBe("ALT11");
+    expect(copyStem("general (HUB mine)")).toBe("mine");
+  });
+});
+
+describe("defaultTestable", () => {
+  it("leaves out broken strategies and the Flowseal copies", () => {
+    const row = (name: string, error: string | null, flowseal_copy: boolean) => ({ name, error, flowseal_copy });
+    expect(defaultTestable([row("general", null, false), row("zapret2:general (ALT5)", null, true), row("bad", "oops", false), row("zapret2:mine", null, false)])).toEqual(["general", "zapret2:mine"]);
   });
 });
 

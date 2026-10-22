@@ -26,8 +26,13 @@ export function zapret2Name(name: string): string | null {
 
 /** The stem of a copy's name: `ALT5` for `zapret2:general (ALT5)` (a name with parentheses is refused), else the name without the prefix. */
 export function copyStem(name: string): string {
-  const own = zapret2Name(name) ?? name;
+  const own = ownName(name);
   return /\((.+)\)$/.exec(own)?.[1] ?? own;
+}
+
+/** What a test run takes without names: strategies that parse, without the built-in Flowseal copies (sub-project 8 spec 1). */
+export function defaultTestable(rows: { name: string; error: string | null; flowseal_copy: boolean }[]): string[] {
+  return rows.filter((row) => row.error === null && !row.flowseal_copy).map((row) => row.name);
 }
 
 /** `"%LISTS%list-general.txt"` → `list-general.txt`. */

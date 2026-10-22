@@ -232,6 +232,11 @@ Core 13 обещал выделить общий интерфейс движка
 - Команды `zapret2_profiles`, `zapret2_circular`, `zapret2_merge` — только окно: CLI пишет текст
   стратегии сам.
 
+**Поправка (подпроект 8, 0.7.0).** Кроме `general` и `general-sni` встроены 22 копии стратегий Flowseal 1.10.3
+на `winws2` (таблица `FLOWSEAL` в `crates/zapret2`, флаг `flowseal_copy`): имена `zapret2:general (ALT5)` и т.д.,
+`general.bat` — `zapret2:general (Flowseal)`. В прогон тестов без имён и в выбор окна по умолчанию не входят.
+Спецификация — `2026-10-17-zapret-hub-flowseal-zapret2-design.md`, приёмка — `docs/flowseal-zapret2.md`.
+
 ## 6. Служба и переключение движков
 
 - Служба `zapret2`, отображаемое имя `zapret2`, автозапуск.

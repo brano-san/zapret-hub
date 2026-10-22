@@ -2,7 +2,7 @@
   import { commands, type RunSummary, type Score, type StrategyRow, type Suite, type TestRun } from "$lib/ipc/bindings";
   import { call } from "$lib/api";
   import { app, change, refreshLive } from "$lib/app.svelte";
-  import { estimateMinutes, ms, runDate, zapret2Name } from "$lib/format";
+  import { defaultTestable, estimateMinutes, ms, runDate, zapret2Name } from "$lib/format";
   import { S } from "$lib/strings";
   import CopyButton from "../components/CopyButton.svelte";
   import RepeatsSelect from "../components/RepeatsSelect.svelte";
@@ -17,7 +17,7 @@
   // The selection is set once; later reloads keep what the user chose.
   let picked = false;
 
-  const usable = (list: StrategyRow[]) => list.filter((row) => row.error === null && !row.flowseal_copy).map((row) => row.name);
+  const usable = defaultTestable;
   const flowseal = $derived(rows.filter((row) => zapret2Name(row.name) === null));
   const zapret2 = $derived(rows.filter((row) => zapret2Name(row.name) !== null));
   // Ticks or clears one group; the other group's ticks stay.
