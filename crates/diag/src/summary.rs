@@ -273,6 +273,33 @@ fn pattern_texts(patterns: &[Pattern], explanations: &mut Vec<String>, fixes: &m
                 protocol_text(*has),
                 protocol_text(*needs)
             )),
+            Pattern::R1ViaSystemProxy {
+                domain,
+                direct_ok,
+                proxy_ok,
+                route,
+                direct,
+                rule,
+            } => {
+                let ok = |b: bool| if b { "работает" } else { "не отвечает" };
+                explanations.push(format!(
+                    "{domain} идёт через системный прокси: напрямую {}, через прокси {}; NekoBox отправляет его {}",
+                    ok(*direct_ok),
+                    ok(*proxy_ok),
+                    route.as_deref().unwrap_or("неизвестно куда: в журнале NekoBox его нет")
+                ));
+                if !direct_ok && *proxy_ok && *direct {
+                    let what = rule.as_deref().unwrap_or(domain);
+                    push(
+                        fixes,
+                        Fix::Manual {
+                            text: format!(
+                                "NekoBox: Настройки → Маршрутизация → Basic: убрать «{what}» из Direct, добавить «{domain}» в Proxy; затем «Проверить снова»"
+                            ),
+                        },
+                    );
+                }
+            }
             Pattern::R2VoiceUdp { server, via_vpn } => explanations.push(if *via_vpn {
                 format!("голос Discord ({server}) идёт через VPN: медиасервер видит адрес прокси")
             } else {
@@ -390,11 +417,27 @@ pub fn summarize(
         explanations.push(LIVE_ONLY.into());
     }
     let explanations = unique(explanations);
+    let proxied_broken: Vec<&str> = patterns
+        .iter()
+        .filter_map(|p| match p {
+            Pattern::R1ViaSystemProxy {
+                domain,
+                direct_ok,
+                proxy_ok,
+                ..
+            } if !direct_ok || !proxy_ok => Some(domain.as_str()),
+            _ => None,
+        })
+        .collect();
     let verdict_text = match verdict {
         _ if whitelist => WHITELIST.into(),
         Verdict::NoFlows => {
             format!("программа не соединялась за {observe_secs} с: запустите её и повторите")
         }
+        Verdict::Clean if !proxied_broken.is_empty() => format!(
+            "напрямую соединения программы проходят; через системный прокси не работает: {}",
+            proxied_broken.join(", ")
+        ),
         Verdict::Clean => "соединения программы проходят; если проблема есть, она не в сети".into(),
         Verdict::Culprits(g) => format!(
             "проблемные адреса: {}",

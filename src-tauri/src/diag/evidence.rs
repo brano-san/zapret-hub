@@ -8,7 +8,7 @@ use diag::culprits::Fault;
 use diag::evaluate::works;
 use diag::logs;
 use diag::paths::Ctx;
-use diag::patterns::Evidence;
+use diag::patterns::{self, Evidence, Proxied};
 use diag::run::Outcome;
 use probe::curl::{CheckStatus, Via};
 use router::observe::FlowCounters;
@@ -177,6 +177,33 @@ pub(super) fn evidence(
             .filter_map(|(d, check)| check.join().unwrap_or(false).then(|| d.clone()))
             .collect()
     });
+    // Spec 6: the program's domains through the system proxy, directly and via the proxy.
+    let domains = match (&neko, &socks5) {
+        (Some(conns), Some(_)) if !state.diag_canceled() => patterns::proxied_domains(flows, conns),
+        _ => Vec::new(),
+    };
+    let proxied = std::thread::scope(|scope| {
+        let checks: Vec<_> = domains
+            .iter()
+            .map(|domain| {
+                let ok = |via: Via| {
+                    scope.spawn(move || {
+                        probe::curl::https_via(domain, None, &via, None).status == CheckStatus::Ok
+                    })
+                };
+                let proxy = Via::Socks5(socks5.clone().unwrap_or_default());
+                (domain, ok(Via::Direct), ok(proxy))
+            })
+            .collect();
+        checks
+            .into_iter()
+            .map(|(domain, direct, proxy)| Proxied {
+                domain: domain.clone(),
+                direct_ok: direct.join().unwrap_or(false),
+                proxy_ok: proxy.join().unwrap_or(false),
+            })
+            .collect()
+    });
     let ru_ok = network.then(|| {
         probe::curl::https_via("ya.ru", None, &Via::Direct, None).status == CheckStatus::Ok
     });
@@ -190,6 +217,7 @@ pub(super) fn evidence(
             dns_mismatch,
             ru_ok,
             foreign_syn_dead: foreign_syn_dead(outcome),
+            proxied,
         },
         missing,
     )

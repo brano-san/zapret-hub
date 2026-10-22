@@ -4,7 +4,7 @@ use diag::evaluate::Score;
 use diag::logs::discord::{Dave, Voice};
 use diag::logs::neko::{Conn, Route};
 use diag::paths::{Ctx, PathKind};
-use diag::patterns::{Evidence, Pattern, detect};
+use diag::patterns::{Evidence, Pattern, Proxied, detect, proxied_domains};
 use diag::profiles::{ProbeKind, ProbeSpec, Profile};
 use diag::report;
 use diag::run::{GroupResult, Outcome};
@@ -128,6 +128,7 @@ fn evidence() -> Evidence {
         dns_mismatch: vec![],
         ru_ok: None,
         foreign_syn_dead: None,
+        proxied: vec![],
     }
 }
 
@@ -232,6 +233,7 @@ fn r3_slow_dns() {
         port: 443,
         route: Route::Proxy,
         outbound_ms: Some(ms),
+        from_port: None,
     };
     let mut e = evidence();
     e.neko = Some(vec![
@@ -313,6 +315,7 @@ fn r6_with_peer_blames_peer() {
         port: 2096,
         route: Route::Proxy,
         outbound_ms: Some(100),
+        from_port: None,
     }]);
     let p = detect(&e, &empty(), &ctx());
     assert_eq!(
@@ -346,6 +349,7 @@ fn r6_alone_blames_us() {
         port: 2096,
         route: Route::Direct,
         outbound_ms: Some(100),
+        from_port: None,
     }]);
     let p = detect(&e, &empty(), &ctx());
     assert_eq!(
@@ -726,4 +730,79 @@ fn apply_unites_with_the_rule_of_that_name() {
         },
     );
     assert_eq!(list.len(), 2);
+}
+
+#[test]
+fn r1_a_proxied_domain_sent_direct() {
+    const DBD_API: &str = "steam.live.bhvrdbd.com";
+    let conn = |host: &str, from_port| Conn {
+        host: host.into(),
+        port: 443,
+        route: Route::Direct,
+        outbound_ms: Some(20),
+        from_port,
+    };
+    let conns = vec![
+        conn(DBD_API, Some(63510)),
+        conn(DBD_API, Some(63511)),
+        conn("1.2.3.4", Some(63511)),
+        conn("other.example.com", Some(1)),
+        conn("other.example.com", None),
+    ];
+    let proxied = |port| FlowCounters {
+        local_port: port,
+        via_system_proxy: true,
+        ..flow(Protocol::Tcp, "127.0.0.1:18082")
+    };
+    let mut flows = vec![proxied(63510), proxied(63511)];
+    flows.push(flow(Protocol::Tcp, "1.1.1.1:443"));
+    assert_eq!(proxied_domains(&flows, &conns), [DBD_API]);
+    let many: Vec<Conn> = (0..9)
+        .map(|i| conn(&format!("h{i}.example.com"), Some(63510)))
+        .collect();
+    assert_eq!(proxied_domains(&flows, &many).len(), 5);
+
+    let mut e = evidence();
+    e.neko = Some(conns);
+    e.neko_routes = Some(diag::logs::neko_routes::Routes {
+        direct: vec!["domain:bhvrdbd.com".into()],
+        ..Default::default()
+    });
+    e.proxied = vec![
+        Proxied {
+            domain: DBD_API.into(),
+            direct_ok: false,
+            proxy_ok: true,
+        },
+        Proxied {
+            domain: "fine.example.com".into(),
+            direct_ok: true,
+            proxy_ok: true,
+        },
+    ];
+    let p = detect(&e, &empty(), &ctx());
+    assert_eq!(
+        p,
+        [Pattern::R1ViaSystemProxy {
+            domain: DBD_API.into(),
+            direct_ok: false,
+            proxy_ok: true,
+            route: Some("напрямую".into()),
+            direct: true,
+            rule: Some("domain:bhvrdbd.com".into()),
+        }]
+    );
+    let s = summarize(&Verdict::Clean, &empty(), &p, &ctx(), ID.into(), 30);
+    assert!(s.verdict_text.contains(DBD_API), "{}", s.verdict_text);
+    assert!(
+        matches!(&s.fixes[..], [Fix::Manual { text }] if text.contains("убрать «domain:bhvrdbd.com» из Direct")),
+        "{:?}",
+        s.fixes
+    );
+    // Via the proxy it fails too: nothing to move in NekoBox.
+    e.proxied[0].proxy_ok = false;
+    let p = detect(&e, &empty(), &ctx());
+    let s = summarize(&Verdict::Clean, &empty(), &p, &ctx(), ID.into(), 30);
+    assert!(s.fixes.is_empty());
+    assert_eq!(s.explanations.len(), 1, "{:?}", s.explanations);
 }

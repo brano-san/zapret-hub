@@ -33,6 +33,22 @@ fn neko_pairs_inbound_with_outbound() {
 }
 
 #[test]
+fn neko_keeps_the_client_port() {
+    let log: Vec<String> = [
+        "INFO[1] [7 0ms] inbound/mixed[mixed-in]: inbound connection from 127.0.0.1:63510",
+        "INFO[1] [7 0ms] inbound/mixed[mixed-in]: inbound connection to steam.live.bhvrdbd.com:443",
+        "INFO[1] [7 2ms] outbound/direct[bypass]: outbound connection to steam.live.bhvrdbd.com:443",
+        "INFO[2] [8 0ms] inbound/mixed[mixed-in]: inbound connection to other.example.com:443",
+        "INFO[2] [8 2ms] outbound/vless[proxy]: outbound connection to other.example.com:443",
+    ]
+    .map(String::from)
+    .to_vec();
+    let conns = neko::parse(&log);
+    assert_eq!(conns[0].from_port, Some(63510));
+    assert_eq!(conns[1].from_port, None);
+}
+
+#[test]
 fn neko_slow_dns() {
     let slow = neko::parse(&lines("neko-slow-dns.log"));
     assert_eq!(slow.len(), 6);

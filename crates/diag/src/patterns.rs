@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::evaluate::works;
 use crate::logs::discord::{self, Voice};
 use crate::logs::neko::{self, Conn, Route};
-use crate::logs::neko_routes::Routes;
+use crate::logs::neko_routes::{Routes, rule_for};
 use crate::paths::{Ctx, PathKind};
 use crate::run::Outcome;
 
@@ -20,6 +20,19 @@ pub enum Pattern {
         rule: String,
         has: Protocol,
         needs: Protocol,
+    },
+    /// A domain the program sent through the system proxy fails directly or via the proxy (spec 6,
+    /// 8, 16 Р1).
+    R1ViaSystemProxy {
+        domain: String,
+        direct_ok: bool,
+        proxy_ok: bool,
+        /// Where NekoBox sent it (`neko.log`).
+        route: Option<String>,
+        /// NekoBox sends it direct, by its log or else by its rules.
+        direct: bool,
+        /// The `routes_box` rule line that applies to it.
+        rule: Option<String>,
     },
     R2VoiceUdp {
         server: String,
@@ -57,6 +70,33 @@ pub struct Evidence {
     pub ru_ok: Option<bool>,
     /// Foreign addresses do not answer a SYN on any path.
     pub foreign_syn_dead: Option<bool>,
+    /// The program's domains through the system proxy, probed directly and via the proxy.
+    pub proxied: Vec<Proxied>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Proxied {
+    pub domain: String,
+    pub direct_ok: bool,
+    pub proxy_ok: bool,
+}
+
+/// At most this many system-proxy domains are probed.
+pub const PROXIED_MAX: usize = 5;
+
+/// The distinct domains of the flows that went through the system proxy, by NekoBox's client
+/// port; addresses are left out (no name to check). At most `PROXIED_MAX`.
+pub fn proxied_domains(flows: &[FlowCounters], conns: &[Conn]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for f in flows.iter().filter(|f| f.via_system_proxy) {
+        for c in conns.iter().filter(|c| c.from_port == Some(f.local_port)) {
+            if c.host.parse::<std::net::IpAddr>().is_err() && !out.contains(&c.host) {
+                out.push(c.host.clone());
+            }
+        }
+    }
+    out.truncate(PROXIED_MAX);
+    out
 }
 
 /// Cloudflare voice (`104.29.0.0/16`) or GCP screen share (`35.217.0.0/16`).
@@ -87,6 +127,32 @@ pub fn detect(evidence: &Evidence, outcome: &Outcome, ctx: &Ctx) -> Vec<Pattern>
                 });
             }
         }
+    }
+    for p in evidence
+        .proxied
+        .iter()
+        .filter(|p| !p.direct_ok || !p.proxy_ok)
+    {
+        let route = evidence
+            .neko
+            .as_ref()
+            .and_then(|c| neko::route_of(c, &p.domain));
+        let rule = evidence
+            .neko_routes
+            .as_ref()
+            .and_then(|r| rule_for(r, &p.domain));
+        let direct = match &route {
+            Some(r) => *r == Route::Direct,
+            None => rule.as_ref().is_some_and(|(r, _)| *r == Route::Direct),
+        };
+        out.push(Pattern::R1ViaSystemProxy {
+            domain: p.domain.clone(),
+            direct_ok: p.direct_ok,
+            proxy_ok: p.proxy_ok,
+            route: route.as_ref().map(route_text),
+            direct,
+            rule: rule.map(|(_, line)| line),
+        });
     }
     for gr in &outcome.per_group {
         if gr.group.protocol == Protocol::Udp && gr.group.members.iter().any(discord_media) {

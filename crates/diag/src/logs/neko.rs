@@ -15,6 +15,9 @@ pub struct Conn {
     pub port: u16,
     pub route: Route,
     pub outbound_ms: Option<u32>,
+    /// The client's local port (`inbound connection from 127.0.0.1:<port>`): the same as the
+    /// observed flow's `local_port` of a program that went through the system proxy.
+    pub from_port: Option<u16>,
 }
 
 /// `LEVEL[time] [id 166ms] rest` -> (id, duration in ms, rest).
@@ -46,13 +49,21 @@ fn classify(kind: &str, tag: &str) -> Route {
 /// Pairs each `inbound connection to host:port` with the outbound line of the same id.
 pub fn parse(lines: &[String]) -> Vec<Conn> {
     let mut pending: HashMap<&str, (String, u16)> = HashMap::new();
+    let mut from: HashMap<&str, u16> = HashMap::new();
     let mut at: HashMap<&str, usize> = HashMap::new();
     let mut out: Vec<Conn> = Vec::new();
     for line in lines {
         let Some((id, ms, rest)) = split_id(line) else {
             continue;
         };
-        if let Some((head, t)) = rest.split_once(": inbound connection to ") {
+        if let Some((head, t)) = rest.split_once(": inbound connection from ") {
+            if head.starts_with("inbound/")
+                && let Some((_, p)) = t.trim().rsplit_once(':')
+                && let Ok(p) = p.parse()
+            {
+                from.insert(id, p);
+            }
+        } else if let Some((head, t)) = rest.split_once(": inbound connection to ") {
             if head.starts_with("inbound/")
                 && let Some((h, p)) = t.trim().rsplit_once(':')
                 && let Ok(p) = p.parse()
@@ -75,6 +86,7 @@ pub fn parse(lines: &[String]) -> Vec<Conn> {
                     port,
                     route: classify(kind, tag),
                     outbound_ms: None,
+                    from_port: from.get(id).copied(),
                 });
             }
         }
