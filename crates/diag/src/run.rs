@@ -6,8 +6,8 @@ use anyhow::ensure;
 use router::observe::FlowCounters;
 use serde::{Deserialize, Serialize};
 
-use crate::culprits::{Group, fault};
-use crate::evaluate::{Answer, Score, rank};
+use crate::culprits::{Fault, Group, fault};
+use crate::evaluate::{Answer, Score, rank, works};
 use crate::paths::{Ctx, PathKind, plan};
 use crate::profiles::{ProbeKind, ProbeSpec};
 
@@ -126,6 +126,8 @@ pub struct Live {
     pub results: Vec<(PathKind, Score)>,
 }
 
+pub const SYN_DEAD: &str = "не проверялось: адреса не отвечают на SYN ни напрямую, ни через прокси, стратегии это не исправят";
+
 /// Even count: the lower middle, as in `culprits::fault`.
 fn median(mut v: Vec<u32>) -> Option<u32> {
     v.sort_unstable();
@@ -182,6 +184,10 @@ pub fn run(env: &mut dyn Env, ctx: &Ctx, groups: &[Group], settings: &Settings) 
         rollback_error: None,
     };
     let mut stopped = false;
+    // Spec 16 Р5: every culprit SYN-dead looks like a whitelist; strategies cannot help there.
+    let syn_dead = groups
+        .iter()
+        .all(|g| matches!(g.fault, Fault::SynUnanswered { .. }));
     for (gi, group) in groups.iter().enumerate() {
         let (paths, skipped) = plan(group, ctx);
         let mut gr = GroupResult {
@@ -203,6 +209,15 @@ pub fn run(env: &mut dyn Env, ctx: &Ctx, groups: &[Group], settings: &Settings) 
             }
             if stopped {
                 gr.not_checked.push(label);
+                continue;
+            }
+            // After «Как сейчас», «Напрямую» and the proxy all failed (the proxy too: an address
+            // blocked by IP looks the same until then, and the proxy is its fix).
+            if syn_dead
+                && matches!(path, PathKind::Strategy { .. } | PathKind::Trick { .. })
+                && gr.results.iter().all(|(_, s)| !works(s))
+            {
+                gr.not_checked.push(format!("{label}: {SYN_DEAD}"));
                 continue;
             }
             env.progress(Progress::Path {

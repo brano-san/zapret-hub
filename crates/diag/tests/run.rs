@@ -5,7 +5,7 @@ use diag::culprits::{Fault, Group};
 use diag::evaluate::{Answer, Score, rank, works};
 use diag::paths::{Ctx, NO_TRICKS_FOR_SYN, PathKind, plan};
 use diag::profiles::{ProbeKind, ProbeSpec, Profile};
-use diag::run::{Env, Mode, Outcome, Progress, Request, Settings, run};
+use diag::run::{Env, Mode, Outcome, Progress, Request, SYN_DEAD, Settings, run};
 use router::observe::FlowCounters;
 use router::rules::{Protocol, Rule};
 
@@ -450,4 +450,59 @@ fn each_finished_path_reaches_the_env_and_a_new_group_starts_empty() {
     );
     let expected: Vec<usize> = (0..=first).chain(0..=second).collect();
     assert_eq!(env.results, expected);
+}
+
+#[test]
+fn syn_dead_everywhere_stops_before_strategies() {
+    let dead = Group {
+        fault: Fault::SynUnanswered { syns: 3 },
+        ..group(Protocol::Tcp, 443)
+    };
+    let mut env = Fake::default();
+    let out = run(
+        &mut env,
+        &ctx(true),
+        &[dead.clone()],
+        &settings(Mode::Auto, 600),
+    );
+    assert_eq!(
+        env.sets,
+        [
+            "Как сейчас",
+            "Напрямую мимо всего",
+            "Прокси точечно",
+            "Прокси без zapret"
+        ]
+    );
+    let gr = &out.per_group[0];
+    assert!(
+        gr.not_checked
+            .iter()
+            .any(|n| n == &format!("Стратегия A: {SYN_DEAD}")),
+        "{:?}",
+        gr.not_checked
+    );
+    // One answer is enough to go on.
+    let mut env = Fake::default();
+    env.works.insert("Прокси точечно".into());
+    run(
+        &mut env,
+        &ctx(true),
+        &[dead.clone()],
+        &settings(Mode::Auto, 600),
+    );
+    assert!(
+        env.sets.iter().any(|s| s == "Стратегия A"),
+        "{:?}",
+        env.sets
+    );
+    // Not every group SYN-dead: the whole search.
+    let mut env = Fake::default();
+    run(
+        &mut env,
+        &ctx(true),
+        &[dead, group(Protocol::Tcp, 443)],
+        &settings(Mode::Auto, 600),
+    );
+    assert_eq!(env.sets.iter().filter(|s| *s == "Стратегия A").count(), 2);
 }
