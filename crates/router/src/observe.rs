@@ -13,8 +13,7 @@ use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
 use crate::divert::{
-    self, DNS_FILTER, Dll, EVENT_SOCKET_CLOSE, FLAG_RECV_ONLY, FLAG_SNIFF, Handle, Layer,
-    MAX_FILTER_RANGES, MAX_PACKET,
+    self, DNS_FILTER, Dll, FLAG_RECV_ONLY, FLAG_SNIFF, Handle, Layer, MAX_FILTER_RANGES, MAX_PACKET,
 };
 use crate::dns::{self, Names};
 use crate::owner::Images;
@@ -420,8 +419,9 @@ struct Shared {
     stopped: AtomicBool,
     tally: Mutex<Tally>,
     names: Mutex<Names>,
-    /// Local ports of the programs' sockets; never removed during an observation (late packets).
-    ports: Mutex<HashSet<u16>>,
+    /// The programs' sockets by protocol and local port; never removed during an observation
+    /// (late packets).
+    ports: Mutex<HashSet<(Protocol, u16)>>,
     sockets: Handle,
     dns: Handle,
     sniff: Mutex<Option<Arc<Handle>>>,
@@ -465,6 +465,17 @@ fn read_sniff(shared: Arc<Shared>, handle: Arc<Handle>) -> JoinHandle<()> {
     })
 }
 
+const IPPROTO_UDP: u8 = 17;
+
+/// The rows of the programs' sockets: a TCP and a UDP socket may share a port number.
+pub fn of_programs(
+    mut rows: Vec<FlowCounters>,
+    ports: &HashSet<(Protocol, u16)>,
+) -> Vec<FlowCounters> {
+    rows.retain(|r| ports.contains(&(r.protocol, r.local_port)));
+    rows
+}
+
 impl Observer {
     /// `apps` as in routing rules (a file name or a full path).
     pub fn start(dll: &Path, apps: Vec<String>, proxy_port: Option<u16>) -> Result<Observer> {
@@ -491,15 +502,20 @@ impl Observer {
         let s = shared.clone();
         threads.push(std::thread::spawn(move || {
             let images = Images::default();
+            // `SOCKET_FILTER` passes BIND and CONNECT only.
             while let Ok((_, addr)) = s.sockets.recv(&mut []) {
-                if addr.event() == EVENT_SOCKET_CLOSE {
-                    continue;
-                }
                 if images
                     .get(addr.socket_pid())
                     .is_some_and(|exe| apps.iter().any(|a| runs(a, &exe)))
                 {
-                    s.ports.lock().unwrap().insert(addr.socket_local_port());
+                    let protocol = match addr.socket_protocol() {
+                        IPPROTO_UDP => Protocol::Udp,
+                        _ => Protocol::Tcp,
+                    };
+                    s.ports
+                        .lock()
+                        .unwrap()
+                        .insert((protocol, addr.socket_local_port()));
                 }
             }
         }));
@@ -525,8 +541,9 @@ impl Observer {
             while !s.stopped.load(Ordering::SeqCst) {
                 std::thread::sleep(POLL);
                 s.tally.lock().unwrap().tick(Instant::now());
-                let mut wanted: Vec<u16> = s.ports.lock().unwrap().iter().copied().collect();
+                let mut wanted: Vec<u16> = s.ports.lock().unwrap().iter().map(|k| k.1).collect();
                 wanted.sort_unstable();
+                wanted.dedup();
                 if wanted == current || opened.is_some_and(|at| at.elapsed() < REOPEN_GAP) {
                     continue;
                 }
@@ -561,8 +578,7 @@ impl Observer {
     /// The programs' flows so far, named from DNS where known.
     pub fn snapshot(&self) -> Vec<FlowCounters> {
         let ports = self.shared.ports.lock().unwrap().clone();
-        let mut rows = self.shared.tally.lock().unwrap().rows();
-        rows.retain(|r| ports.contains(&r.local_port));
+        let mut rows = of_programs(self.shared.tally.lock().unwrap().rows(), &ports);
         let names = self.shared.names.lock().unwrap();
         let now = Instant::now();
         for r in &mut rows {

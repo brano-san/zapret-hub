@@ -1,5 +1,5 @@
 use router::divert::MAX_FILTER_RANGES;
-use router::observe::{FlowCounters, Tally, sniff_filter};
+use router::observe::{FlowCounters, Tally, of_programs, sniff_filter};
 use router::packet::{ACK, RST, SYN, build_udp};
 use router::rules::Protocol;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -318,4 +318,16 @@ fn few_ports_stay_exact() {
 #[test]
 fn empty_ports_no_filter() {
     assert_eq!(sniff_filter(&[]), None);
+}
+
+#[test]
+fn a_udp_socket_does_not_claim_a_tcp_flow_of_its_port() {
+    let now = Instant::now();
+    let mut t = Tally::new(None);
+    t.outbound(&tcp(ME, SERVER, 1, 0, SYN, b""), now);
+    t.outbound(&build_udp(ME, SERVER, b"x", 1), now);
+    let ports = [(Protocol::Udp, ME.port())].into_iter().collect();
+    let rows = of_programs(t.rows(), &ports);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].protocol, Protocol::Udp);
 }
