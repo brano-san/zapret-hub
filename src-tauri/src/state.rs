@@ -238,21 +238,15 @@ impl AppState {
         Ok(())
     }
 
-    pub fn end_diag(&self) {
+    fn end_diag(&self) {
         *lock(&self.diag_live) = None;
         self.diagnosing.store(false, Ordering::SeqCst);
     }
 
     /// `end_diag` when dropped: held by the diagnostics thread, so even a panic in its end ends
     /// them.
-    pub fn diag_ends(&self) -> impl Drop + '_ {
-        struct Ends<'a>(&'a AppState);
-        impl Drop for Ends<'_> {
-            fn drop(&mut self) {
-                self.0.end_diag();
-            }
-        }
-        Ends(self)
+    pub fn diag_ends(&self) -> DiagEnds<'_> {
+        DiagEnds(self)
     }
 
     /// Refuses a change while diagnostics run: they put back what they found.
@@ -681,5 +675,14 @@ mod tests {
         });
         let err = state.engine2_required().unwrap_err();
         assert!(format!("{err:#}").contains("missing winws2.exe"), "{err:#}");
+    }
+}
+
+/// Ends the diagnostics when dropped (`AppState::diag_ends`).
+pub struct DiagEnds<'a>(&'a AppState);
+
+impl Drop for DiagEnds<'_> {
+    fn drop(&mut self) {
+        self.0.end_diag();
     }
 }

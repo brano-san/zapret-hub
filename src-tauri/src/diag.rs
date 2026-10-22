@@ -28,7 +28,7 @@ use zapret::snapshot::{RouterSnap, Snapshot, pending_path};
 
 use crate::actions::{self, state};
 use crate::dto::{DiagFinished, DiagProgress, NoticeLevel};
-use crate::state::AppState;
+use crate::state::{AppState, DiagEnds};
 use crate::{notify, routing, texts, window};
 
 mod apply;
@@ -106,7 +106,7 @@ pub fn start_diag(app: &AppHandle, request: Request) -> anyhow::Result<()> {
     let handle = app.clone();
     std::thread::spawn(move || {
         let state = actions::state(&handle);
-        let _ends = state.diag_ends();
+        let ends = state.diag_ends();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             job(&handle, &request, profile)
         }))
@@ -120,7 +120,7 @@ pub fn start_diag(app: &AppHandle, request: Request) -> anyhow::Result<()> {
                 message.unwrap_or("no message")
             ))
         });
-        finish(&handle, outcome);
+        finish(&handle, outcome, ends);
     });
     actions::changed(app);
     Ok(())
@@ -142,7 +142,8 @@ fn progress(app: &AppHandle, step: Progress) {
     }
 }
 
-fn finish(app: &AppHandle, outcome: anyhow::Result<Summary>) {
+/// `ends` is dropped once, before `DiagFinished`: ending twice could end the next run.
+fn finish(app: &AppHandle, outcome: anyhow::Result<Summary>, ends: DiagEnds<'_>) {
     let id = match outcome {
         Ok(summary) => {
             if let Some(err) = &summary.rollback_error {
@@ -172,7 +173,7 @@ fn finish(app: &AppHandle, outcome: anyhow::Result<Summary>) {
             None
         }
     };
-    state(app).end_diag();
+    drop(ends);
     if let Err(err) = (DiagFinished { id }).emit(app) {
         log::warn!("cannot report the end of diagnostics: {err}");
     }
