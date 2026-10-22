@@ -73,6 +73,12 @@ fn neko_routes(dir: &Path) -> PathBuf {
     config.join("routes_box").join(active)
 }
 
+/// Seconds since local midnight, as Discord stamps its log.
+fn wall_secs() -> f64 {
+    let t = exec::LocalTime::now();
+    f64::from(t.hour) * 3600.0 + f64::from(t.minute) * 60.0 + f64::from(t.second)
+}
+
 /// No address of the plain answer shares a /16 with DoH's: a CDN answers by location, but
 /// rarely from another /16. An empty DoH answer proves nothing.
 pub(super) fn differ(plain: &[Ipv4Addr], doh: &[Ipv4Addr]) -> bool {
@@ -146,7 +152,7 @@ pub(super) fn evidence(
         .iter()
         .filter_map(|(path, at)| read(path, *at))
         .filter(|lines| !lines.is_empty())
-        .map(|lines| logs::discord::parse(&lines))
+        .map(|lines| logs::discord::parse(&lines, Some(wall_secs())))
         .collect();
     let voice = voices
         .iter()

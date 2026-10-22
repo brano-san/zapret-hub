@@ -48,9 +48,19 @@ fn num_after(s: &str, key: &str) -> Option<u32> {
         .ok()
 }
 
-/// "Now" is the timestamp of the last timestamped line.
-pub fn parse(lines: &[String]) -> Voice {
-    let now = lines.iter().rev().find_map(|l| line_secs(l)).unwrap_or(0.0);
+/// A wait longer than this means the log's clock is not the wall clock (another time zone).
+const MAX_WAIT_SECS: f64 = 2.0 * 3600.0;
+
+/// From `t` to `now`, both seconds since midnight, across one midnight.
+fn since(now: f64, t: f64) -> f64 {
+    if now >= t { now - t } else { now + 86400.0 - t }
+}
+
+/// "Now" is `wall` (seconds since local midnight): a client stuck in silence writes no more lines.
+/// Without it, or when the log's clock disagrees with it, the timestamp of the last timestamped
+/// line.
+pub fn parse(lines: &[String], wall: Option<f64>) -> Voice {
+    let last = lines.iter().rev().find_map(|l| line_secs(l)).unwrap_or(0.0);
     let mut v = Voice::new();
     let mut key_package_at = None;
     for l in lines {
@@ -100,7 +110,10 @@ pub fn parse(lines: &[String]) -> Voice {
         }
     }
     if let (Dave::KeyPackageSent { .. }, Some(t)) = (&v.dave, key_package_at) {
-        let d = if now >= t { now - t } else { now + 86400.0 - t }; // midnight rollover
+        let d = wall
+            .map(|wall| since(wall, t))
+            .filter(|d| *d <= MAX_WAIT_SECS)
+            .unwrap_or_else(|| since(last, t));
         v.dave = Dave::KeyPackageSent {
             secs_waiting: d as u32,
         };

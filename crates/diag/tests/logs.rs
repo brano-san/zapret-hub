@@ -73,7 +73,7 @@ fn routes_box_rule_for_discord_media() {
 
 #[test]
 fn discord_stalled_with_peer() {
-    let v = discord::parse(&lines("discord-dave-stalled.log"));
+    let v = discord::parse(&lines("discord-dave-stalled.log"), None);
     assert_eq!(v.own_ssrc, Some(11029));
     assert_eq!(v.peers, vec![10923]);
     assert_eq!(v.local_address.as_deref(), Some("203.0.113.10"));
@@ -85,16 +85,42 @@ fn discord_stalled_with_peer() {
 
 #[test]
 fn discord_alone_stalled() {
-    let v = discord::parse(&lines("discord-dave-alone.log"));
+    let v = discord::parse(&lines("discord-dave-alone.log"), None);
     assert!(v.peers.is_empty());
     assert!(discord::stalled(&v));
 }
 
 #[test]
 fn discord_done() {
-    let v = discord::parse(&lines("discord-dave-done.log"));
+    let v = discord::parse(&lines("discord-dave-done.log"), None);
     assert_eq!(v.dave, discord::Dave::Done);
     assert!(!discord::stalled(&v));
+}
+
+#[test]
+fn discord_waits_by_the_wall_clock() {
+    let wait = |wall| match discord::parse(&lines("discord-dave-alone.log"), wall).dave {
+        discord::Dave::KeyPackageSent { secs_waiting } => secs_waiting,
+        other => panic!("{other:?}"),
+    };
+    // The key package went at 00:37:55.5, the last line at 00:38:15.6.
+    assert_eq!(wait(None), 20);
+    // A quiet log after it: the clock still runs.
+    assert_eq!(wait(Some(37.0 * 60.0 + 55.5 + 300.5)), 300);
+    // Past midnight the wall clock is near 0 and the line near 24 h: one rollover.
+    let line = discord::parse(
+        &[
+            "[2026-10-18 23:59:50.000] [info]  [RTCControlSocket(default)] Sending MLS key package"
+                .to_owned(),
+        ],
+        Some(15.0),
+    );
+    assert_eq!(
+        line.dave,
+        discord::Dave::KeyPackageSent { secs_waiting: 25 }
+    );
+    // A log in another time zone: hours off, so the last line it is.
+    assert_eq!(wait(Some(3.0 * 3600.0 + 37.0 * 60.0)), 20);
 }
 
 #[test]
