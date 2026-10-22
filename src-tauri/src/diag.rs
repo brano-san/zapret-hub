@@ -45,6 +45,8 @@ pub enum Reply {
     Choice(Vec<String>),
 }
 
+const NO_DNS: &str =
+    "наблюдение шло без ответов DNS (WinDivert их не отдал): адреса без SNI сгруппированы по /24";
 const RECHECK_CUT: &str = "перепроверка других профилей прервана: время диагностики вышло";
 /// The page gets this long to untick culprits; then all are checked.
 const CHOOSE_WAIT: Duration = Duration::from_secs(120);
@@ -187,7 +189,7 @@ fn watch(
     apps: &[String],
     secs: u32,
     show: bool,
-) -> anyhow::Result<Vec<FlowCounters>> {
+) -> anyhow::Result<(Vec<FlowCounters>, bool)> {
     let state = state(app);
     let dll = routing::dll(&state)?;
     let proxy_port = router::parse_proxy(state.socks5().as_deref())
@@ -209,7 +211,8 @@ fn watch(
             );
         }
     }
-    Ok(observer.stop())
+    let dns = observer.has_dns();
+    Ok((observer.stop(), dns))
 }
 
 /// The groups to check: all of them in "auto", without a window, or when no choice comes in time.
@@ -272,7 +275,7 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
     let started = Instant::now();
     let marks = Marks::now(&settings);
     // Watching changes nothing: no snapshot yet.
-    let flows = watch(app, &ctx.profile.apps, observe_secs, true)?;
+    let (flows, dns) = watch(app, &ctx.profile.apps, observe_secs, true)?;
     let verdict = culprits::verdict(&flows);
     let groups = match &verdict {
         Verdict::Culprits(all) if !state.diag_canceled() => choose(app, request.mode, all),
@@ -319,11 +322,15 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
         observe_secs,
     );
     summary.sources_missing = missing;
+    if !dns {
+        summary.warnings.push(NO_DNS.into());
+    }
     if let Some(env) = env.as_mut()
         && !outcome.canceled
         && outcome.rollback_error.is_none()
     {
-        summary.warnings = recheck(env, &state, &ctx, &summary.fixes, run_settings.budget);
+        let rechecked = recheck(env, &state, &ctx, &summary.fixes, run_settings.budget);
+        summary.warnings.extend(rechecked);
         // Only when the recheck changed something: a rollback restarts the services.
         if env.dirty
             && let Err(err) = env.rollback()
@@ -600,10 +607,12 @@ impl Env for AppEnv {
     }
 
     fn observe(&mut self, secs: u32) -> Vec<FlowCounters> {
-        watch(&self.app, &self.apps, secs, false).unwrap_or_else(|err| {
-            log::warn!("diagnostics: cannot watch the program: {err:#}");
-            Vec::new()
-        })
+        watch(&self.app, &self.apps, secs, false)
+            .map(|(flows, _)| flows)
+            .unwrap_or_else(|err| {
+                log::warn!("diagnostics: cannot watch the program: {err:#}");
+                Vec::new()
+            })
     }
 
     fn rollback(&mut self) -> anyhow::Result<()> {

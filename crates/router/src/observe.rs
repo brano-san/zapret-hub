@@ -603,6 +603,11 @@ impl Observer {
         rows
     }
 
+    /// False when WinDivert refused the DNS sniffer: flows then carry SNI or Host names only.
+    pub fn has_dns(&self) -> bool {
+        self.shared.dns.is_some()
+    }
+
     pub fn stop(mut self) -> Vec<FlowCounters> {
         self.halt();
         self.shared.tally.lock().unwrap().finish(Instant::now());

@@ -634,6 +634,21 @@ mod tests {
     }
 
     #[test]
+    fn a_new_diagnostics_run_forgets_why_the_last_one_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path());
+        state.begin_diag(live()).unwrap();
+        state.set_diag_failed("WinDivert refused the sniff handle".into());
+        drop(state.diag_ends());
+        assert_eq!(
+            state.diag_failed().as_deref(),
+            Some("WinDivert refused the sniff handle")
+        );
+        state.begin_diag(live()).unwrap();
+        assert_eq!(state.diag_failed(), None);
+    }
+
+    #[test]
     fn tests_block_diag() {
         let dir = tempfile::tempdir().unwrap();
         let state = state(dir.path());
