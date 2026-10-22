@@ -478,6 +478,15 @@ impl AppState {
     }
 }
 
+/// Ends the diagnostics when dropped (`AppState::diag_ends`).
+pub struct DiagEnds<'a>(&'a AppState);
+
+impl Drop for DiagEnds<'_> {
+    fn drop(&mut self) {
+        self.0.end_diag();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -675,14 +684,5 @@ mod tests {
         });
         let err = state.engine2_required().unwrap_err();
         assert!(format!("{err:#}").contains("missing winws2.exe"), "{err:#}");
-    }
-}
-
-/// Ends the diagnostics when dropped (`AppState::diag_ends`).
-pub struct DiagEnds<'a>(&'a AppState);
-
-impl Drop for DiagEnds<'_> {
-    fn drop(&mut self) {
-        self.0.end_diag();
     }
 }
