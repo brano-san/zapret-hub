@@ -125,6 +125,17 @@ pub fn validate_socks(text: &str) -> anyhow::Result<Option<String>> {
     Ok(Some(addr.to_string()))
 }
 
+/// A setting diagnostics read changed: the folders, the proxy, routing, NekoBox, their own.
+pub fn diag_reads_changed(old: &Settings, new: &Settings) -> bool {
+    old.zapret_dir != new.zapret_dir
+        || old.zapret2_dir != new.zapret2_dir
+        || old.socks5 != new.socks5
+        || old.router_enabled != new.router_enabled
+        || old.nekobox_dir != new.nekobox_dir
+        || old.diag_observe_secs != new.diag_observe_secs
+        || old.diag_budget_min != new.diag_budget_min
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,6 +177,38 @@ mod tests {
                     .unwrap()
                     .router_enabled
             );
+        }
+    }
+
+    #[test]
+    fn diagnostics_refuse_only_what_they_read() {
+        let old = Settings::default();
+        let looks = Settings {
+            theme: Theme::Dark,
+            autostart: true,
+            start_minimized: true,
+            ..old.clone()
+        };
+        assert!(!diag_reads_changed(&old, &looks));
+        for read in [
+            Settings {
+                socks5: Some("127.0.0.1:2080".into()),
+                ..old.clone()
+            },
+            Settings {
+                zapret2_dir: Some(r"D:\zapret2".into()),
+                ..old.clone()
+            },
+            Settings {
+                diag_budget_min: old.diag_budget_min + 1,
+                ..old.clone()
+            },
+            Settings {
+                nekobox_dir: Some(r"E:\nekoray".into()),
+                ..old.clone()
+            },
+        ] {
+            assert!(diag_reads_changed(&old, &read), "{read:?}");
         }
     }
 

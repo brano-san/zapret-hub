@@ -124,13 +124,17 @@ pub fn check_flowseal_update(app: &AppHandle) -> anyhow::Result<Option<String>> 
 /// zapret2 spec 10).
 pub fn save_settings(app: &AppHandle, settings: Settings, pipe: bool) -> anyhow::Result<()> {
     let state = state(app);
-    // Diagnostics read the settings in force and put the state back as they found it.
-    state.not_diagnosing()?;
     let _saving = state.saving();
     let old = state.settings();
     let mut settings = crate::settings::to_save(&old, settings, pipe)?;
     settings.socks5 =
         crate::settings::validate_socks(settings.socks5.as_deref().unwrap_or_default())?;
+    // Diagnostics read these settings and put the state back as they found it; the theme and
+    // the like save as usual.
+    let diagnosing = state.diagnosing();
+    if diagnosing && crate::settings::diag_reads_changed(&old, &settings) {
+        state.not_diagnosing()?;
+    }
     anyhow::ensure!(
         (10..=120).contains(&settings.diag_observe_secs),
         "diagnostics watch for 10 to 120 s, not {}",
@@ -170,8 +174,11 @@ pub fn save_settings(app: &AppHandle, settings: Settings, pipe: bool) -> anyhow:
     if folder_changed {
         prepare_folder(app);
     }
-    // The proxy or a folder, and with it the DLL, may have changed.
-    crate::routing::sync(app);
+    // The proxy or a folder, and with it the DLL, may have changed; not while diagnostics drive
+    // the router (and then neither did).
+    if !diagnosing {
+        crate::routing::sync(app);
+    }
     changed(app);
     Ok(())
 }
