@@ -612,7 +612,7 @@ export const S = {
     what: "Что не работает",
     anyProgram: "Любая программа",
     exe: "Программа",
-    exeHint: "Полный путь к .exe, например C:\Games\game.exe",
+    exeHint: "Полный путь к .exe, например C:\\Games\\game.exe",
     mode: "Режим",
     modes: {
       auto: "сам — хаб проверяет пути пробами",
