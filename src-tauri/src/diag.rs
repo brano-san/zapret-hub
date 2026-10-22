@@ -757,19 +757,29 @@ fn other_probes(profiles: &[Profile]) -> Vec<(String, ProbeSpec)> {
         .collect()
 }
 
+/// Side by side: one pass waits for the slowest probe's timeouts, not for all of them.
 fn probe_all(probes: &[(String, ProbeSpec)]) -> Vec<(String, bool)> {
-    probes
-        .iter()
-        .map(|(key, spec)| {
-            let target = Target::Https {
-                host: spec.target.clone(),
-                ip: None,
-            };
-            let answers: Vec<Option<u32>> =
-                (0..ATTEMPTS).map(|_| attempt(spec.kind, &target)).collect();
-            (key.clone(), works(&score(spec.kind, &answers)))
-        })
-        .collect()
+    std::thread::scope(|scope| {
+        let passes: Vec<_> = probes
+            .iter()
+            .map(|(key, spec)| {
+                let pass = scope.spawn(move || {
+                    let target = Target::Https {
+                        host: spec.target.clone(),
+                        ip: None,
+                    };
+                    let answers: Vec<Option<u32>> =
+                        (0..ATTEMPTS).map(|_| attempt(spec.kind, &target)).collect();
+                    works(&score(spec.kind, &answers))
+                });
+                (key, pass)
+            })
+            .collect();
+        passes
+            .into_iter()
+            .map(|(key, pass)| (key.clone(), pass.join().unwrap_or(false)))
+            .collect()
+    })
 }
 
 /// Spec 8: the other profiles as they are and under each fix that changes the strategy; what
@@ -845,6 +855,10 @@ fn recheck(
                 "{name}: не проверено, как она скажется на других профилях: {err:#}"
             ));
             continue;
+        }
+        // Starting the strategy took time too.
+        if env.cancelled() || over(env, &mut warnings) {
+            break;
         }
         let after = probe_all(&probes);
         warnings.extend(
