@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::candidates::{Candidate, candidates, is_subnet};
 use crate::cover::strategy_covers;
-use crate::culprits::Group;
+use crate::culprits::{Fault, Group};
 use crate::profiles::Profile;
+
+pub const NO_TRICKS_FOR_SYN: &str = "приёмы zapret2 не проверяются: сервер не отвечает на SYN";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "kind")]
@@ -131,10 +133,18 @@ pub fn plan(group: &Group, ctx: &Ctx) -> (Vec<PathKind>, Vec<String>) {
             ));
         }
     }
-    paths.extend(
-        candidates(&ctx.zapret2, group)
-            .into_iter()
-            .map(|candidate| PathKind::Trick { candidate }),
-    );
+    let tricks = candidates(&ctx.zapret2, group);
+    // Spec 5: circular counts only resent data, so it never sees an unanswered SYN.
+    if matches!(group.fault, Fault::SynUnanswered { .. }) {
+        if !tricks.is_empty() {
+            skipped.push(NO_TRICKS_FOR_SYN.into());
+        }
+    } else {
+        paths.extend(
+            tricks
+                .into_iter()
+                .map(|candidate| PathKind::Trick { candidate }),
+        );
+    }
     (paths, skipped)
 }

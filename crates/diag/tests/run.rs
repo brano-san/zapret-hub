@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use diag::culprits::{Fault, Group};
 use diag::evaluate::{Answer, Score, rank, works};
-use diag::paths::{Ctx, PathKind, plan};
+use diag::paths::{Ctx, NO_TRICKS_FOR_SYN, PathKind, plan};
 use diag::profiles::{ProbeKind, ProbeSpec, Profile};
 use diag::run::{Env, Mode, Outcome, Progress, Request, Settings, run};
 use router::observe::FlowCounters;
@@ -158,6 +158,18 @@ fn order_follows_spec() {
     assert_eq!(rule.ips, ["1.2.3.0/24"]);
     assert_eq!(rule.ports, ["443"]);
     assert_eq!(rule.apps, [DBD]);
+}
+
+#[test]
+fn no_tricks_for_an_unanswered_syn() {
+    let g = Group {
+        fault: Fault::SynUnanswered { syns: 3 },
+        ..group(Protocol::Tcp, 443)
+    };
+    let (paths, skipped) = plan(&g, &ctx(true));
+    assert!(!paths.iter().any(|p| matches!(p, PathKind::Trick { .. })));
+    assert!(skipped.iter().any(|s| s == NO_TRICKS_FOR_SYN));
+    assert!(paths.iter().any(|p| matches!(p, PathKind::Strategy { .. })));
 }
 
 #[test]
