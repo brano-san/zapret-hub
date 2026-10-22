@@ -182,7 +182,8 @@ pub fn tooltip(
     if proxy_down {
         text = format!("{text}\n{PROXY_DOWN}");
     }
-    if let Some(name) = strategy.filter(|_| light != Light::Gray) {
+    // Diagnostics run strategies of their own: the installed one's name would mislead.
+    if let Some(name) = strategy.filter(|_| light != Light::Gray && !diagnosing) {
         text = format!("{text}\n{name}");
     }
     text.chars().take(127).collect()
@@ -257,7 +258,7 @@ mod tests {
             "Zapret Hub: служба не запущена"
         );
         assert_eq!(
-            tooltip(Light::Gray, None, false, true),
+            tooltip(Light::Green, Some("general"), false, true),
             "Zapret Hub: идёт диагностика"
         );
         let long = "x".repeat(200);
