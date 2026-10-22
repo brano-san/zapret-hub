@@ -17,7 +17,7 @@ use std::collections::{HashMap, hash_map::Entry};
 use std::mem::discriminant;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -113,6 +113,11 @@ struct Inner {
     temporary: Mutex<Option<Rule>>,
     /// The table in force; a launch starts from it.
     table: Mutex<Table>,
+    /// Tables are numbered as built (under the rules lock) ...
+    built: AtomicU64,
+    /// ... and one built before the last applied is never applied: two edits racing past the
+    /// rules lock cannot leave the older table in force.
+    applied: Mutex<u64>,
     /// Outlives sessions: programs keep resolved addresses cached across a pause.
     names: Arc<Mutex<Names>>,
     /// Outlives sessions too: a program seen before a pause still counts as running.
@@ -178,6 +183,8 @@ impl Router {
         reload(&routes, &mut file, true);
         Router(Arc::new(Inner {
             table: Mutex::new(Table::new(&file.list)),
+            built: AtomicU64::new(0),
+            applied: Mutex::new(0),
             temporary: Mutex::new(None),
             names: Arc::default(),
             images: Arc::default(),
@@ -243,7 +250,7 @@ impl Router {
             ctl.setup = None;
             ctl.state = RouterState::Off;
             if inner.temporary.lock().unwrap().take().is_some() {
-                let table = inner.table_of(&inner.rules.lock().unwrap().list);
+                let (_, table) = inner.table_of(&inner.rules.lock().unwrap().list);
                 *inner.table.lock().unwrap() = table;
             }
         });
@@ -448,14 +455,22 @@ impl Inner {
         }
     }
 
-    /// The file rules with the temporary one on top.
-    fn table_of(&self, list: &[Rule]) -> Table {
+    /// The file rules with the temporary one on top, and the build's number (`apply`).
+    fn table_of(&self, list: &[Rule]) -> (u64, Table) {
         let mut list = list.to_vec();
         list.extend(self.temporary.lock().unwrap().clone());
-        Table::new(&list)
+        (
+            self.built.fetch_add(1, Ordering::SeqCst) + 1,
+            Table::new(&list),
+        )
     }
 
-    fn apply(&self, table: Table) {
+    fn apply(&self, (number, table): (u64, Table)) {
+        let mut applied = self.applied.lock().unwrap();
+        if number < *applied {
+            return;
+        }
+        *applied = number;
         *self.table.lock().unwrap() = table.clone();
         let Some(live) = self.live() else { return };
         let error = live.apply(Some(table)).err();
