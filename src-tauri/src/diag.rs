@@ -858,7 +858,7 @@ fn recheck(
 
 #[cfg(test)]
 mod tests {
-    use super::apply::{BASE_LINE, base};
+    use super::apply::{BASE_LINE, base, circular_base};
     use super::evidence::{differ, foreign_syn_dead};
     use diag::culprits::Fault;
 
@@ -1094,6 +1094,12 @@ mod tests {
         assert_eq!(name(Some("general")), "general (Flowseal)");
         assert_eq!(name(Some("general (ALT)")), "general (ALT)");
         assert_eq!(name(Some("my own flowseal")), "", "no copy of it");
+        assert!(circular_base(&engine, Some("my own flowseal")).is_err());
+        assert!(
+            circular_base(&engine, None).is_ok(),
+            "nothing active, nothing lost"
+        );
+        assert!(circular_base(&engine, Some("general")).is_ok());
         // hub-circular names its base, and is never its own.
         let hub = format!(
             "{BASE_LINE}mine

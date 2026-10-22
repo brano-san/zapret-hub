@@ -108,6 +108,7 @@ pub const DIAG_CHOOSE: &str = "Диагностика: выберите адре
 pub const DIAG_CHOOSE_TEXT: &str =
     "Снимите галочки с лишних адресов; через 2 минуты будут проверены все.";
 pub const MANUAL: &str = "это делается вручную";
+pub const CIRCULAR_NO_BASE: &str = "hub-circular не собрать: у активной стратегии нет основы в zapret2, и      hub-circular заменил бы её целиком; примените стратегию zapret2 (или перенесите эту в zapret2) и      повторите";
 
 pub fn diag_question(hint: &str, path: &str) -> String {
     format!("{path}. Проверьте: {hint}. Работает?")

@@ -18,9 +18,24 @@ pub(super) const BASE_LINE: &str = "# base: ";
 /// `hub-circular` from `store` on the zapret2 strategy in use (diag spec 7), the base named on its
 /// first line.
 pub(super) fn hub_text(engine: &zapret2::Engine, store: &Store) -> anyhow::Result<String> {
-    let (base, text) = base(engine, zapret::service::strategy().as_deref());
+    let (base, text) = circular_base(engine, zapret::service::strategy().as_deref())?;
     let generated = circular_store::generate(&text, store)?;
     Ok(format!("{BASE_LINE}{base}\n{generated}"))
+}
+
+/// `base`, refused when a strategy is active but has no zapret2 base: `hub-circular` would
+/// replace it whole, and everything it fixed would break.
+pub(super) fn circular_base(
+    engine: &zapret2::Engine,
+    active: Option<&str>,
+) -> anyhow::Result<(String, String)> {
+    let found = base(engine, active);
+    match active {
+        Some(active) if found.0.is_empty() => {
+            anyhow::bail!("{}: {active}", texts::CIRCULAR_NO_BASE)
+        }
+        _ => Ok(found),
+    }
 }
 
 /// The zapret2 strategy `hub-circular` builds on: the active zapret2 one; for an active Flowseal
@@ -83,8 +98,10 @@ pub fn apply(app: &AppHandle, id: &str, fix: u32) -> anyhow::Result<Option<Quick
                 };
                 rules::replace(list, rule)
             })?;
+            // The path test ran the router whether routing was on or not.
+            let enabled = routing::set_enabled(app, true);
             actions::changed(app);
-            Ok(None)
+            enabled.map(|_| None)
         }
         Fix::ApplyStrategy { name } => actions::apply(app, &name).map(Some),
         Fix::ApplyHubCircular { tricks, filter } => {
