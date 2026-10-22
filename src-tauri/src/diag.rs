@@ -232,11 +232,13 @@ fn choose(app: &AppHandle, mode: Mode, all: &[Group]) -> Vec<Group> {
         Reply::Answer(_) => None,
     });
     live_changed(app, |live| live.choosing = None);
-    picked(all, keys.as_deref())
+    picked(all, keys.as_deref(), state.diag_canceled())
 }
 
-fn picked(all: &[Group], keys: Option<&[String]>) -> Vec<Group> {
+/// No choice in time: all of them; a cancel: none (no snapshot, nothing restarted).
+fn picked(all: &[Group], keys: Option<&[String]>, canceled: bool) -> Vec<Group> {
     match keys {
+        _ if canceled => Vec::new(),
         Some(keys) => all
             .iter()
             .filter(|g| keys.contains(&g.key))
@@ -1021,9 +1023,13 @@ mod tests {
             ..group(Protocol::Udp, reps)
         };
         let all = [a.clone(), b.clone()];
-        assert_eq!(picked(&all, None), all);
-        assert_eq!(picked(&all, Some(&["1.2.3.0/24".to_owned()])), [b]);
-        assert!(picked(&all, Some(&[])).is_empty());
+        assert_eq!(picked(&all, None, false), all);
+        assert_eq!(picked(&all, Some(&["1.2.3.0/24".to_owned()]), false), [b]);
+        assert!(picked(&all, Some(&[]), false).is_empty());
+        assert!(
+            picked(&all, None, true).is_empty(),
+            "canceled while choosing"
+        );
     }
 
     #[test]
