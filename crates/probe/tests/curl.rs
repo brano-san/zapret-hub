@@ -1,4 +1,7 @@
-use probe::curl::{CheckKind, CheckStatus, DpiStatus, classify, dpi_classify, parse_code_and_time};
+use probe::curl::{
+    CheckKind, CheckStatus, DpiStatus, Via, classify, dpi_classify, https_args,
+    parse_code_and_time, parse_doh_json,
+};
 
 #[test]
 fn classifies_like_test_zapret_ps1() {
@@ -89,4 +92,45 @@ fn live_check_reaches_a_site() {
         None,
     );
     assert_eq!(result.status, CheckStatus::Ok, "{result:?}");
+}
+
+fn has_pair(args: &[String], a: &str, b: &str) -> bool {
+    args.windows(2).any(|w| w[0] == a && w[1] == b)
+}
+
+#[test]
+fn https_args_resolve_and_socks() {
+    let args = https_args(
+        "discord.com",
+        Some("1.2.3.4".parse().unwrap()),
+        &Via::Socks5("127.0.0.1:2080".into()),
+    );
+    assert!(has_pair(&args, "--resolve", "discord.com:443:1.2.3.4"));
+    assert!(has_pair(&args, "--socks5-hostname", "127.0.0.1:2080"));
+    assert!(!args.contains(&"--noproxy".to_owned()));
+    assert_eq!(args.last().unwrap(), "https://discord.com");
+}
+
+#[test]
+fn https_args_direct_has_noproxy() {
+    let args = https_args("discord.com", None, &Via::Direct);
+    assert!(has_pair(&args, "--noproxy", "*"));
+    assert!(!args.contains(&"--resolve".to_owned()));
+}
+
+#[test]
+fn doh_json_parsed() {
+    let json = r#"{"Status":0,"Answer":[
+        {"name":"d.com","type":5,"TTL":1,"data":"x.d.com."},
+        {"name":"x.d.com","type":1,"TTL":1,"data":"162.159.137.232"},
+        {"name":"x.d.com","type":1,"TTL":1,"data":"162.159.136.232"}]}"#;
+    assert_eq!(
+        parse_doh_json(json),
+        vec![
+            "162.159.137.232".parse::<std::net::Ipv4Addr>().unwrap(),
+            "162.159.136.232".parse().unwrap()
+        ]
+    );
+    assert!(parse_doh_json(r#"{"Status":3}"#).is_empty());
+    assert!(parse_doh_json("not json").is_empty());
 }

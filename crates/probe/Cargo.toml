@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Network checks for Zapret Hub: curl.exe requests, ICMP ping, SOCKS5."
+description = "Network checks for Zapret Hub: curl.exe requests, ICMP ping, SOCKS5, UDP probes."
 
 [dependencies]
 exec.workspace = true

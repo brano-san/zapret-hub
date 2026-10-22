@@ -1,5 +1,6 @@
 //! `curl.exe` requests exactly as `test zapret.ps1` makes them, the DPI 16-20 request, downloads.
 
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
@@ -350,4 +351,97 @@ pub fn download(url: &str, dest: &Path, socks5: Option<&str>) -> anyhow::Result<
         exec::run(&mut cmd, Duration::from_secs(130), None)?.check()?;
         Ok(())
     })
+}
+
+/// How a pinned-address request leaves the machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Via {
+    Direct,
+    /// `host:port` of a SOCKS5 proxy; curl resolves the name through it.
+    Socks5(String),
+}
+
+/// The arguments of [`https_via`]: the `check` request, `--resolve` for a pinned `ip`, then the route.
+pub fn https_args(host: &str, ip: Option<IpAddr>, via: &Via) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "-I",
+        "-s",
+        "-m",
+        "4",
+        "--connect-timeout",
+        "2",
+        "-o",
+        "NUL",
+        "-w",
+        "%{http_code} %{time_total}",
+        "--show-error",
+    ]
+    .map(String::from)
+    .into();
+    if let Some(ip) = ip {
+        args.extend(["--resolve".into(), format!("{host}:443:{ip}")]);
+    }
+    match via {
+        Via::Direct => args.extend(["--noproxy".into(), "*".into()]),
+        Via::Socks5(addr) => args.extend(["--socks5-hostname".into(), addr.clone()]),
+    }
+    args.push(format!("https://{host}"));
+    args
+}
+
+/// One HTTPS HEAD to `host`, optionally pinned to `ip`, direct or through SOCKS5.
+pub fn https_via(
+    host: &str,
+    ip: Option<IpAddr>,
+    via: &Via,
+    cancel: Option<&AtomicBool>,
+) -> CheckResult {
+    // The kind is only a label here: no TLS version is forced.
+    let kind = CheckKind::Tls13;
+    let mut cmd = Command::new("curl.exe");
+    cmd.args(https_args(host, ip, via));
+    match exec::run(&mut cmd, Duration::from_secs(15), cancel) {
+        Ok(out) => {
+            let (http_code, time_ms) = parse_code_and_time(&out.stdout);
+            CheckResult {
+                kind,
+                status: classify(out.code, &out.stderr),
+                http_code,
+                time_ms,
+                stderr: out.stderr,
+            }
+        }
+        Err(err) => CheckResult {
+            kind,
+            status: CheckStatus::Error,
+            http_code: "000".into(),
+            time_ms: None,
+            stderr: err.to_string(),
+        },
+    }
+}
+
+/// `Answer[].data` of type 1 from a DoH JSON reply; nothing when it is not JSON.
+pub fn parse_doh_json(text: &str) -> Vec<Ipv4Addr> {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(text) else {
+        return vec![];
+    };
+    json["Answer"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|a| a["type"] == 1)
+        .filter_map(|a| a["data"].as_str()?.parse().ok())
+        .collect()
+}
+
+/// An A lookup over DoH (Cloudflare), optionally through SOCKS5. `None`: the request failed.
+pub fn dns_doh(name: &str, socks5: Option<&str>) -> Option<Vec<Ipv4Addr>> {
+    let mut cmd = get(
+        &format!("https://cloudflare-dns.com/dns-query?name={name}&type=A"),
+        socks5,
+    );
+    cmd.args(["-m", "6", "-H", "accept: application/dns-json"]);
+    let out = exec::run(&mut cmd, Duration::from_secs(10), None).ok()?;
+    out.success().then(|| parse_doh_json(&out.stdout))
 }

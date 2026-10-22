@@ -3,3 +3,4 @@
 pub mod curl;
 pub mod ping;
 pub mod socks;
+pub mod udp;
