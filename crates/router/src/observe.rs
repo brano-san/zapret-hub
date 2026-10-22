@@ -515,10 +515,11 @@ impl Observer {
         }));
 
         // Ticks the UDP windows and reopens the sniff handle when the ports change: the old one
-        // stops first, so no packet is counted twice (a few may be missed in between).
+        // stops and its reader drains first, so no packet is counted twice or out of order (a few
+        // may be missed in between).
         let s = shared.clone();
         threads.push(std::thread::spawn(move || {
-            let mut readers = vec![read_sniff(s.clone(), sniff)];
+            let mut reader = Some(read_sniff(s.clone(), sniff));
             let mut current: Vec<u16> = vec![];
             let mut opened: Option<Instant> = None;
             while !s.stopped.load(Ordering::SeqCst) {
@@ -532,9 +533,13 @@ impl Observer {
                 if let Some(old) = s.sniff.lock().unwrap().take() {
                     old.shutdown();
                 }
+                // Bounded: recv fails once the shut handle's queue is drained.
+                if let Some(r) = reader.take() {
+                    let _ = r.join();
+                }
                 match open_sniff(&dll, &wanted) {
                     Ok(h) => {
-                        readers.push(read_sniff(s.clone(), h.clone()));
+                        reader = Some(read_sniff(s.clone(), h.clone()));
                         *s.sniff.lock().unwrap() = Some(h);
                         current = wanted;
                     }
@@ -546,7 +551,7 @@ impl Observer {
             if let Some(h) = s.sniff.lock().unwrap().take() {
                 h.shutdown();
             }
-            for r in readers {
+            if let Some(r) = reader {
                 let _ = r.join();
             }
         }));
