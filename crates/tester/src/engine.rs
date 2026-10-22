@@ -51,8 +51,8 @@ pub fn launch(
     launch_text(engine, folder, &strategy.text)
 }
 
-/// A zapret2 strategy from its text (a candidate, a `hub-circular` result), checked like a
-/// saved one.
+/// A zapret2 strategy from its text (a candidate, a `hub-circular` result): placeholders filled
+/// (`strategies::tail`), then the checks a saved one passes before it runs (`strategies::check`).
 pub fn launch_text(
     engine2: &Engine,
     folder: Option<&Folder>,

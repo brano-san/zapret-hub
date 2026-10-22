@@ -15,6 +15,7 @@ use zapret::targets::Target;
 use zapret2::Engine;
 
 use crate::dpi::DpiTarget;
+use crate::engine;
 use crate::model::{DpiTargetResult, Score, StrategyResult, Suite, TargetResult, TestRun};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -227,7 +228,7 @@ fn run_strategies(
     for service in [SERVICE, SERVICE2] {
         zapret::service::stop(service)?;
     }
-    crate::engine::stop_engines()?;
+    engine::stop_engines()?;
     // As «Применить» does (`service::install`): strategies with `fooling=ts` need them.
     if zapret::service::tcp_timestamps() == Some(false)
         && let Err(err) = zapret::service::enable_tcp_timestamps()
@@ -258,7 +259,7 @@ fn run_strategies(
             });
             // Nothing of either engine may filter while this one is measured: the previous
             // strategy's process has exited (`Winws::stop` waits), and this catches any other.
-            crate::engine::stop_engines()?;
+            engine::stop_engines()?;
             let result = run_one(folder, engine2, name, work, cancel);
             if cancel.load(Ordering::Relaxed) {
                 break 'passes; // cut short: not a result
@@ -324,7 +325,7 @@ fn run_one(
         score: Score::default(),
         passes: Vec::new(),
     };
-    let launch = match crate::engine::launch(folder, engine2, name) {
+    let launch = match engine::launch(folder, engine2, name) {
         Ok(launch) => launch,
         Err(err) => {
             result.launch_error = Some(format!("{err:#}"));
@@ -332,7 +333,7 @@ fn run_one(
         }
     };
     result.args_sha256 = launch.sha256.clone();
-    let mut winws = match crate::engine::start(&launch) {
+    let mut winws = match engine::start(&launch) {
         Ok(winws) => winws,
         Err(err) => {
             result.launch_error = Some(format!("{err:#}"));
