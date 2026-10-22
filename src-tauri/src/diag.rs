@@ -79,6 +79,18 @@ fn profile_of(state: &AppState, request: &Request) -> anyhow::Result<Profile> {
         .with_context(|| format!("no diagnostics profile {id}"))
 }
 
+/// `question` or `choosing` changed after their step was reported: the step again, so the page
+/// reads `diag_live` and shows or drops the card.
+fn live_changed(app: &AppHandle, change: impl FnOnce(&mut Live)) {
+    let state = state(app);
+    state.update_diag_live(change);
+    if let Some(step) = state.diag_live().and_then(|live| live.progress)
+        && let Err(err) = DiagProgress(step).emit(app)
+    {
+        log::warn!("cannot report diagnostics progress: {err}");
+    }
+}
+
 /// Starts diagnostics in their own thread; the page follows `DiagProgress` and `DiagFinished`.
 pub fn start_diag(app: &AppHandle, request: Request) -> anyhow::Result<()> {
     request.check()?;
@@ -209,7 +221,7 @@ fn choose(app: &AppHandle, mode: Mode, all: &[Group]) -> Vec<Group> {
         return all.to_vec();
     }
     let state = state(app);
-    state.update_diag_live(|live| live.choosing = Some(all.to_vec()));
+    live_changed(app, |live| live.choosing = Some(all.to_vec()));
     if window_hidden(app) {
         notify::show(app, texts::DIAG_CHOOSE, texts::DIAG_CHOOSE_TEXT);
     }
@@ -217,7 +229,7 @@ fn choose(app: &AppHandle, mode: Mode, all: &[Group]) -> Vec<Group> {
         Reply::Choice(keys) => Some(keys.clone()),
         Reply::Answer(_) => None,
     });
-    state.update_diag_live(|live| live.choosing = None);
+    live_changed(app, |live| live.choosing = None);
     picked(all, keys.as_deref())
 }
 
@@ -568,7 +580,7 @@ impl Env for AppEnv {
     fn ask(&mut self, hint: &str, path: &PathKind) -> Answer {
         let state = self.state();
         let question = texts::diag_question(hint, &path.label());
-        state.update_diag_live(|live| live.question = Some(question.clone()));
+        live_changed(&self.app, |live| live.question = Some(question.clone()));
         if window_hidden(&self.app) {
             notify::show(&self.app, texts::DIAG_QUESTION, &question);
         }
@@ -576,7 +588,7 @@ impl Env for AppEnv {
             Reply::Answer(answer) => Some(answer.clone()),
             Reply::Choice(_) => None,
         });
-        state.update_diag_live(|live| live.question = None);
+        live_changed(&self.app, |live| live.question = None);
         answer.unwrap_or(Answer::Unknown)
     }
 

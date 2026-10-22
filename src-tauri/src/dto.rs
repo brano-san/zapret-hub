@@ -129,6 +129,12 @@ pub struct DiagFinished {
     pub id: Option<String>,
 }
 
+/// The tray asks the open window to show a tab (a new window gets it as the URL fragment).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type, tauri_specta::Event)]
+pub struct OpenTab {
+    pub tab: String,
+}
+
 /// zapret, the settings or the history changed: the page reads what it shows again.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type, tauri_specta::Event)]
 pub struct StateChanged;

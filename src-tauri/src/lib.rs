@@ -39,7 +39,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             dto::NoticesChanged,
             dto::DownloadProgress,
             dto::DiagProgress,
-            dto::DiagFinished
+            dto::DiagFinished,
+            dto::OpenTab
         ])
         .commands(collect_commands![
             commands::app_version,

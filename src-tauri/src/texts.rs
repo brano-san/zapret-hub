@@ -148,6 +148,8 @@ pub const SWITCH_TO: &str = "Переключить на";
 pub const NO_RANKING: &str = "Нет результатов тестов";
 pub const RESTART: &str = "Перезапустить zapret";
 pub const QUICK_CHECK: &str = "Быстрая проверка";
+pub const DIAG: &str = "Диагностика…";
+pub const DIAGNOSING: &str = "идёт диагностика";
 pub const QUIT: &str = "Выход";
 pub const TRAY_FAILED: &str = "Действие из трея не выполнено";
 
@@ -161,10 +163,17 @@ pub const ROUTER_FAILED: &str = "Маршрутизация не включил�
 pub const PROXY_DOWN: &str = "Прокси недоступен, трафик идёт напрямую";
 
 /// Windows cuts a tray tooltip at 127 characters: short lines, the strategy's name last, so a long
-/// one is what gets cut.
-pub fn tooltip(light: crate::tray::Light, strategy: Option<&str>, proxy_down: bool) -> String {
+/// one is what gets cut. Diagnostics stop and start zapret as they go: while they run, the tooltip
+/// says so instead of the service's state.
+pub fn tooltip(
+    light: crate::tray::Light,
+    strategy: Option<&str>,
+    proxy_down: bool,
+    diagnosing: bool,
+) -> String {
     use crate::tray::Light;
     let status = match light {
+        _ if diagnosing => DIAGNOSING,
         Light::Green => "работает",
         Light::Yellow => "работает, проверка не пройдена",
         Light::Gray => "служба не запущена",
@@ -240,15 +249,19 @@ mod tests {
     fn the_tooltip_names_a_proxy_that_is_down_and_fits_windows() {
         use crate::tray::Light;
         assert_eq!(
-            tooltip(Light::Green, Some("general"), true),
+            tooltip(Light::Green, Some("general"), true, false),
             format!("Zapret Hub: работает\n{PROXY_DOWN}\ngeneral")
         );
         assert_eq!(
-            tooltip(Light::Gray, Some("general"), false),
+            tooltip(Light::Gray, Some("general"), false, false),
             "Zapret Hub: служба не запущена"
         );
+        assert_eq!(
+            tooltip(Light::Gray, None, false, true),
+            "Zapret Hub: идёт диагностика"
+        );
         let long = "x".repeat(200);
-        let cut = tooltip(Light::Yellow, Some(&long), true);
+        let cut = tooltip(Light::Yellow, Some(&long), true, false);
         assert_eq!(cut.chars().count(), 127);
         assert!(cut.contains(PROXY_DOWN));
     }

@@ -151,6 +151,7 @@ export const events = {
 	diagProgress: makeEvent<DiagProgress>("diag-progress"),
 	downloadProgress: makeEvent<DownloadProgress>("download-progress"),
 	noticesChanged: makeEvent<NoticesChanged>("notices-changed"),
+	openTab: makeEvent<OpenTab>("open-tab"),
 	stateChanged: makeEvent<StateChanged>("state-changed"),
 	testProgress: makeEvent<TestProgress>("test-progress"),
 	testsFinished: makeEvent<TestsFinished>("tests-finished"),
@@ -586,6 +587,11 @@ export type NoticeLevel = "Error" | "Info";
 
 /**  `take_notices` has something. */
 export type NoticesChanged = null;
+
+/**  The tray asks the open window to show a tab (a new window gets it as the URL fragment). */
+export type OpenTab = {
+	tab: string,
+};
 
 /**  The «Обзор» tab, read in one go. */
 export type Overview = {

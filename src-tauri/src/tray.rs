@@ -111,17 +111,20 @@ pub fn refresh(app: &AppHandle) {
     let light = light(zapret::service::state(active().0), state.quick().as_ref());
     let mark = proxy_mark(&state.router.status());
     let routing = state.settings().router_enabled;
+    let diagnosing = state.diagnosing();
+    let tooltip = texts::tooltip(light, strategy.as_deref(), mark, diagnosing);
     let updated = menu(app, strategy.as_deref(), &state.best(5), routing)
         .and_then(|menu| tray.set_menu(Some(menu)))
         .and_then(|()| tray.set_icon(Some(icon(light, mark))))
-        .and_then(|()| tray.set_tooltip(Some(texts::tooltip(light, strategy.as_deref(), mark))));
+        .and_then(|()| tray.set_tooltip(Some(tooltip)));
     if let Err(err) = updated {
         log::warn!("cannot update the tray: {err}");
     }
 }
 
 /// «Открыть»; «Стратегия: <имя>» → «Переключить на» and the top five; «Перезапустить zapret»;
-/// «Быстрая проверка»; «Маршрутизация: вкл/выкл»; «Выход» (spec 9.3, router spec 8).
+/// «Быстрая проверка»; «Диагностика…»; «Маршрутизация: вкл/выкл»; «Выход» (spec 9.3, router
+/// spec 8, diag spec 10).
 fn menu(
     app: &AppHandle,
     strategy: Option<&str>,
@@ -144,6 +147,7 @@ fn menu(
     let open = MenuItem::with_id(app, "open", texts::OPEN, true, None::<&str>)?;
     let restart = MenuItem::with_id(app, "restart", texts::RESTART, true, None::<&str>)?;
     let quick = MenuItem::with_id(app, "quick", texts::QUICK_CHECK, true, None::<&str>)?;
+    let diag = MenuItem::with_id(app, "diag", texts::DIAG, true, None::<&str>)?;
     let label = if routing {
         texts::ROUTER_ON
     } else {
@@ -152,14 +156,16 @@ fn menu(
     let router = MenuItem::with_id(app, "router", label, true, None::<&str>)?;
     let gap = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", texts::QUIT, true, None::<&str>)?;
-    let items: [&dyn IsMenuItem<Wry>; 7] =
-        [&open, &current, &restart, &quick, &router, &gap, &quit];
+    let items: [&dyn IsMenuItem<Wry>; 8] = [
+        &open, &current, &restart, &quick, &diag, &router, &gap, &quit,
+    ];
     Menu::with_items(app, &items)
 }
 
 fn on_menu(app: &AppHandle, id: &str) {
     match id {
         "open" => window::show(app),
+        "diag" => window::show_tab(app, "diag"),
         "quit" => quit(app),
         "restart" => background(app, actions::restart),
         "quick" => background(app, actions::quick_check),
