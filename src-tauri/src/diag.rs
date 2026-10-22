@@ -2,34 +2,41 @@
 //! the recheck of the other profiles and «Применить».
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs as _};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use diag::circular_store::{self, Store};
-use diag::culprits::{self, Fault, Group, Verdict};
+use diag::circular_store;
+use diag::culprits::{self, Group, Verdict};
 use diag::evaluate::{Answer, Score, works};
 use diag::paths::{Ctx, PathKind};
-use diag::patterns::{self, Evidence};
+use diag::patterns;
 use diag::profiles::{self, ProbeKind, ProbeSpec, Profile};
+use diag::report;
 use diag::run::{Env, Live, Mode, Outcome, Progress, Request};
 use diag::summary::{self, Fix, Summary};
-use diag::{logs, report};
 use probe::curl::{CheckStatus, Via};
 use router::RouterState;
 use router::observe::{FlowCounters, Observer};
-use router::rules::{self, Protocol, Rule};
+use router::rules::{Protocol, Rule};
 use tauri::{AppHandle, Manager as _};
 use tauri_specta::Event as _;
 use tester::engine::{Launch, Running};
 use zapret::folder::Folder;
-use zapret::service::{QuickCheck, SERVICE, SERVICE2};
+use zapret::service::{SERVICE, SERVICE2};
 use zapret::snapshot::{RouterSnap, Snapshot, pending_path};
 
 use crate::actions::{self, state};
 use crate::dto::{DiagFinished, DiagProgress, NoticeLevel};
-use crate::state::{AppState, DIAGNOSING};
+use crate::state::AppState;
 use crate::{notify, routing, texts, window};
+
+mod apply;
+mod evidence;
+
+pub use apply::apply;
+use apply::hub_text;
+use evidence::{Marks, evidence};
 
 /// What the page sends to diagnostics that wait for it.
 pub enum Reply {
@@ -38,6 +45,7 @@ pub enum Reply {
     Choice(Vec<String>),
 }
 
+const RECHECK_CUT: &str = "перепроверка других профилей прервана: время диагностики вышло";
 /// The page gets this long to untick culprits; then all are checked.
 const CHOOSE_WAIT: Duration = Duration::from_secs(120);
 /// "Works?" waits for the user or a cancel.
@@ -45,14 +53,8 @@ const ANSWER_WAIT: Duration = Duration::from_secs(24 * 60 * 60);
 const UDP_TIMEOUT: Duration = Duration::from_secs(2);
 const PING_TIMEOUT_MS: u32 = 2000;
 const ATTEMPTS: usize = 3;
-/// At most this much of a log written during the diagnostics is read.
-const LOG_BYTES: u64 = 4 << 20;
 /// The name of the temporary rule of the proxy paths: never one of the user's.
 const CHECK_RULE: &str = "diag-check";
-/// A plain DNS server the provider may answer for: its answer is compared with DoH.
-const PLAIN_DNS: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 53);
-/// The line `hub-circular` keeps the strategy it was built on in.
-const BASE_LINE: &str = "# base: ";
 
 fn profiles_dir(state: &AppState) -> PathBuf {
     state.paths.diag().join("profiles")
@@ -90,6 +92,8 @@ pub fn start_diag(app: &AppHandle, request: Request) -> anyhow::Result<()> {
     })?;
     let handle = app.clone();
     std::thread::spawn(move || {
+        let state = actions::state(&handle);
+        let _ends = state.diag_ends();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             job(&handle, &request, profile)
         }))
@@ -115,6 +119,10 @@ fn window_hidden(app: &AppHandle) -> bool {
 }
 
 fn progress(app: &AppHandle, step: Progress) {
+    // A question is coming: a reply from before it must not answer it.
+    if matches!(step, Progress::Question { .. } | Progress::Culprits { .. }) {
+        state(app).clear_diag_reply();
+    }
     state(app).update_diag_live(|live| live.progress = Some(step.clone()));
     if let Err(err) = DiagProgress(step).emit(app) {
         log::warn!("cannot report diagnostics progress: {err}");
@@ -275,6 +283,7 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
             folder: folder.clone(),
             engine2: engine2.clone(),
             snapshot,
+            pending: pending.clone(),
             started,
             apps: ctx.profile.apps.clone(),
             running: None,
@@ -283,7 +292,7 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
         });
         diag::run::run(env, &ctx, &groups, &run_settings)
     };
-    let (evidence, missing) = evidence(&state, &ctx, &flows, &outcome, &marks);
+    let (evidence, missing) = evidence(&state, &ctx, &flows, &outcome, &marks, !outcome.canceled);
     let patterns = patterns::detect(&evidence, &outcome, &ctx);
     let mut summary = summary::summarize(
         &verdict,
@@ -296,10 +305,9 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
     summary.sources_missing = missing;
     if let Some(env) = env.as_mut()
         && !outcome.canceled
-        && !outcome.budget_hit
         && outcome.rollback_error.is_none()
     {
-        summary.warnings = recheck(env, &state, &ctx.profile, &summary.fixes);
+        summary.warnings = recheck(env, &state, &ctx, &summary.fixes, run_settings.budget);
         // Only when the recheck changed something: a rollback restarts the services.
         if env.dirty
             && let Err(err) = env.rollback()
@@ -380,6 +388,7 @@ struct AppEnv {
     folder: Option<Folder>,
     engine2: Option<zapret2::Engine>,
     snapshot: Snapshot,
+    pending: PathBuf,
     started: Instant,
     apps: Vec<String>,
     /// The engine a strategy or trick path started.
@@ -413,6 +422,8 @@ impl AppEnv {
     /// No zapret: both services stopped (the snapshot restarts them), every winws ended.
     fn zapret_off(&mut self) -> anyhow::Result<()> {
         if self.zapret_as_is {
+            // First: a stop that fails halfway must still be undone by `zapret_as_is`.
+            self.zapret_as_is = false;
             for service in [SERVICE, SERVICE2] {
                 zapret::service::stop(service)?;
             }
@@ -422,7 +433,6 @@ impl AppEnv {
             {
                 log::warn!("TCP timestamps stay off for the diagnostics: {err:#}");
             }
-            self.zapret_as_is = false;
         }
         tester::engine::stop_engines()
     }
@@ -594,13 +604,20 @@ impl Env for AppEnv {
     }
 }
 
-/// A panic halfway still puts zapret and routing back; failing that, `pending.json` stays.
+/// A panic halfway still puts zapret and routing back and, once they are, removes
+/// `pending.json` as the normal end does; failing that, it stays for the next start.
 impl Drop for AppEnv {
     fn drop(&mut self) {
-        if self.dirty
-            && let Err(err) = self.put_back()
-        {
-            log::error!("diagnostics: the state was not put back: {err:#}");
+        if !self.dirty {
+            return;
+        }
+        match self.put_back() {
+            Ok(()) => {
+                if let Err(err) = Snapshot::clear(&self.pending) {
+                    log::error!("diagnostics: {err:#}");
+                }
+            }
+            Err(err) => log::error!("diagnostics: the state was not put back: {err:#}"),
         }
     }
 }
@@ -710,168 +727,6 @@ fn score(kind: ProbeKind, answers: &[Option<u32>]) -> Score {
     }
 }
 
-/// The sizes of the logs when watching began: only what they get after it is read.
-struct Marks {
-    neko: Option<PathBuf>,
-    neko_at: u64,
-    discord: Vec<(PathBuf, u64)>,
-}
-
-impl Marks {
-    fn now(settings: &crate::settings::Settings) -> Self {
-        let neko = nekobox_dir(settings.nekobox_dir.as_deref());
-        let log = neko.as_deref().map(neko_log);
-        Marks {
-            neko_at: log.as_deref().and_then(logs::size).unwrap_or(0),
-            neko,
-            discord: logs::discord_log_paths()
-                .into_iter()
-                .map(|p| {
-                    let at = logs::size(&p).unwrap_or(0);
-                    (p, at)
-                })
-                .collect(),
-        }
-    }
-}
-
-/// The setting, else the folder of a running `nekobox.exe` or `nekobox_core.exe`.
-fn nekobox_dir(setting: Option<&str>) -> Option<PathBuf> {
-    if let Some(dir) = setting {
-        return Some(PathBuf::from(dir));
-    }
-    ["nekobox.exe", "nekobox_core.exe"]
-        .into_iter()
-        .flat_map(zapret::procs::find)
-        .find_map(|p| p.exe?.parent().map(Path::to_path_buf))
-}
-
-fn neko_log(dir: &Path) -> PathBuf {
-    dir.join("config").join("neko.log")
-}
-
-/// `config\routes_box\<the routing NekoBox uses>`.
-fn neko_routes(dir: &Path) -> PathBuf {
-    let config = dir.join("config");
-    let active = std::fs::read_to_string(config.join("groups").join("nekobox.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|v| v["active_routing"].as_str().map(str::to_owned))
-        .filter(|name| !name.is_empty() && !name.contains(['\\', '/']))
-        .unwrap_or_else(|| "Default".into());
-    config.join("routes_box").join(active)
-}
-
-/// No address of the plain answer shares a /16 with DoH's: a CDN answers by location, but
-/// rarely from another /16. An empty DoH answer proves nothing.
-fn differ(plain: &[Ipv4Addr], doh: &[Ipv4Addr]) -> bool {
-    !doh.is_empty()
-        && !plain
-            .iter()
-            .any(|a| doh.iter().any(|b| a.octets()[..2] == b.octets()[..2]))
-}
-
-/// ponytail: one plain server, not the system's resolvers; ask Windows for them if a provider
-/// spoofs only its own resolver.
-fn spoofed(name: &str, socks5: Option<&str>) -> bool {
-    let Some(plain) = probe::udp::dns_udp(name, PLAIN_DNS, UDP_TIMEOUT) else {
-        return false;
-    };
-    let doh = probe::curl::dns_doh(name, None)
-        .or_else(|| socks5.and_then(|s| probe::curl::dns_doh(name, Some(s))));
-    doh.is_some_and(|doh| differ(&plain, &doh))
-}
-
-/// The proxy's external address, as a site sees it through the proxy.
-fn proxy_ip(socks5: &str) -> Option<String> {
-    let mut cmd = probe::curl::get("https://api.ipify.org", Some(socks5));
-    let out = exec::run(&mut cmd, Duration::from_secs(15), None).ok()?;
-    let ip = out.stdout.trim();
-    (out.success() && ip.parse::<IpAddr>().is_ok()).then(|| ip.to_owned())
-}
-
-/// Every group's SYNs go unanswered, on every path.
-fn foreign_syn_dead(outcome: &Outcome) -> Option<bool> {
-    (!outcome.per_group.is_empty()).then(|| {
-        outcome.per_group.iter().all(|g| {
-            matches!(g.group.fault, Fault::SynUnanswered { .. })
-                && g.results.iter().all(|(_, s)| !works(s))
-        })
-    })
-}
-
-/// What was seen besides the paths, and the sources that were not there (diag spec 5).
-fn evidence(
-    state: &AppState,
-    ctx: &Ctx,
-    flows: &[FlowCounters],
-    outcome: &Outcome,
-    marks: &Marks,
-) -> (Evidence, Vec<String>) {
-    let socks5 = state.socks5();
-    let mut missing = Vec::new();
-    let read = |path: &Path, at: u64| logs::tail_from(path, at, LOG_BYTES).ok().flatten();
-    let neko = marks
-        .neko
-        .as_deref()
-        .and_then(|dir| read(&neko_log(dir), marks.neko_at))
-        .map(|lines| logs::neko::parse(&lines));
-    let neko_routes = marks
-        .neko
-        .as_deref()
-        .and_then(|dir| logs::neko_routes::read(&neko_routes(dir)).ok());
-    // Only a hub with a proxy expects NekoBox.
-    if socks5.is_some() {
-        if neko.is_none() {
-            missing.push("журнал NekoBox".to_owned());
-        }
-        if neko_routes.is_none() {
-            missing.push("маршруты NekoBox".to_owned());
-        }
-    }
-    let voices: Vec<logs::discord::Voice> = marks
-        .discord
-        .iter()
-        .filter_map(|(path, at)| read(path, *at))
-        .filter(|lines| !lines.is_empty())
-        .map(|lines| logs::discord::parse(&lines))
-        .collect();
-    let voice = voices
-        .iter()
-        .find(|v| v.media_server.is_some())
-        .or(voices.first())
-        .cloned();
-    if ctx.profile.id == "discord" && voice.is_none() {
-        missing.push("журнал Discord".to_owned());
-    }
-    let proxy_ip = voice
-        .as_ref()
-        .filter(|v| v.local_address.is_some())
-        .and(socks5.as_deref())
-        .and_then(proxy_ip);
-    let dns_mismatch = ctx
-        .profile
-        .domains
-        .iter()
-        .filter(|d| spoofed(d, socks5.as_deref()))
-        .cloned()
-        .collect();
-    let ru_ok = probe::curl::https_via("ya.ru", None, &Via::Direct, None).status == CheckStatus::Ok;
-    (
-        Evidence {
-            flows: flows.to_vec(),
-            neko,
-            neko_routes,
-            voice,
-            proxy_ip,
-            dns_mismatch,
-            ru_ok: Some(ru_ok),
-            foreign_syn_dead: foreign_syn_dead(outcome),
-        },
-        missing,
-    )
-}
-
 /// `(<profile>: <host>, works)` for the other profiles' HTTPS probes to a named host (the
 /// addresses they would observe are not known here).
 fn other_probes(profiles: &[Profile]) -> Vec<(String, ProbeSpec)> {
@@ -903,7 +758,14 @@ fn probe_all(probes: &[(String, ProbeSpec)]) -> Vec<(String, bool)> {
 
 /// Spec 8: the other profiles as they are and under each fix that changes the strategy; what
 /// works now and stops under a fix is a warning. Rules affect only their programs: not checked.
-fn recheck(env: &mut AppEnv, state: &AppState, profile: &Profile, fixes: &[Fix]) -> Vec<String> {
+fn recheck(
+    env: &mut AppEnv,
+    state: &AppState,
+    ctx: &Ctx,
+    fixes: &[Fix],
+    budget: Duration,
+) -> Vec<String> {
+    let profile = &ctx.profile;
     let candidates: Vec<(String, anyhow::Result<Launch>)> = fixes
         .iter()
         .filter_map(|fix| match fix {
@@ -942,12 +804,22 @@ fn recheck(env: &mut AppEnv, state: &AppState, profile: &Profile, fixes: &[Fix])
     if probes.is_empty() {
         return Vec::new();
     }
+    let mut warnings = Vec::new();
+    let over = |env: &AppEnv, warnings: &mut Vec<String>| {
+        let over = env.elapsed() >= budget;
+        if over {
+            warnings.push(RECHECK_CUT.into());
+        }
+        over
+    };
+    if over(env, &mut warnings) {
+        return warnings;
+    }
     env.progress(Progress::Rechecking);
     // After the run's rollback: as the user has it.
     let before = probe_all(&probes);
-    let mut warnings = Vec::new();
     for (name, launch) in candidates {
-        if env.cancelled() {
+        if env.cancelled() || over(env, &mut warnings) {
             break;
         }
         env.dirty = true;
@@ -968,111 +840,12 @@ fn recheck(env: &mut AppEnv, state: &AppState, profile: &Profile, fixes: &[Fix])
     warnings
 }
 
-/// `hub-circular` from `store` on the zapret2 strategy in use (diag spec 7), the base named on its
-/// first line.
-fn hub_text(engine: &zapret2::Engine, store: &Store) -> anyhow::Result<String> {
-    let (base, text) = base(engine, zapret::service::strategy().as_deref());
-    let generated = circular_store::generate(&text, store)?;
-    Ok(format!("{BASE_LINE}{base}\n{generated}"))
-}
-
-/// The zapret2 strategy `hub-circular` builds on: the active zapret2 one; for an active Flowseal
-/// strategy its copy (`general` is `general (Flowseal)`); for `hub-circular` itself the base it
-/// names. None (empty) for the user's own Flowseal strategy or nothing active.
-fn base(engine: &zapret2::Engine, active: Option<&str>) -> (String, String) {
-    let Some(active) = active else {
-        return Default::default();
-    };
-    let (name, zapret2) = match zapret2::strip_prefix(active) {
-        Some(circular_store::NAME) => {
-            let named = zapret2::strategies::find(engine.root(), circular_store::NAME)
-                .ok()
-                .and_then(|s| {
-                    s.text
-                        .lines()
-                        .find_map(|l| l.strip_prefix(BASE_LINE).map(|n| n.trim().to_owned()))
-                })
-                .filter(|n| !n.is_empty() && n != circular_store::NAME);
-            match named {
-                Some(name) => (name, true),
-                None => return Default::default(),
-            }
-        }
-        Some(short) => (short.to_owned(), true),
-        None if active == "general" => ("general (Flowseal)".to_owned(), false),
-        None => (active.to_owned(), false),
-    };
-    match zapret2::strategies::find(engine.root(), &name) {
-        Ok(s) if zapret2 || s.flowseal_copy => (name, s.text),
-        _ => Default::default(),
-    }
-}
-
-/// «Применить» of a saved report's fix (diag spec 8). `None` for a rule: no quick check.
-pub fn apply(app: &AppHandle, id: &str, fix: u32) -> anyhow::Result<Option<QuickCheck>> {
-    let state = state(app);
-    anyhow::ensure!(!state.diagnosing(), DIAGNOSING);
-    let summary = report::load(&state.paths.diag(), id)?;
-    let fix = summary
-        .fixes
-        .get(fix as usize)
-        .with_context(|| format!("report {id} has no fix {fix}"))?
-        .clone();
-    match fix {
-        Fix::AddRule { rule } => {
-            state.router.edit(|list| {
-                if rules::find(list, &rule.name).is_ok() {
-                    rules::replace(list, rule)
-                } else {
-                    rules::add(list, rule)
-                }
-            })?;
-            let enabled = routing::set_enabled(app, true);
-            actions::changed(app);
-            enabled.map(|_| None)
-        }
-        Fix::EditRule { name, protocol } => {
-            state.router.edit(|list| {
-                let rule = Rule {
-                    protocol,
-                    ..rules::find(list, &name)?.clone()
-                };
-                rules::replace(list, rule)
-            })?;
-            actions::changed(app);
-            Ok(None)
-        }
-        Fix::ApplyStrategy { name } => actions::apply(app, &name).map(Some),
-        Fix::ApplyHubCircular { tricks, filter } => {
-            let engine = state.engine2_required()?;
-            let path = circular_path(&state);
-            state.change_any(|folder| {
-                let mut store = circular_store::load(&path)?;
-                circular_store::add(&mut store, &filter, tricks);
-                let text = hub_text(&engine, &store)?;
-                let create = !zapret2::strategies::dir(engine.root())
-                    .join(format!("{}.txt", circular_store::NAME))
-                    .exists();
-                zapret2::service::save(
-                    &engine,
-                    folder,
-                    engine.root(),
-                    circular_store::NAME,
-                    &text,
-                    create,
-                )?;
-                // After the strategy: a text zapret2 refuses leaves the store as it was.
-                circular_store::save(&path, &store)
-            })?;
-            let name = format!("{}{}", zapret2::PREFIX, circular_store::NAME);
-            actions::apply(app, &name).map(Some)
-        }
-        Fix::TurnOff { .. } | Fix::Manual { .. } => anyhow::bail!(texts::MANUAL),
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::apply::{BASE_LINE, base};
+    use super::evidence::{differ, foreign_syn_dead};
+    use diag::culprits::Fault;
+
     use super::*;
 
     fn flow(dst: &str, sni: Option<&str>) -> FlowCounters {
