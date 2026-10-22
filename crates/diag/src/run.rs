@@ -11,6 +11,10 @@ use crate::evaluate::{Answer, Score, rank};
 use crate::paths::{Ctx, PathKind, plan};
 use crate::profiles::{ProbeKind, ProbeSpec};
 
+/// A step of the diagnostics, for the page. Named for TypeScript: `tester` has a `Progress` too, and
+/// specta renames no enum.
+pub type Progress = DiagStep;
+
 /// What the diagnostics runs on: the hub, or a fake in tests.
 pub trait Env {
     fn set_path(&mut self, path: &PathKind, group: &Group) -> anyhow::Result<()>;
@@ -26,7 +30,7 @@ pub trait Env {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "step")]
-pub enum Progress {
+pub enum DiagStep {
     Observing {
         secs_left: u32,
         flows: Vec<FlowCounters>,
@@ -82,6 +86,7 @@ pub struct Outcome {
 
 /// What the user asked for: a profile or a program.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename = "DiagRequest")]
 pub struct Request {
     pub profile: Option<String>,
     pub app: Option<String>,
@@ -108,6 +113,7 @@ impl Request {
 
 /// A running diagnostics, as the UI sees it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename = "DiagLive")]
 pub struct Live {
     pub request: Request,
     pub progress: Option<Progress>,

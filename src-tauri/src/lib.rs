@@ -4,6 +4,7 @@ mod actions;
 mod autostart;
 mod cli;
 mod commands;
+mod diag;
 mod dto;
 mod jobs;
 mod journal;
@@ -36,7 +37,9 @@ fn specta_builder() -> Builder<tauri::Wry> {
             dto::TestsFinished,
             dto::StateChanged,
             dto::NoticesChanged,
-            dto::DownloadProgress
+            dto::DownloadProgress,
+            dto::DiagProgress,
+            dto::DiagFinished
         ])
         .commands(collect_commands![
             commands::app_version,
@@ -103,7 +106,16 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::add_route_preset,
             commands::route_flows,
             commands::validate_route,
-            commands::import_route_lines
+            commands::import_route_lines,
+            commands::diag_profiles,
+            commands::start_diag,
+            commands::diag_live,
+            commands::diag_answer,
+            commands::diag_choose,
+            commands::cancel_diag,
+            commands::diag_reports,
+            commands::diag_report,
+            commands::diag_apply
         ])
 }
 

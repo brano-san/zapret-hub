@@ -5135,6 +5135,7 @@ version = "0.7.0"
 dependencies = [
  "anyhow",
  "cli",
+ "diag",
  "exec",
  "log",
  "probe",

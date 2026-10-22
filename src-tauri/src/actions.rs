@@ -129,6 +129,16 @@ pub fn save_settings(app: &AppHandle, settings: Settings, pipe: bool) -> anyhow:
     let mut settings = crate::settings::to_save(&old, settings, pipe)?;
     settings.socks5 =
         crate::settings::validate_socks(settings.socks5.as_deref().unwrap_or_default())?;
+    anyhow::ensure!(
+        (10..=120).contains(&settings.diag_observe_secs),
+        "diagnostics watch for 10 to 120 s, not {}",
+        settings.diag_observe_secs
+    );
+    anyhow::ensure!(
+        (1..=60).contains(&settings.diag_budget_min),
+        "diagnostics take 1 to 60 min, not {}",
+        settings.diag_budget_min
+    );
     let folder_changed = settings.zapret_dir != old.zapret_dir;
     let engine_changed = settings.zapret2_dir != old.zapret2_dir;
     if folder_changed || engine_changed {

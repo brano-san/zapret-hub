@@ -14,6 +14,7 @@ pub enum Answer {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename = "DiagScore")]
 pub struct Score {
     pub ok: u32,
     pub total: u32,

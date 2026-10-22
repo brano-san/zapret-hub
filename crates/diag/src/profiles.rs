@@ -23,6 +23,7 @@ pub struct ProbeSpec {
 }
 
 #[derive(Serialize, Deserialize, specta::Type, Clone, Debug, PartialEq)]
+#[serde(rename = "DiagProfile")]
 pub struct Profile {
     pub id: String,
     pub name: String,

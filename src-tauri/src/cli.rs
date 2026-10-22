@@ -221,7 +221,7 @@ mod tests {
             strategies: vec!["general".into(), "general (ALT2)".into()],
             repeats: 2,
         };
-        assert!(state.begin_testing());
+        state.begin_testing().unwrap();
         state.set_live(Some(LiveRun {
             request: request.clone(),
             current: Some(1),

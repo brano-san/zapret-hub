@@ -33,6 +33,12 @@ pub struct Settings {
     pub cli_enabled: bool,
     /// Routing through the SOCKS5 proxy (router spec 3); only `set_router_enabled` writes it.
     pub router_enabled: bool,
+    /// How long diagnostics watch the program, 10–120 s (diag spec 3).
+    pub diag_observe_secs: u32,
+    /// The time diagnostics have for the paths, 1–60 min (diag spec 6).
+    pub diag_budget_min: u32,
+    /// NekoBox's folder, for its logs (diag spec 5); `None`: the running NekoBox's.
+    pub nekobox_dir: Option<String>,
 }
 
 impl Default for Settings {
@@ -47,6 +53,9 @@ impl Default for Settings {
             wizard_done: false,
             cli_enabled: false,
             router_enabled: false,
+            diag_observe_secs: 30,
+            diag_budget_min: 10,
+            nekobox_dir: None,
         }
     }
 }
@@ -174,6 +183,9 @@ mod tests {
             wizard_done: true,
             cli_enabled: true,
             router_enabled: true,
+            diag_observe_secs: 45,
+            diag_budget_min: 7,
+            nekobox_dir: Some(r"E:\nekoray".into()),
         };
         save(&path, &settings).unwrap();
         assert_eq!(load(&path).unwrap(), settings);

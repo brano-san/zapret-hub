@@ -120,10 +120,35 @@ export const commands = {
 	validateRoute: (rule: Rule) => __TAURI_INVOKE<FieldError[]>("validate_route", { rule }),
 	/**  `ips` and `domains` plus the entries of a list file (one subnet or domain per line). */
 	importRouteLines: (ips: string[], domains: string[], text: string) => typedError<Imported, string>(__TAURI_INVOKE("import_route_lines", { ips, domains, text })),
+	diagProfiles: () => typedError<DiagProfile[], string>(__TAURI_INVOKE("diag_profiles")),
+	startDiag: (request: DiagRequest) => typedError<null, string>(__TAURI_INVOKE("start_diag", { request })),
+	diagLive: () => __TAURI_INVOKE<{
+	request: DiagRequest,
+	progress: DiagStep | null,
+	question: string | null,
+	choosing: Group[] | null,
+} | null>("diag_live"),
+	/**  «Работает?» in the "with me" mode. */
+	diagAnswer: (answer: Answer) => typedError<null, string>(__TAURI_INVOKE("diag_answer", { answer })),
+	/**  The culprit groups left ticked, by key. */
+	diagChoose: (keys: string[]) => typedError<null, string>(__TAURI_INVOKE("diag_choose", { keys })),
+	cancelDiag: () => __TAURI_INVOKE<void>("cancel_diag"),
+	/**  `(id, profile)`, newest first. */
+	diagReports: () => typedError<([string, string])[], string>(__TAURI_INVOKE("diag_reports")),
+	diagReport: (id: string) => typedError<Summary, string>(__TAURI_INVOKE("diag_report", { id })),
+	/**  «Применить» of fix `fix` of report `id`; a quick check when it changed the strategy. */
+	diagApply: (id: string, fix: number) => typedError<{
+	ok: boolean,
+	service: SvcState,
+	winws_running: boolean,
+	checks: QuickItem[],
+} | null, string>(__TAURI_INVOKE("diag_apply", { id, fix })),
 };
 
 /** Events */
 export const events = {
+	diagFinished: makeEvent<DiagFinished>("diag-finished"),
+	diagProgress: makeEvent<DiagProgress>("diag-progress"),
 	downloadProgress: makeEvent<DownloadProgress>("download-progress"),
 	noticesChanged: makeEvent<NoticesChanged>("notices-changed"),
 	stateChanged: makeEvent<StateChanged>("state-changed"),
@@ -140,6 +165,8 @@ export type Analysis = {
 	warnings: string[],
 };
 
+export type Answer = "Yes" | "No" | "Unknown";
+
 export type CacheDir = {
 	path: string,
 	outcome: CacheOutcome,
@@ -153,6 +180,15 @@ export type CacheReport = {
 	/**  It was running and was closed. */
 	closed: boolean,
 	dirs: CacheDir[],
+};
+
+export type Candidate = {
+	/**  The strategy's full name. */
+	source: string,
+	/**  Position among the strategy's profiles (`strategies::split`). */
+	profile: number,
+	/**  The strategy cut down to this one profile. */
+	text: string,
 };
 
 /**  What the wizard offers (spec 9.2). */
@@ -235,6 +271,50 @@ export type Detected = {
 	zapret2: string | null,
 };
 
+/**  The diagnostics are over and zapret is back; `id` is the report's, `None` when they failed. */
+export type DiagFinished = {
+	id: string | null,
+};
+
+/**  A running diagnostics, as the UI sees it. */
+export type DiagLive = {
+	request: DiagRequest,
+	progress: DiagStep | null,
+	question: string | null,
+	choosing: Group[] | null,
+};
+
+export type DiagProfile = {
+	id: string,
+	name: string,
+	apps: string[],
+	hint: string,
+	domains: string[],
+	probe?: ProbeSpec[],
+};
+
+export type DiagProgress = DiagStep;
+
+/**  What the user asked for: a profile or a program. */
+export type DiagRequest = {
+	profile: string | null,
+	app: string | null,
+	mode: Mode,
+	observe_secs: number | null,
+	budget_min: number | null,
+};
+
+export type DiagScore = {
+	ok: number,
+	total: number,
+	median_ms: number | null,
+	loss_pct: number | null,
+	/**  The user's answer in the "with me" mode. */
+	answer: Answer | null,
+};
+
+export type DiagStep = { step: "Observing"; secs_left: number; flows: FlowCounters[] } | { step: "Culprits"; groups: Group[] } | { step: "Path"; group: number; index: number; total: number; label: string } | { step: "Question"; label: string; hint: string } | { step: "Rechecking" } | { step: "RollingBack" };
+
 export type DirectReason = { kind: "ProxyDown" } | { kind: "AuthRequired" } | { kind: "NoUdp" } | { kind: "Timeout" } | { kind: "Failed"; error: string } | { kind: "Loop" } | 
 /**  The address is sent direct for a while after the proxy refused a connection to it. */
 { kind: "Marked" } | 
@@ -291,9 +371,45 @@ export type Fakes = {
 	game: string | null,
 };
 
+export type Fault = { kind: "SynUnanswered"; syns: number } | { kind: "ResetEarly" } | { kind: "RedirectEarly" } | { kind: "DataRetrans"; count: number } | { kind: "UdpNoReply"; up: number; down: number } | { kind: "Slow"; median_ms: number } | { kind: "Lossy"; loss_pct: number };
+
 export type FieldError = {
 	field: string,
 	message: string,
+};
+
+export type Fix = { kind: "AddRule"; rule: Rule } | { kind: "EditRule"; name: string; protocol: Protocol } | { kind: "ApplyStrategy"; name: string } | { kind: "ApplyHubCircular"; tricks: Trick[]; filter: string } | { kind: "TurnOff"; target: TurnOffTarget; text: string } | { kind: "Manual"; text: string };
+
+export type FlowCounters = {
+	protocol: Protocol,
+	local_port: number,
+	/**  ip:port */
+	dst: string,
+	domain: string | null,
+	/**  TLS SNI, or the `Host` of plain HTTP. */
+	sni: string | null,
+	ipv6: boolean,
+	via_system_proxy: boolean,
+	up_packets: number,
+	down_packets: number,
+	up_bytes: number | null,
+	down_bytes: number | null,
+	/**  SYNs sent, the first one included. */
+	syns: number,
+	syn_answered: boolean,
+	syn_ack_ms: number | null,
+	/**  RST in the first `RESPONSE_WINDOW` bytes of the response. */
+	rst_early: boolean,
+	/**  An HTTP redirect in the first `RESPONSE_WINDOW` bytes of the response. */
+	redirect_early: boolean,
+	/**  Resent data segments starting in the first `RETRANS_WINDOW` bytes sent. */
+	data_retrans: number,
+	udp_first_reply_ms: number | null,
+	/**  Closed 1 s windows with packets. */
+	udp_windows: number,
+	/**  Windows with packets out and none back. */
+	udp_silent_windows: number,
+	rtt_ms: number[],
 };
 
 export type FlowRow = {
@@ -344,6 +460,27 @@ export type GameFilter = {
 };
 
 export type GameFilterMode = "disabled" | "all" | "tcp" | "udp";
+
+export type Group = {
+	/**  Domain, SNI, or `a.b.c.0/24`. */
+	key: string,
+	protocol: Protocol,
+	ports: number[],
+	members: FlowCounters[],
+	/**  Up to 3, most packets sent first. */
+	representatives: FlowCounters[],
+	fault: Fault,
+};
+
+export type GroupSummary = {
+	group: Group,
+	seen: string,
+	/**  Ranked, as tried. */
+	results: ([PathKind, DiagScore])[],
+	/**  Index into `results`. */
+	best: number | null,
+	explanation: string,
+};
 
 export type HostsPlan = {
 	needs_update: boolean,
@@ -414,6 +551,8 @@ export type Merged = {
 	notes: MergeNote[],
 };
 
+export type Mode = "auto" | "ask";
+
 /**  What `merge` did with a profile, for its preview. */
 export type NoteKind = 
 /**  Now rotates between `variants` sets of instances, the first of each from `names`. */
@@ -479,7 +618,23 @@ export type Pass = {
 	score: Score,
 };
 
+export type PathKind = { kind: "Current" } | { kind: "Direct" } | { kind: "ProxyPoint"; rule: Rule } | { kind: "ProxyNoZapret"; rule: Rule } | { kind: "Strategy"; name: string } | { kind: "Trick"; candidate: Candidate } | { kind: "ExtendRule"; rule: string; protocol: Protocol };
+
+export type Pattern = { id: "R1RuleMissesProtocol"; rule: string; has: Protocol; needs: Protocol } | { id: "R2VoiceUdp"; server: string; via_vpn: boolean } | { id: "R3SlowProxyDns"; median_ms: number; direct_dns: string } | { id: "R4DnsSpoofed"; domain: string } | { id: "R5Whitelist" } | { id: "R6DaveStalled"; alone: boolean; 
+/**  Where NekoBox sent the voice control channel (`*.discord.media`). */
+control_route: string | null; 
+/**  The control channel went direct (not through the VPN). */
+direct: boolean };
+
 export type Preset = "discord-voice" | "discord" | "dbd";
+
+export type ProbeKind = "https" | "discord-ip-discovery" | "stun" | "ping" | "live";
+
+export type ProbeSpec = {
+	kind: ProbeKind,
+	/**  A host, or `"observed"` for addresses found by observation. */
+	target: string,
+};
 
 /**  A profile as the card and the builder show it. */
 export type Profile = {
@@ -617,6 +772,12 @@ export type Settings = {
 	cli_enabled?: boolean,
 	/**  Routing through the SOCKS5 proxy (router spec 3); only `set_router_enabled` writes it. */
 	router_enabled?: boolean,
+	/**  How long diagnostics watch the program, 10–120 s (diag spec 3). */
+	diag_observe_secs?: number,
+	/**  The time diagnostics have for the paths, 1–60 min (diag spec 6). */
+	diag_budget_min?: number,
+	/**  NekoBox's folder, for its logs (diag spec 5); `None`: the running NekoBox's. */
+	nekobox_dir?: string | null,
 };
 
 /**  zapret, the settings or the history changed: the page reads what it shows again. */
@@ -678,6 +839,22 @@ export type StrategyRow = {
 
 export type Suite = "Standard" | "Dpi";
 
+export type Summary = {
+	/**  `YYYY-MM-DD_HH-MM-SS`. */
+	id: string,
+	profile: string,
+	verdict_text: string,
+	groups: GroupSummary[],
+	patterns: Pattern[],
+	explanations: string[],
+	fixes: Fix[],
+	warnings: string[],
+	canceled: boolean,
+	budget_hit: boolean,
+	rollback_error: string | null,
+	sources_missing: string[],
+};
+
 export type SvcState = "NotInstalled" | "Stopped" | "StartPending" | "StopPending" | "Running" | "Other";
 
 export type SystemCheck = {
@@ -737,6 +914,24 @@ export type Traffic = {
 	up: number | null,
 	down: number | null,
 };
+
+export type Trick = {
+	/**  The strategy's full name it came from. */
+	source: string,
+	/**  A candidate's text (`candidates::Candidate::text`): placeholders left as they are. */
+	text: string,
+	/**  When it was found. */
+	found: string,
+	median_ms: number | null,
+	ok: number,
+	total: number,
+};
+
+export type TurnOffTarget = 
+/**  The zapret service. */
+"zapret" | 
+/**  Whatever the culprit goes through now: the zapret strategy or a routing rule. */
+"current";
 
 export type UserList = "General" | "Exclude" | "IpsetExclude";
 

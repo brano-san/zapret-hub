@@ -33,7 +33,7 @@ pub fn start_tests(app: &AppHandle, request: Request) -> anyhow::Result<()> {
     } else {
         None
     };
-    anyhow::ensure!(state.begin_testing(), "a test run is already going");
+    state.begin_testing()?;
     state.set_live(Some(LiveRun {
         request: request.clone(),
         current: None,
@@ -273,7 +273,19 @@ fn recover(app: &AppHandle) {
     );
     let restored = state
         .folder_if_set()
-        .and_then(|folder| snapshot.restore(folder.as_ref()));
+        .and_then(|folder| snapshot.restore(folder.as_ref()))
+        .inspect(|()| {
+            // Routing as the diagnostics found it. A pause does not outlive the process that
+            // paused it: only the switch comes back (`routing::sync` at start then runs it).
+            if let Some((enabled, _)) = crate::diag::router_after_restore(&snapshot) {
+                let _ = state.router.set_temporary(None);
+                // Not part of the restore: a router that cannot start (no proxy) has its reason
+                // in its status, and pending.json must not stay for it.
+                if let Err(err) = crate::routing::set_enabled(app, enabled) {
+                    log::warn!("routing not put back after the diagnostics: {err:#}");
+                }
+            }
+        });
     match restored.and_then(|()| Snapshot::clear(&pending)) {
         Ok(()) => actions::notice(
             app,

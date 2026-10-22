@@ -745,3 +745,65 @@ pub fn import_route_lines(
 ) -> Answer<rules::Imported> {
     rules::import(&ips, &domains, &text).map_err(|err| err.to_string())
 }
+
+#[tauri::command]
+#[specta::specta]
+pub async fn diag_profiles(handle: AppHandle) -> Answer<Vec<diag::profiles::Profile>> {
+    blocking(move || crate::diag::profiles(&app(&handle))).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn start_diag(handle: AppHandle, request: diag::run::Request) -> Answer<()> {
+    blocking(move || crate::diag::start_diag(&handle, request)).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn diag_live(state: State<'_, AppState>) -> Option<diag::run::Live> {
+    state.diag_live()
+}
+
+/// «Работает?» in the "with me" mode.
+#[tauri::command]
+#[specta::specta]
+pub fn diag_answer(state: State<'_, AppState>, answer: diag::evaluate::Answer) -> Answer<()> {
+    state
+        .diag_reply(crate::diag::Reply::Answer(answer))
+        .map_err(|err| format!("{err:#}"))
+}
+
+/// The culprit groups left ticked, by key.
+#[tauri::command]
+#[specta::specta]
+pub fn diag_choose(state: State<'_, AppState>, keys: Vec<String>) -> Answer<()> {
+    state
+        .diag_reply(crate::diag::Reply::Choice(keys))
+        .map_err(|err| format!("{err:#}"))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn cancel_diag(state: State<'_, AppState>) {
+    state.cancel_diag();
+}
+
+/// `(id, profile)`, newest first.
+#[tauri::command]
+#[specta::specta]
+pub async fn diag_reports(handle: AppHandle) -> Answer<Vec<(String, String)>> {
+    blocking(move || diag::report::list(&app(&handle).paths.diag())).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn diag_report(handle: AppHandle, id: String) -> Answer<diag::summary::Summary> {
+    blocking(move || diag::report::load(&app(&handle).paths.diag(), &id)).await
+}
+
+/// «Применить» of fix `fix` of report `id`; a quick check when it changed the strategy.
+#[tauri::command]
+#[specta::specta]
+pub async fn diag_apply(handle: AppHandle, id: String, fix: u32) -> Answer<Option<QuickCheck>> {
+    blocking(move || crate::diag::apply(&handle, &id, fix)).await
+}

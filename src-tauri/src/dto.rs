@@ -120,6 +120,15 @@ pub struct TestsFinished {
     pub run_id: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type, tauri_specta::Event)]
+pub struct DiagProgress(pub diag::run::Progress);
+
+/// The diagnostics are over and zapret is back; `id` is the report's, `None` when they failed.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type, tauri_specta::Event)]
+pub struct DiagFinished {
+    pub id: Option<String>,
+}
+
 /// zapret, the settings or the history changed: the page reads what it shows again.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type, tauri_specta::Event)]
 pub struct StateChanged;

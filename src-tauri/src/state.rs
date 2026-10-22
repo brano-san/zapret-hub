@@ -2,7 +2,8 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use anyhow::Context as _;
 use tester::history::RunSummary;
@@ -12,6 +13,7 @@ use zapret::folder::Folder;
 use zapret::service::QuickCheck;
 use zapret::snapshot::{Snapshot, pending_path};
 
+use crate::diag::Reply;
 use crate::dto::{LiveRun, Notice, NoticeLevel};
 use crate::settings::Settings;
 
@@ -50,6 +52,11 @@ impl Paths {
     pub fn routes(&self) -> PathBuf {
         self.data().join("routes.toml")
     }
+
+    /// Diagnostics reports, `circular.toml` and the profiles that replace the built-in ones.
+    pub fn diag(&self) -> PathBuf {
+        diag::report::dir(&self.data())
+    }
 }
 
 /// A poisoned lock still holds good data: a panic elsewhere must not take the app down.
@@ -57,7 +64,8 @@ pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-const TESTING: &str = "a test run is going: wait for it or cancel it";
+pub const TESTING: &str = "a test run is going: wait for it or cancel it";
+pub const DIAGNOSING: &str = "diagnostics are running: wait for them or cancel them";
 
 pub struct AppState {
     pub paths: Paths,
@@ -69,6 +77,15 @@ pub struct AppState {
     queue: Mutex<()>,
     testing: AtomicBool,
     cancel: AtomicBool,
+    /// Held while a test run or diagnostics starts: one of them at a time.
+    starting: Mutex<()>,
+    /// Diagnostics (diag spec 9): like a test run, they hold the turn and block changes.
+    diagnosing: AtomicBool,
+    diag_cancel: AtomicBool,
+    diag_live: Mutex<Option<diag::run::Live>>,
+    /// The page's answer or choice the diagnostics wait for.
+    diag_reply: Mutex<Option<Reply>>,
+    diag_wake: Condvar,
     /// A release download from the window (`release::install`): one at a time, its own cancel.
     downloading: AtomicBool,
     download_cancel: AtomicBool,
@@ -95,6 +112,12 @@ impl AppState {
             queue: Mutex::new(()),
             testing: AtomicBool::new(false),
             cancel: AtomicBool::new(false),
+            starting: Mutex::new(()),
+            diagnosing: AtomicBool::new(false),
+            diag_cancel: AtomicBool::new(false),
+            diag_live: Mutex::new(None),
+            diag_reply: Mutex::new(None),
+            diag_wake: Condvar::new(),
             downloading: AtomicBool::new(false),
             download_cancel: AtomicBool::new(false),
             live: Mutex::new(None),
@@ -168,16 +191,14 @@ impl AppState {
         self.testing.load(Ordering::SeqCst)
     }
 
-    /// Marks a test run as going; false when one already is.
-    pub fn begin_testing(&self) -> bool {
-        let began = self
-            .testing
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok();
-        if began {
-            self.cancel.store(false, Ordering::SeqCst);
-        }
-        began
+    /// Marks a test run as going; refused while one already is or diagnostics run.
+    pub fn begin_testing(&self) -> anyhow::Result<()> {
+        let _starting = lock(&self.starting);
+        anyhow::ensure!(!self.diagnosing(), DIAGNOSING);
+        anyhow::ensure!(!self.testing(), "a test run is already going");
+        self.cancel.store(false, Ordering::SeqCst);
+        self.testing.store(true, Ordering::SeqCst);
+        Ok(())
     }
 
     /// The outcome is in place before `testing` turns false: whoever polls `tests_status` never
@@ -198,6 +219,82 @@ impl AppState {
 
     pub fn cancel_flag(&self) -> &AtomicBool {
         &self.cancel
+    }
+
+    pub fn diagnosing(&self) -> bool {
+        self.diagnosing.load(Ordering::SeqCst)
+    }
+
+    /// Marks diagnostics as going, with `live` for the page; refused during a test run or other
+    /// diagnostics.
+    pub fn begin_diag(&self, live: diag::run::Live) -> anyhow::Result<()> {
+        let _starting = lock(&self.starting);
+        anyhow::ensure!(!self.testing(), TESTING);
+        anyhow::ensure!(!self.diagnosing(), "diagnostics are already running");
+        self.diag_cancel.store(false, Ordering::SeqCst);
+        *lock(&self.diag_reply) = None;
+        *lock(&self.diag_live) = Some(live);
+        self.diagnosing.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    pub fn end_diag(&self) {
+        *lock(&self.diag_live) = None;
+        self.diagnosing.store(false, Ordering::SeqCst);
+    }
+
+    /// Also wakes a wait for an answer.
+    pub fn cancel_diag(&self) {
+        self.diag_cancel.store(true, Ordering::SeqCst);
+        self.diag_wake.notify_all();
+    }
+
+    pub fn diag_canceled(&self) -> bool {
+        self.diag_cancel.load(Ordering::SeqCst)
+    }
+
+    pub fn diag_live(&self) -> Option<diag::run::Live> {
+        lock(&self.diag_live).clone()
+    }
+
+    pub fn update_diag_live(&self, f: impl FnOnce(&mut diag::run::Live)) {
+        if let Some(live) = lock(&self.diag_live).as_mut() {
+            f(live);
+        }
+    }
+
+    /// From the page: taken by the diagnostics waiting for it, dropped when none waits.
+    pub fn diag_reply(&self, reply: Reply) -> anyhow::Result<()> {
+        anyhow::ensure!(self.diagnosing(), "no diagnostics are running");
+        *lock(&self.diag_reply) = Some(reply);
+        self.diag_wake.notify_all();
+        Ok(())
+    }
+
+    /// The reply `take` accepts, or `None` on cancel or after `timeout`.
+    pub fn wait_diag_reply<T>(
+        &self,
+        timeout: Duration,
+        take: impl Fn(&Reply) -> Option<T>,
+    ) -> Option<T> {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut reply = lock(&self.diag_reply);
+        // A reply from before the question is stale.
+        *reply = None;
+        loop {
+            if self.diag_canceled() {
+                return None;
+            }
+            if let Some(got) = reply.take().and_then(|r| take(&r)) {
+                return Some(got);
+            }
+            let left = deadline.checked_duration_since(std::time::Instant::now())?;
+            reply = self
+                .diag_wake
+                .wait_timeout(reply, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
     }
 
     /// Runs `work` as the one download, with the download's cancel flag cleared for it.
@@ -244,6 +341,7 @@ impl AppState {
         f: impl FnOnce(Option<&Folder>) -> anyhow::Result<T>,
     ) -> anyhow::Result<T> {
         anyhow::ensure!(!self.testing(), TESTING);
+        anyhow::ensure!(!self.diagnosing(), DIAGNOSING);
         let _turn = self.turn();
         let folder = self.folder_if_set()?;
         anyhow::ensure!(
@@ -415,8 +513,11 @@ mod tests {
             format!("{err:#}").contains("zapret folder is not set"),
             "{err:#}"
         );
-        assert!(state.begin_testing());
-        assert!(!state.begin_testing(), "a second run must not start");
+        state.begin_testing().unwrap();
+        assert!(
+            state.begin_testing().is_err(),
+            "a second run must not start"
+        );
         let err = state.change(|_| Ok(())).unwrap_err();
         assert!(format!("{err:#}").contains("test run"), "{err:#}");
         state.end_testing(cli::Outcome::Failed {
@@ -432,7 +533,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let state = state(dir.path());
-        assert!(state.begin_testing());
+        state.begin_testing().unwrap();
         state.set_live(Some(LiveRun {
             request: Request {
                 suite: Suite::Standard,
@@ -451,6 +552,88 @@ mod tests {
         assert!(!state.testing());
         assert_eq!(state.live(), None);
         assert_eq!(state.last_outcome(), Some(saved));
+    }
+
+    fn live() -> diag::run::Live {
+        diag::run::Live {
+            request: diag::run::Request {
+                profile: Some("discord".into()),
+                app: None,
+                mode: diag::run::Mode::Auto,
+                observe_secs: None,
+                budget_min: None,
+            },
+            progress: None,
+            question: None,
+            choosing: None,
+        }
+    }
+
+    #[test]
+    fn diag_blocks_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path());
+        state.set_settings(Settings {
+            zapret2_dir: Some(dir.path().display().to_string()),
+            ..Settings::default()
+        });
+        state.begin_diag(live()).unwrap();
+        let err = state.change_any(|_| Ok(())).unwrap_err();
+        assert_eq!(format!("{err:#}"), DIAGNOSING);
+        let err = state.begin_testing().unwrap_err();
+        assert_eq!(format!("{err:#}"), DIAGNOSING);
+        assert!(
+            state.begin_diag(live()).is_err(),
+            "a second one must not start"
+        );
+        state.end_diag();
+        assert!(state.change_any(|_| Ok(())).is_ok());
+        assert_eq!(state.diag_live(), None);
+    }
+
+    #[test]
+    fn tests_block_diag() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state(dir.path());
+        state.begin_testing().unwrap();
+        let err = state.begin_diag(live()).unwrap_err();
+        assert_eq!(format!("{err:#}"), TESTING);
+        assert!(!state.diagnosing());
+    }
+
+    #[test]
+    fn a_reply_reaches_the_wait_and_cancel_ends_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = std::sync::Arc::new(state(dir.path()));
+        state.begin_diag(live()).unwrap();
+        let s = state.clone();
+        let waiter = std::thread::spawn(move || {
+            s.wait_diag_reply(Duration::from_secs(10), |r| match r {
+                Reply::Choice(keys) => Some(keys.clone()),
+                Reply::Answer(_) => None,
+            })
+        });
+        // Until the waiter clears and takes it; a stale reply would be dropped.
+        let mut got = None;
+        for _ in 0..100 {
+            std::thread::sleep(Duration::from_millis(20));
+            state.diag_reply(Reply::Choice(vec!["a".into()])).unwrap();
+            if waiter.is_finished() {
+                got = waiter.join().unwrap();
+                break;
+            }
+        }
+        assert_eq!(got, Some(vec!["a".to_owned()]));
+        state.cancel_diag();
+        assert_eq!(
+            state.wait_diag_reply(Duration::from_secs(10), |_| Some(())),
+            None
+        );
+        assert_eq!(
+            state.wait_diag_reply(Duration::ZERO, |_| Some(())),
+            None,
+            "a timeout"
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! The router in the app (router spec 3, 7): its setup from the settings, the switch, and the
 //! pauses for what changes the WinDivert driver under it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use router::divert::{Engine, pick_dll};
@@ -17,8 +17,16 @@ use crate::state::{AppState, lock};
 /// The DLL of the engine running now (spec 3.1) and the proxy from the settings. A zapret2 folder
 /// that does not open counts as none: it must not block Flowseal's DLL.
 pub fn setup(state: &AppState) -> anyhow::Result<Setup> {
+    let proxy = parse_proxy(state.settings().socks5.as_deref())?;
+    Ok(Setup {
+        dll: dll(state)?,
+        proxy,
+    })
+}
+
+/// The WinDivert DLL of the engine running now, else of the first engine folder that has one.
+pub fn dll(state: &AppState) -> anyhow::Result<PathBuf> {
     let settings = state.settings();
-    let proxy = parse_proxy(settings.socks5.as_deref())?;
     let running = if zapret::procs::is_running(WINWS2) {
         Some(Engine::Zapret2)
     } else if zapret::procs::is_running("winws.exe") {
@@ -27,13 +35,12 @@ pub fn setup(state: &AppState) -> anyhow::Result<Setup> {
         None
     };
     let engine2 = state.engine2().ok().flatten();
-    let dll = pick_dll(
+    pick_dll(
         running,
         settings.zapret_dir.as_deref().map(Path::new),
         engine2.as_ref().and_then(|engine| engine.exe().parent()),
         Path::is_file,
-    )?;
-    Ok(Setup { dll, proxy })
+    )
 }
 
 /// The router as `router_enabled` says, with the DLL and the proxy in force now. A failed start
@@ -56,6 +63,8 @@ pub fn sync(app: &AppHandle) {
 /// setting stays off (spec 6) and so does the router.
 pub fn set_enabled(app: &AppHandle, enabled: bool) -> anyhow::Result<RouterStatus> {
     let state = state(app);
+    // Diagnostics drive the router themselves and put it back as they found it.
+    anyhow::ensure!(!state.diagnosing(), crate::state::DIAGNOSING);
     let saved = {
         let _saving = state.saving();
         let switched = if enabled {

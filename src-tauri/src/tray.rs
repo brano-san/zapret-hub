@@ -214,6 +214,7 @@ fn switch_routing(app: &AppHandle) {
 /// is on another thread (menu events come on the event-loop one).
 fn quit(app: &AppHandle) {
     actions::state(app).cancel_tests();
+    actions::state(app).cancel_diag();
     let app = app.clone();
     std::thread::spawn(move || {
         // A change or a whole test run holds the turn: once it is ours, zapret is settled and

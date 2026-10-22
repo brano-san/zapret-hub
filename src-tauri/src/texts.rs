@@ -55,6 +55,7 @@ pub fn operation(id: &str) -> &str {
         "ipset" => "смена режима ipset",
         "remove_service" => "удаление службы",
         "tests" => "тесты стратегий",
+        "diag" => "диагностика",
         other => other,
     }
 }
@@ -96,6 +97,20 @@ pub fn tests_done(run: &TestRun) -> String {
         ),
     };
     format!("Лучшая: {} — {tail}", best.name)
+}
+
+pub const DIAG_DONE: &str = "Диагностика завершена";
+pub const DIAG_CANCELED: &str = "Диагностика отменена";
+pub const DIAG_FAILED: &str = "Диагностика не выполнена";
+pub const RESTORE_AFTER_DIAG: &str = "После диагностики не всё вернулось на место";
+pub const DIAG_QUESTION: &str = "Диагностика ждёт ответа";
+pub const DIAG_CHOOSE: &str = "Диагностика: выберите адреса";
+pub const DIAG_CHOOSE_TEXT: &str =
+    "Снимите галочки с лишних адресов; через 2 минуты будут проверены все.";
+pub const MANUAL: &str = "это делается вручную";
+
+pub fn diag_question(hint: &str, path: &str) -> String {
+    format!("{path}. Проверьте: {hint}. Работает?")
 }
 
 pub const QUICK_OK: &str = "Быстрая проверка пройдена";
@@ -213,6 +228,12 @@ mod tests {
             tests_done(&run(Vec::new())),
             "Ни одна стратегия не проверена"
         );
+    }
+
+    #[test]
+    fn operation_diag_named() {
+        assert_eq!(operation("diag"), "диагностика");
+        assert_eq!(operation("tests"), "тесты стратегий");
     }
 
     #[test]

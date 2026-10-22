@@ -25,6 +25,7 @@ tauri-build.workspace = true
 [dependencies]
 exec.workspace = true
 cli.workspace = true
+diag.workspace = true
 probe.workspace = true
 router.workspace = true
 tester.workspace = true
