@@ -60,15 +60,16 @@ pub fn candidates(strategies: &[(String, String)], group: &Group) -> Vec<Candida
             });
             tokens.insert(at, list.clone());
             let profile_text = tokens.join(" ");
-            if seen.contains(&profile_text) {
-                continue;
-            }
-            seen.push(profile_text.clone());
+            // The whole text: the same profile on other blobs is another trick.
             let text = if global.is_empty() {
                 profile_text
             } else {
                 format!("{global} {profile_text}")
             };
+            if seen.contains(&text) {
+                continue;
+            }
+            seen.push(text.clone());
             out.push(Candidate {
                 source: source.clone(),
                 profile: i as u32,

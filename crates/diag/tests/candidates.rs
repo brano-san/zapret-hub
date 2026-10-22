@@ -91,3 +91,46 @@ fn identical_profiles_deduplicated() {
         "--filter-tcp=443 --hostlist-domains=x.com --lua-desync=fake"
     );
 }
+
+#[test]
+fn the_same_profile_on_other_blobs_is_another_candidate() {
+    let on = |blob: &str| {
+        format!(
+            "--blob=fake:@{blob}.bin\n--filter-tcp=443 --hostlist=a.txt --lua-desync=fake:blob=fake"
+        )
+    };
+    let g = group("x.com", Protocol::Tcp, 443);
+    let two = vec![
+        ("zapret2/A".to_owned(), on("a")),
+        ("zapret2/B".to_owned(), on("b")),
+    ];
+    assert_eq!(candidates(&two, &g).len(), 2);
+    let same = vec![
+        ("zapret2/A".to_owned(), on("a")),
+        ("zapret2/C".to_owned(), on("a")),
+    ];
+    assert_eq!(candidates(&same, &g).len(), 1);
+}
+
+#[test]
+fn filters_in_every_form() {
+    // Flowseal's final args put the value after a space.
+    let c = cover("--filter-tcp 80,443 --hostlist list-general.txt --dpi-desync=fake");
+    assert_eq!(c.tcp, [(80, 80), (443, 443)]);
+    assert!(c.lists);
+    assert!(covers(&c, Protocol::Both, 443), "either protocol");
+    assert!(!covers(&cover("--filter-udp=443"), Protocol::Tcp, 443));
+    assert!(covers(&cover("--filter-udp=443"), Protocol::Both, 443));
+    // No filter: the profile catches nothing to narrow.
+    let g = group("x.com", Protocol::Tcp, 443);
+    assert!(candidates(&strategies("--hostlist=a.txt --lua-desync=fake"), &g).is_empty());
+    // No list: the culprit's goes right after the filters.
+    let found = candidates(
+        &strategies("--filter-tcp=443 --filter-l7=tls --lua-desync=fake"),
+        &g,
+    );
+    assert_eq!(
+        found[0].text,
+        "--filter-tcp=443 --filter-l7=tls --hostlist-domains=x.com --lua-desync=fake"
+    );
+}
