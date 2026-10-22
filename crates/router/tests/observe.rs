@@ -331,3 +331,46 @@ fn a_udp_socket_does_not_claim_a_tcp_flow_of_its_port() {
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0].protocol, Protocol::Udp);
 }
+
+#[test]
+fn a_host_header_in_a_later_segment_names_the_flow() {
+    let now = Instant::now();
+    let server = SocketAddrV4::new(*SERVER.ip(), 80);
+    let mut t = Tally::new(None);
+    t.outbound(&tcp(ME, server, 100, 0, SYN, &[]), now);
+    let first = b"GET / HTTP/1.1\r\nUser-Agent: x\r\nHo";
+    t.outbound(&tcp(ME, server, 101, 1, ACK, first), now);
+    assert_eq!(only(&t).sni, None, "the Host line is not complete yet");
+    let second = b"st: example.com\r\n\r\n";
+    t.outbound(
+        &tcp(ME, server, 101 + first.len() as u32, 1, ACK, second),
+        now,
+    );
+    assert_eq!(only(&t).sni.as_deref(), Some("example.com"));
+}
+
+#[test]
+fn a_segment_before_an_isn_guessed_mid_stream_is_ignored() {
+    let now = Instant::now();
+    let mut t = Tally::new(None);
+    // No SYN seen: the first data segment sets the ISN.
+    t.outbound(&tcp(ME, SERVER, 5000, 1, ACK, &[0; 100]), now);
+    // An older segment resent: before the guessed ISN.
+    t.outbound(&tcp(ME, SERVER, 4000, 1, ACK, &[0; 100]), now);
+    t.outbound(&tcp(ME, SERVER, 5100, 1, ACK, &[0; 100]), now);
+    t.outbound(&tcp(ME, SERVER, 5100, 1, ACK, &[0; 100]), now);
+    assert_eq!(only(&t).data_retrans, 1, "only the real resend");
+}
+
+#[test]
+fn finishing_closes_the_open_udp_window() {
+    let now = Instant::now();
+    let server = SocketAddrV4::new(Ipv4Addr::new(35, 217, 1, 1), 50001);
+    let mut t = Tally::new(None);
+    t.outbound(&build_udp(ME, server, b"ping", 0), now);
+    t.tick(now + Duration::from_millis(300));
+    assert_eq!(only(&t).udp_windows, 0);
+    t.finish(now + Duration::from_millis(300));
+    let row = only(&t);
+    assert_eq!((row.udp_windows, row.udp_silent_windows), (1, 1));
+}

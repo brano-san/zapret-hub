@@ -334,7 +334,7 @@ fn the_largest_capture_filters_compile() {
     let many: Vec<u16> = (0..300).map(|i| 10000 + 7 * i).collect();
     let dll = dll();
     for text in [
-        router::observe::sniff_filter(&many).unwrap(),
+        router::observe::sniff_text(&many),
         capture_filter(&table, Some(61000), &held).unwrap(),
         filter(&ranges).unwrap(),
         capture_filter(&ports, Some(61000), &[]).unwrap(),

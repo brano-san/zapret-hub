@@ -20,7 +20,7 @@ use crate::owner::Images;
 use crate::packet::{ACK, RST, SYN, Tcp, parse_tcp, parse_udp};
 use crate::rules::{Protocol, norm_app, runs};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, specta::Type)]
 pub struct FlowCounters {
     pub protocol: Protocol,
     pub local_port: u16,
@@ -64,7 +64,7 @@ type Key = (Protocol, u16, SocketAddr);
 
 #[derive(Default)]
 struct Flow {
-    c: Option<FlowCounters>,
+    c: FlowCounters,
     /// The last SYN sent.
     syn_at: Option<Instant>,
     /// Sequence number of the first data byte.
@@ -75,7 +75,7 @@ struct Flow {
     probe: Option<(u32, Instant)>,
     /// Response data bytes received.
     down: u64,
-    /// The client's first bytes while its name is unknown.
+    /// The client's first bytes while its name (SNI or `Host`) is unknown.
     hello: Vec<u8>,
     named: bool,
     first_up: Option<Instant>,
@@ -160,8 +160,15 @@ fn sni(b: &[u8]) -> Option<Option<String>> {
     Some(None)
 }
 
-fn host(request: &[u8]) -> Option<String> {
-    String::from_utf8_lossy(request)
+/// The `Host` of a request's complete lines; `None` while the headers go on and it is not seen.
+fn host(request: &[u8]) -> Option<Option<String>> {
+    let ended = request.windows(4).any(|w| w == b"\r\n\r\n");
+    // A line cut by the segment's end is not read yet.
+    let complete = match request.windows(2).rposition(|w| w == b"\r\n") {
+        Some(end) => &request[..end + 2],
+        None => &[],
+    };
+    let found = String::from_utf8_lossy(complete)
         .split("\r\n")
         .skip(1)
         .take_while(|l| !l.is_empty())
@@ -169,7 +176,12 @@ fn host(request: &[u8]) -> Option<String> {
             let (k, v) = l.split_once(':')?;
             k.eq_ignore_ascii_case("host")
                 .then(|| v.trim().to_lowercase())
-        })
+        });
+    match found {
+        Some(name) => Some(Some(name)),
+        None if ended => Some(None),
+        None => None,
+    }
 }
 
 fn redirect(response: &[u8]) -> bool {
@@ -180,31 +192,26 @@ fn redirect(response: &[u8]) -> bool {
 }
 
 impl Flow {
-    fn counters(&mut self) -> &mut FlowCounters {
-        self.c.as_mut().unwrap()
-    }
-
     fn name(&mut self, port: u16, payload: &[u8]) {
-        let found = match port {
-            443 => {
-                self.hello.extend_from_slice(payload);
-                match sni(&self.hello) {
-                    None if self.hello.len() < HELLO_MAX => return,
-                    found => found.flatten(),
-                }
-            }
-            80 => host(payload),
-            _ => None,
+        let read = match port {
+            443 => sni,
+            80 => host,
+            _ => |_: &[u8]| Some(None),
+        };
+        self.hello.extend_from_slice(payload);
+        let found = match read(&self.hello) {
+            None if self.hello.len() < HELLO_MAX => return,
+            found => found.flatten(),
         };
         self.named = true;
         self.hello = Vec::new();
-        self.counters().sni = found;
+        self.c.sni = found;
     }
 
     fn tcp(&mut self, t: &Tcp, seq: u32, ack: u32, up: bool, now: Instant) {
         let syn = t.flags & SYN != 0;
         let acks = t.flags & ACK != 0;
-        let c = self.c.as_mut().unwrap();
+        let c = &mut self.c;
         if up {
             if syn && !acks {
                 c.syns += 1;
@@ -217,6 +224,10 @@ impl Flow {
             }
             let isn = *self.isn.get_or_insert(seq);
             let at = seq.wrapping_sub(isn);
+            // Before an ISN guessed mid-stream: an old segment, not one past 2 GiB.
+            if at >= 1 << 31 {
+                return;
+            }
             if at < self.sent {
                 if at < RETRANS_WINDOW {
                     c.data_retrans += 1;
@@ -258,11 +269,12 @@ impl Flow {
         self.down += t.payload.len() as u64;
     }
 
-    fn close_window(&mut self, now: Instant) {
+    /// `all`: the open window too, however short (the observation ends).
+    fn close_window(&mut self, now: Instant, all: bool) {
         if let Some((start, up, down)) = self.window
-            && now.duration_since(start) >= UDP_WINDOW
+            && (all || now.duration_since(start) >= UDP_WINDOW)
         {
-            let c = self.counters();
+            let c = &mut self.c;
             c.udp_windows += 1;
             if up > 0 && down == 0 {
                 c.udp_silent_windows += 1;
@@ -272,14 +284,14 @@ impl Flow {
     }
 
     fn udp(&mut self, up: bool, now: Instant) {
-        self.close_window(now);
+        self.close_window(now, false);
         let w = self.window.get_or_insert((now, 0, 0));
         if up {
             w.1 += 1;
             self.first_up.get_or_insert(now);
         } else {
             w.2 += 1;
-            let c = self.c.as_mut().unwrap();
+            let c = &mut self.c;
             if c.udp_first_reply_ms.is_none()
                 && let Some(at) = self.first_up
             {
@@ -317,30 +329,18 @@ impl Tally {
         let flow = self
             .flows
             .entry((protocol, local.port(), remote))
-            .or_default();
-        let c = flow.c.get_or_insert_with(|| FlowCounters {
-            protocol,
-            local_port: local.port(),
-            dst: remote.to_string(),
-            domain: None,
-            sni: None,
-            ipv6: remote.is_ipv6(),
-            via_system_proxy: proxied,
-            up_packets: 0,
-            down_packets: 0,
-            up_bytes: 0.0,
-            down_bytes: 0.0,
-            syns: 0,
-            syn_answered: false,
-            syn_ack_ms: None,
-            rst_early: false,
-            redirect_early: false,
-            data_retrans: 0,
-            udp_first_reply_ms: None,
-            udp_windows: 0,
-            udp_silent_windows: 0,
-            rtt_ms: vec![],
-        });
+            .or_insert_with(|| Flow {
+                c: FlowCounters {
+                    protocol,
+                    local_port: local.port(),
+                    dst: remote.to_string(),
+                    ipv6: remote.is_ipv6(),
+                    via_system_proxy: proxied,
+                    ..FlowCounters::default()
+                },
+                ..Flow::default()
+            });
+        let c = &mut flow.c;
         if proxied {
             return;
         }
@@ -367,13 +367,20 @@ impl Tally {
     /// Closes the UDP windows open for a second or longer.
     pub fn tick(&mut self, now: Instant) {
         for flow in self.flows.values_mut() {
-            flow.close_window(now);
+            flow.close_window(now, false);
+        }
+    }
+
+    /// Closes every open UDP window: the observation ends and its last packets count.
+    pub fn finish(&mut self, now: Instant) {
+        for flow in self.flows.values_mut() {
+            flow.close_window(now, true);
         }
     }
 
     /// Sorted by destination, then local port.
     pub fn rows(&self) -> Vec<FlowCounters> {
-        let mut rows: Vec<FlowCounters> = self.flows.values().filter_map(|f| f.c.clone()).collect();
+        let mut rows: Vec<FlowCounters> = self.flows.values().map(|f| f.c.clone()).collect();
         rows.sort_by(|a, b| (&a.dst, a.local_port).cmp(&(&b.dst, b.local_port)));
         rows
     }
@@ -434,7 +441,8 @@ pub struct Observer {
     threads: Vec<JoinHandle<()>>,
 }
 
-fn sniff_text(ports: &[u16]) -> String {
+/// The sniff handle's whole filter: `EARLY` and the programs' ports.
+pub fn sniff_text(ports: &[u16]) -> String {
     match sniff_filter(ports) {
         Some(f) => format!("{EARLY} or ({f})"),
         None => EARLY.into(),
@@ -591,6 +599,7 @@ impl Observer {
 
     pub fn stop(mut self) -> Vec<FlowCounters> {
         self.halt();
+        self.shared.tally.lock().unwrap().finish(Instant::now());
         self.snapshot()
     }
 
