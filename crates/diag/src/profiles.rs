@@ -110,7 +110,7 @@ pub fn any_program(exe: &str) -> Profile {
         id: ANY.into(),
         name: exe.into(),
         apps: vec![exe.into()],
-        hint: String::new(),
+        hint: "Воспроизведите проблему в программе".into(),
         domains: vec![],
         probes: vec![observed(ProbeKind::Https), observed(ProbeKind::Live)],
     }
