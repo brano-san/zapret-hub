@@ -4,7 +4,7 @@ use router::rules::{Protocol, Rule};
 use serde::{Deserialize, Serialize};
 
 use crate::candidates::{Candidate, candidates, is_subnet};
-use crate::cover::strategy_covers;
+use crate::cover::{cover, strategy_covers};
 use crate::culprits::{Fault, Group};
 use crate::profiles::Profile;
 
@@ -72,20 +72,51 @@ pub struct Ctx {
     pub profile: Profile,
 }
 
+/// The observed ports; for UDP each one as the narrowest `--filter-udp` range of a known strategy
+/// that covers it: voice servers change port within such a range between calls (spec 14).
+fn rule_ports(group: &Group, ctx: &Ctx) -> Vec<String> {
+    let mut ranges = Vec::new();
+    if group.protocol == Protocol::Udp {
+        let texts = ctx.strategies.iter().map(|(_, args)| args.clone()).chain(
+            ctx.zapret2
+                .iter()
+                .map(|(_, text)| zapret2::strategies::args(text)),
+        );
+        for text in texts {
+            ranges.extend(cover(&text).udp);
+        }
+    }
+    let mut out: Vec<String> = Vec::new();
+    for &port in &group.ports {
+        let narrowest = ranges
+            .iter()
+            .filter(|(lo, hi)| (*lo..=*hi).contains(&port))
+            .min_by_key(|(lo, hi)| hi - lo);
+        let text = match narrowest {
+            Some(&(lo, hi)) if lo != hi => format!("{lo}-{hi}"),
+            _ => port.to_string(),
+        };
+        if !out.contains(&text) {
+            out.push(text);
+        }
+    }
+    out
+}
+
 /// The culprit's addresses or domain and ports, for every program: rules match an address OR a
 /// program, so the profile's programs would take all their traffic on those ports. The check
 /// adds the hub and curl itself (`router_with`).
-fn point_rule(group: &Group, profile: &Profile) -> Rule {
+fn point_rule(group: &Group, ctx: &Ctx) -> Rule {
     let (ips, domains) = if is_subnet(&group.key) {
         (vec![group.key.clone()], vec![])
     } else {
         (vec![], vec![group.key.clone()])
     };
     Rule {
-        name: profile.rule_name(),
+        name: ctx.profile.rule_name(),
         enabled: true,
         protocol: group.protocol,
-        ports: group.ports.iter().map(u16::to_string).collect(),
+        ports: rule_ports(group, ctx),
         ips,
         domains,
         apps: Vec::new(),
@@ -97,7 +128,7 @@ pub fn plan(group: &Group, ctx: &Ctx) -> (Vec<PathKind>, Vec<String>) {
     let mut paths = vec![PathKind::Current, PathKind::Direct];
     let mut skipped = vec![];
     if ctx.proxy_ok {
-        let rule = point_rule(group, &ctx.profile);
+        let rule = point_rule(group, ctx);
         paths.push(PathKind::ProxyPoint { rule: rule.clone() });
         paths.push(PathKind::ProxyNoZapret { rule });
     } else {

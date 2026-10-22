@@ -506,3 +506,34 @@ fn syn_dead_everywhere_stops_before_strategies() {
     );
     assert_eq!(env.sets.iter().filter(|s| *s == "Стратегия A").count(), 2);
 }
+
+#[test]
+fn a_udp_proxy_rule_takes_the_strategy_range() {
+    let mut c = ctx(true);
+    c.zapret2.clear();
+    c.strategies = vec![
+        (
+            "V".into(),
+            "--filter-udp=19294-19344,50000-50100 --lua-desync=fake".into(),
+        ),
+        (
+            "W".into(),
+            "--filter-udp=1024-65535 --lua-desync=fake".into(),
+        ),
+    ];
+    let g = Group {
+        ports: vec![19300, 19310, 60000],
+        ..group(Protocol::Udp, 19300)
+    };
+    let (paths, _) = plan(&g, &c);
+    let PathKind::ProxyPoint { rule } = &paths[2] else {
+        panic!()
+    };
+    assert_eq!(rule.ports, ["19294-19344", "1024-65535"]);
+    // TCP keeps the ports it saw.
+    let (paths, _) = plan(&group(Protocol::Tcp, 443), &c);
+    let PathKind::ProxyPoint { rule } = &paths[2] else {
+        panic!()
+    };
+    assert_eq!(rule.ports, ["443"]);
+}
