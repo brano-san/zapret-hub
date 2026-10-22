@@ -42,10 +42,9 @@ fn compare(a: &(PathKind, Score), b: &(PathKind, Score)) -> Ordering {
     let loss = |s: &Score| s.loss_pct.unwrap_or(0);
     let by_works = works(sb).cmp(&works(sa));
     let by_median = match (sa.median_ms, sb.median_ms) {
-        (Some(x), Some(y)) if close(x, y) => pb
-            .pointed()
-            .cmp(&pa.pointed())
-            .then(loss(sa).cmp(&loss(sb)))
+        (Some(x), Some(y)) if close(x, y) => loss(sa)
+            .cmp(&loss(sb))
+            .then(pb.pointed().cmp(&pa.pointed()))
             .then(x.cmp(&y)),
         (Some(x), Some(y)) => x.cmp(&y),
         // Unmeasured last.
@@ -57,7 +56,7 @@ fn compare(a: &(PathKind, Score), b: &(PathKind, Score)) -> Ordering {
         .then(pb.pointed().cmp(&pa.pointed()))
 }
 
-/// Works first; then by median, a tie going to pointed paths; then by loss.
+/// Works first; then by median; within a ±15 % tie by loss, then pointed paths first.
 pub fn rank(results: &mut [(PathKind, Score)]) {
     // The ±15 % tie is not transitive and `sort_by` may panic on that: a stable insertion sort.
     for i in 1..results.len() {

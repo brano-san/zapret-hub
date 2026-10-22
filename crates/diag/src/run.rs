@@ -49,6 +49,7 @@ pub enum Progress {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
 pub enum Mode {
     Auto,
     Ask,
@@ -199,10 +200,10 @@ pub fn run(env: &mut dyn Env, ctx: &Ctx, groups: &[Group], settings: &Settings) 
                 label: label.clone(),
             });
             if let Err(e) = env.set_path(path, group) {
-                // The configuration is unknown now: stop and roll back.
+                // Not working; the next path sets its own configuration.
                 gr.not_checked
                     .push(format!("{label}: не удалось поставить: {e:#}"));
-                stopped = true;
+                gr.results.push((path.clone(), Score::default()));
                 continue;
             }
             let Some(mut s) = evaluate(env, ctx, group) else {

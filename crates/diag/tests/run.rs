@@ -233,6 +233,18 @@ fn rank_prefers_pointed_within_15pct() {
     ];
     rank(&mut r);
     assert_eq!(r[0].0, strategy);
+    let lossy = |p: &PathKind, loss| {
+        (
+            p.clone(),
+            Score {
+                loss_pct: Some(loss),
+                ..score(3, 3, 100)
+            },
+        )
+    };
+    let mut r = vec![lossy(&point, 40), lossy(&strategy, 0)];
+    rank(&mut r);
+    assert_eq!(r[0].0, strategy);
 }
 
 #[test]
@@ -270,7 +282,15 @@ fn set_path_error_recorded_and_rollback_still_runs() {
     let out = go(&mut env, Mode::Auto, 600);
     assert_eq!(env.rolled_back, 1);
     let g = &out.per_group[0];
-    assert_eq!(g.results.len(), 1);
+    assert!(g.results.len() > 3);
+    assert!(env.sets.iter().any(|s| s == "Прокси точечно"));
+    let failed = g
+        .results
+        .iter()
+        .find(|(p, _)| *p == PathKind::Direct)
+        .unwrap();
+    assert_eq!(failed.1, Score::default());
+    assert!(!works(&failed.1));
     assert!(
         g.not_checked
             .iter()
@@ -391,4 +411,10 @@ fn request_check() {
         .check()
         .is_err()
     );
+}
+
+#[test]
+fn mode_is_lowercase() {
+    assert_eq!(serde_json::to_string(&Mode::Auto).unwrap(), "\"auto\"");
+    assert_eq!(serde_json::from_str::<Mode>("\"ask\"").unwrap(), Mode::Ask);
 }
