@@ -2,6 +2,7 @@
 
 pub mod catalog;
 pub mod dpi;
+pub mod engine;
 pub mod history;
 pub mod model;
 pub mod rank;
