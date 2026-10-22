@@ -54,7 +54,7 @@ const UDP_TIMEOUT: Duration = Duration::from_secs(2);
 const PING_TIMEOUT_MS: u32 = 2000;
 const ATTEMPTS: usize = 3;
 /// The name of the temporary rule of the proxy paths: never one of the user's.
-const CHECK_RULE: &str = "diag-check";
+const CHECK_RULE: &str = router::TEMPORARY;
 
 fn profiles_dir(state: &AppState) -> PathBuf {
     state.paths.diag().join("profiles")

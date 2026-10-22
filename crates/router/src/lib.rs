@@ -10,6 +10,9 @@ pub mod rules;
 pub mod socks;
 pub mod tcp;
 
+/// The name of the diagnostics' temporary rule (`Router::set_temporary`): no saved rule takes it.
+pub const TEMPORARY: &str = "diag-check";
+
 use std::collections::{HashMap, hash_map::Entry};
 use std::mem::discriminant;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket};
@@ -362,6 +365,27 @@ impl Router {
         }
         let mut list = file.list.clone();
         let out = f(&mut list)?;
+        let temporary = self
+            .0
+            .temporary
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|t| t.name.to_lowercase());
+        let reserved = |name: &str| {
+            let name = name.to_lowercase();
+            name == TEMPORARY || Some(&name) == temporary.as_ref()
+        };
+        // A saved rule of that name stays editable; a new one may not take it.
+        if let Some(rule) = list
+            .iter()
+            .find(|r| reserved(&r.name) && !file.list.iter().any(|o| o.name == r.name))
+        {
+            bail!(
+                "{}: the name is reserved for the diagnostics' temporary rule",
+                rule.name
+            );
+        }
         for rule in &list {
             if let Some(e) = rules::check(rule).first() {
                 bail!("{}: {}: {}", rule.name, e.field, e.message);

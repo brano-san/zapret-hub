@@ -291,3 +291,32 @@ fn stop_clears_temporary_and_pause_keeps_it() {
     r.stop();
     assert!(r.temporary().is_none() && r.table().is_empty());
 }
+
+#[test]
+fn a_saved_rule_cannot_take_the_temporary_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = router(dir.path());
+    let named = |name: &str| rules::Rule {
+        name: name.into(),
+        ..temp_rule()
+    };
+    let err = r
+        .edit(|list| rules::add(list, named("Diag-Check")))
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("reserved"), "{err:#}");
+    // While a temporary rule is set: an edit keeps it and refuses its name.
+    r.set_temporary(Some(temp_rule())).unwrap();
+    assert!(r.edit(|list| rules::add(list, named("diag-1"))).is_err());
+    r.edit(|list| rules::add(list, named("mine"))).unwrap();
+    let names: Vec<String> = r
+        .rules()
+        .rules
+        .into_iter()
+        .map(|row| row.rule.name)
+        .collect();
+    assert!(
+        names.contains(&"diag-1".to_owned()) && names.contains(&"mine".to_owned()),
+        "{names:?}"
+    );
+    assert_eq!(r.temporary().unwrap().name, "diag-1");
+}
