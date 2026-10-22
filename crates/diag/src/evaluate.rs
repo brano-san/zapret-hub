@@ -24,13 +24,13 @@ pub struct Score {
     pub answer: Option<Answer>,
 }
 
-/// The user's yes or no decides; else at least 2 of 3 attempts. No attempts: does not work.
 /// Even count: the lower middle. The one median of the diagnostics.
 pub fn median(mut v: Vec<u32>) -> Option<u32> {
     v.sort_unstable();
     v.get(v.len().checked_sub(1)? / 2).copied()
 }
 
+/// The user's yes or no decides; else at least 2 of 3 attempts. No attempts: does not work.
 pub fn works(s: &Score) -> bool {
     match s.answer {
         Some(Answer::Yes) => true,
