@@ -71,6 +71,16 @@ fn udp_four_up_one_down_fault() {
 }
 
 #[test]
+fn tcp_four_up_one_down_is_not_udp_fault() {
+    let f = FlowCounters {
+        up_packets: 4,
+        down_packets: 1,
+        ..flow("1.2.3.4:443")
+    };
+    assert_eq!(fault(&f), None);
+}
+
+#[test]
 fn udp_four_up_two_down_ok() {
     assert_eq!(fault(&udp(4, 2)), None);
 }

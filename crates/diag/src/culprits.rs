@@ -57,7 +57,7 @@ pub fn fault(f: &FlowCounters) -> Option<Fault> {
             count: f.data_retrans,
         });
     }
-    if f.up_packets >= 4 && f.down_packets <= 1 {
+    if matches!(f.protocol, Protocol::Udp) && f.up_packets >= 4 && f.down_packets <= 1 {
         return Some(Fault::UdpNoReply {
             up: f.up_packets,
             down: f.down_packets,
