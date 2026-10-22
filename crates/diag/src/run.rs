@@ -7,7 +7,7 @@ use router::observe::FlowCounters;
 use serde::{Deserialize, Serialize};
 
 use crate::culprits::{Fault, Group, fault};
-use crate::evaluate::{Answer, Score, rank, works};
+use crate::evaluate::{Answer, Score, median, rank, works};
 use crate::paths::{Ctx, PathKind, plan};
 use crate::profiles::{ProbeKind, ProbeSpec};
 
@@ -63,8 +63,6 @@ pub enum Mode {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
-    /// 10..=120.
-    pub observe_secs: u32,
     pub budget: Duration,
     pub mode: Mode,
 }
@@ -127,12 +125,6 @@ pub struct Live {
 }
 
 pub const SYN_DEAD: &str = "не проверялось: адреса не отвечают на SYN ни напрямую, ни через прокси, стратегии это не исправят";
-
-/// Even count: the lower middle, as in `culprits::fault`.
-fn median(mut v: Vec<u32>) -> Option<u32> {
-    v.sort_unstable();
-    v.get(v.len().checked_sub(1)? / 2).copied()
-}
 
 /// Representatives seen in a short observation, judged by the section 5 criteria.
 fn live(env: &mut dyn Env, group: &Group) -> Score {

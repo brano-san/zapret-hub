@@ -125,7 +125,6 @@ impl Env for Fake {
 
 fn settings(mode: Mode, budget_secs: u64) -> Settings {
     Settings {
-        observe_secs: 30,
         budget: Duration::from_secs(budget_secs),
         mode,
     }
@@ -536,4 +535,39 @@ fn a_udp_proxy_rule_takes_the_strategy_range() {
         panic!()
     };
     assert_eq!(rule.ports, ["443"]);
+}
+
+#[test]
+fn extend_rule_comes_after_the_proxy_and_before_the_strategies() {
+    let mut c = ctx(true);
+    c.app_rules = vec![Rule {
+        name: "DBD Process".into(),
+        enabled: true,
+        protocol: Protocol::Udp,
+        ports: vec![],
+        ips: vec![],
+        domains: vec![],
+        apps: vec![DBD.to_lowercase()],
+    }];
+    c.ranking.push("gone".into());
+    let (paths, skipped) = plan(&group(Protocol::Tcp, 443), &c);
+    let kinds: Vec<u32> = paths.iter().map(order).collect();
+    let at = kinds.iter().position(|&k| k == 4).unwrap();
+    assert_eq!(&kinds[..at], [0, 1, 2, 3]);
+    assert_eq!(kinds[at + 1], 5);
+    assert!(
+        skipped
+            .iter()
+            .any(|s| s == "Стратегия gone: её аргументы не прочитаны"),
+        "{skipped:?}"
+    );
+}
+
+#[test]
+fn the_median_is_the_lower_middle() {
+    use diag::evaluate::median;
+    assert_eq!(median(vec![]), None);
+    assert_eq!(median(vec![300, 10]), Some(10));
+    assert_eq!(median(vec![900, 10, 300, 20]), Some(20));
+    assert_eq!(median(vec![5, 1, 3]), Some(3));
 }

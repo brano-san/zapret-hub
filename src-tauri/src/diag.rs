@@ -262,7 +262,6 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
     let engine2 = state.engine2().ok().flatten();
     let observe_secs = request.observe_secs.unwrap_or(settings.diag_observe_secs);
     let run_settings = diag::run::Settings {
-        observe_secs,
         budget: Duration::from_secs(
             u64::from(request.budget_min.unwrap_or(settings.diag_budget_min)) * 60,
         ),
@@ -729,15 +728,13 @@ fn attempts(group: &Group, probe: &ProbeSpec) -> Score {
 }
 
 fn score(kind: ProbeKind, answers: &[Option<u32>]) -> Score {
-    let mut times: Vec<u32> = answers.iter().flatten().copied().collect();
-    times.sort_unstable();
+    let times: Vec<u32> = answers.iter().flatten().copied().collect();
     let ok = times.len() as u32;
     let total = answers.len() as u32;
     Score {
         ok,
         total,
-        // Even count: the lower middle.
-        median_ms: times.get(times.len().saturating_sub(1) / 2).copied(),
+        median_ms: diag::evaluate::median(times),
         loss_pct: (kind != ProbeKind::Https && total > 0).then(|| (total - ok) * 100 / total),
         answer: None,
     }

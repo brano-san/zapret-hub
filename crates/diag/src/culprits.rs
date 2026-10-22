@@ -6,6 +6,8 @@ use router::observe::FlowCounters;
 use router::rules::Protocol;
 use serde::{Deserialize, Serialize};
 
+use crate::evaluate::median;
+
 /// `ResetEarly` is the default only for reading a report that lacks the fault.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "kind")]
@@ -76,10 +78,7 @@ pub fn fault(f: &FlowCounters) -> Option<Fault> {
             down: f.down_packets,
         });
     }
-    let mut rtt = f.rtt_ms.clone();
-    rtt.sort_unstable();
-    // Even count: the lower middle.
-    if let Some(&median_ms) = rtt.get(rtt.len().saturating_sub(1) / 2)
+    if let Some(median_ms) = median(f.rtt_ms.clone())
         && median_ms > 250
     {
         return Some(Fault::Slow { median_ms });

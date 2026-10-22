@@ -8,6 +8,9 @@ use crate::cover::{cover, strategy_covers};
 use crate::culprits::{Fault, Group};
 use crate::profiles::Profile;
 
+const PROXY_POINT: &str = "Прокси точечно";
+const PROXY_NO_ZAPRET: &str = "Прокси без zapret";
+
 pub const NO_TRICKS_FOR_SYN: &str = "приёмы zapret2 не проверяются: сервер не отвечает на SYN";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
@@ -35,8 +38,8 @@ impl PathKind {
         match self {
             Self::Current => "Как сейчас".into(),
             Self::Direct => "Напрямую мимо всего".into(),
-            Self::ProxyPoint { .. } => "Прокси точечно".into(),
-            Self::ProxyNoZapret { .. } => "Прокси без zapret".into(),
+            Self::ProxyPoint { .. } => PROXY_POINT.into(),
+            Self::ProxyNoZapret { .. } => PROXY_NO_ZAPRET.into(),
             Self::Strategy { name } => format!("Стратегия {name}"),
             Self::Trick { candidate } => format!(
                 "Приём zapret2: {}, профиль {}",
@@ -132,7 +135,7 @@ pub fn plan(group: &Group, ctx: &Ctx) -> (Vec<PathKind>, Vec<String>) {
         paths.push(PathKind::ProxyPoint { rule: rule.clone() });
         paths.push(PathKind::ProxyNoZapret { rule });
     } else {
-        for p in ["Прокси точечно", "Прокси без zapret"] {
+        for p in [PROXY_POINT, PROXY_NO_ZAPRET] {
             skipped.push(format!("{p}: прокси не отвечает"));
         }
     }
@@ -150,7 +153,9 @@ pub fn plan(group: &Group, ctx: &Ctx) -> (Vec<PathKind>, Vec<String>) {
         }
     }
     for name in &ctx.ranking {
+        let label = PathKind::Strategy { name: name.clone() }.label();
         let Some((_, args)) = ctx.strategies.iter().find(|(n, _)| n == name) else {
+            skipped.push(format!("{label}: её аргументы не прочитаны"));
             continue;
         };
         if group
@@ -161,7 +166,7 @@ pub fn plan(group: &Group, ctx: &Ctx) -> (Vec<PathKind>, Vec<String>) {
             paths.push(PathKind::Strategy { name: name.clone() });
         } else {
             skipped.push(format!(
-                "Стратегия {name}: фильтр не покрывает {} {}",
+                "{label}: фильтр не покрывает {} {}",
                 protocol_text(group.protocol),
                 group.ports.first().map_or(String::new(), u16::to_string)
             ));
