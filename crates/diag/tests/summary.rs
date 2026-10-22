@@ -884,3 +884,37 @@ fn r1_a_proxied_domain_sent_direct() {
     assert!(s.fixes.is_empty());
     assert_eq!(s.explanations.len(), 1, "{:?}", s.explanations);
 }
+
+#[test]
+fn r1_a_proxied_domain_already_through_the_vpn_is_not_a_failure() {
+    let p = |route: Option<&str>, direct, rule: Option<&str>, direct_ok, proxy_ok| {
+        Pattern::R1ViaSystemProxy {
+            domain: "steam.live.bhvrdbd.com".into(),
+            direct_ok,
+            proxy_ok,
+            route: route.map(str::to_owned),
+            direct,
+            rule: rule.map(str::to_owned),
+        }
+    };
+    let verdict = |pattern| {
+        summarize(&Verdict::Clean, &empty(), &[pattern], &ctx(), ID.into(), 30).verdict_text
+    };
+    const CLEAN: &str = "соединения программы проходят; если проблема есть, она не в сети";
+    // Direct fails, the VPN works, and NekoBox already sends it through the VPN.
+    assert_eq!(
+        verdict(p(Some("через VPN"), false, None, false, true)),
+        CLEAN
+    );
+    assert_eq!(
+        verdict(p(None, false, Some("domain:bhvrdbd.com"), false, true)),
+        CLEAN,
+        "the proxy list"
+    );
+    // The way it goes now fails: named.
+    assert!(verdict(p(Some("напрямую"), true, None, false, true)).contains("не работает"));
+    assert!(verdict(p(Some("через VPN"), false, None, true, false)).contains("не работает"));
+    // Not known where it goes: only when both fail.
+    assert_eq!(verdict(p(None, false, None, false, true)), CLEAN);
+    assert!(verdict(p(None, false, None, false, false)).contains("не работает"));
+}

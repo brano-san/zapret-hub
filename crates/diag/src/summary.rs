@@ -425,6 +425,7 @@ pub fn summarize(
         explanations.push(LIVE_ONLY.into());
     }
     let explanations = unique(explanations);
+    // What fails the way NekoBox sends it now: direct, through the VPN, or (not known) both.
     let proxied_broken: Vec<&str> = patterns
         .iter()
         .filter_map(|p| match p {
@@ -432,8 +433,19 @@ pub fn summarize(
                 domain,
                 direct_ok,
                 proxy_ok,
-                ..
-            } if !direct_ok || !proxy_ok => Some(domain.as_str()),
+                route,
+                direct,
+                rule,
+            } => {
+                let fails = if *direct {
+                    !direct_ok
+                } else if route.is_some() || rule.is_some() {
+                    !proxy_ok
+                } else {
+                    !direct_ok && !proxy_ok
+                };
+                fails.then_some(domain.as_str())
+            }
             _ => None,
         })
         .collect();
