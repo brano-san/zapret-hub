@@ -18,6 +18,20 @@ pub const OUT_RANGE: &str = "--out-range=-s34228";
 /// plus one packet.
 pub const IN_RANGE: &str = "--in-range=-s5556";
 
+/// UDP has no sequence: the detector counts packets (zapret2 docs\manual.md,
+/// `standard_failure_detector`: a failure is `udp_out` or more sent with `udp_in` or fewer
+/// received; `standard_success_detector`: more than `udp_in` received), and so do the ranges
+/// (counter `n`, "Внутрипрофильные фильтры"). The thresholds are the hub's culprit ones (diag spec
+/// 5) and zapret2's defaults alike.
+pub const UDP_DETECTOR: [&str; 2] = ["udp_out=4", "udp_in=1"];
+/// The failure shows on outgoing packet 4.
+pub const UDP_OUT_RANGE: &str = "--out-range=-n4";
+/// The success shows on incoming packet 2.
+pub const UDP_IN_RANGE: &str = "--in-range=-n2";
+/// winws2 counts only the packets WinDivert hands it, and `--wf-raw-part` filters for UDP take
+/// just the first one: a UDP circular profile's ports are intercepted whole, both ways.
+const UDP_WF: [&str; 2] = ["--wf-udp-out", "--wf-udp-in"];
+
 /// Blobs the builder's presets use and how ALT11 defines them: added to a text that lacks them.
 const BLOBS: [(&str, &str); 2] = [
     (
@@ -138,6 +152,34 @@ fn is_desync(token: &str) -> bool {
     ["--payload=", "--in-range=", "--out-range=", "--lua-desync="]
         .iter()
         .any(|prefix| token.replace('"', "").starts_with(prefix))
+}
+
+/// The `--filter-udp=` ports of a filter that names UDP and not TCP; `None` otherwise.
+fn udp_ports(filter: &[String]) -> Option<String> {
+    let value = |prefix: &str| {
+        filter
+            .iter()
+            .find_map(|t| t.replace('"', "").strip_prefix(prefix).map(str::to_owned))
+    };
+    value("--filter-tcp=").map_or_else(|| value("--filter-udp="), |_| None)
+}
+
+/// A `--wf-` port option (`--wf-udp-in=443`) that also lists `ports`; an exclusion list (`~`)
+/// stays as it is.
+pub fn widen(token: &str, ports: &str) -> String {
+    let Some((option, list)) = token.split_once('=') else {
+        return token.to_owned();
+    };
+    if list.starts_with('~') {
+        return token.to_owned();
+    }
+    let mut items: Vec<&str> = list.split(',').filter(|p| !p.is_empty()).collect();
+    for port in ports.split(',') {
+        if !port.is_empty() && !items.contains(&port) {
+            items.push(port);
+        }
+    }
+    format!("{option}={}", items.join(","))
 }
 
 /// `fake:blob=x:strategy=2:final` → (`fake:blob=x`, `Some("2")`, true).
@@ -386,16 +428,21 @@ pub enum CircularTarget {
     New { after: u32, filter: String },
 }
 
-/// The desync part of a circular profile: the ranges, circular, then each variant's instances
-/// tagged with its number.
-pub fn render(edit: &CircularEdit) -> anyhow::Result<Vec<String>> {
+/// The desync part of a circular profile: the ranges (packet counts for a `udp` profile),
+/// circular, then each variant's instances tagged with its number.
+pub fn render(edit: &CircularEdit, udp: bool) -> anyhow::Result<Vec<String>> {
     anyhow::ensure!(
         !edit.variants.is_empty(),
         "circular needs at least one variant"
     );
+    let (out_range, in_range) = if udp {
+        (UDP_OUT_RANGE, UDP_IN_RANGE)
+    } else {
+        (OUT_RANGE, IN_RANGE)
+    };
     let mut out = vec![
-        OUT_RANGE.to_owned(),
-        format!("{IN_RANGE} --lua-desync={}", edit.settings.call()),
+        out_range.to_owned(),
+        format!("{in_range} --lua-desync={}", edit.settings.call()),
         "--in-range=x".to_owned(),
     ];
     let count = edit.variants.len();
@@ -424,15 +471,21 @@ pub fn render(edit: &CircularEdit) -> anyhow::Result<Vec<String>> {
 /// from its remaining ones.
 pub fn apply(text: &str, target: &CircularTarget, edit: &CircularEdit) -> anyhow::Result<String> {
     let text = text.trim_start_matches('\u{feff}');
-    let block = render(edit)?;
+    let parsed = parse(&args(text));
     let (at, insert, rewrite) = match target {
-        CircularTarget::Profile(index) => (*index, block, true),
+        CircularTarget::Profile(index) => {
+            let udp = parsed
+                .get(*index as usize)
+                .is_some_and(|p| udp_ports(&p.filter).is_some());
+            (*index, render(edit, udp)?, true)
+        }
         CircularTarget::New { after, filter } => {
             let tokens = quoted_tokens(filter);
             anyhow::ensure!(!tokens.is_empty(), "a new profile needs a filter");
             if let Some(token) = tokens.iter().find(|t| is_new(t) || is_desync(t)) {
                 anyhow::bail!("{token} does not belong in a profile's filter");
             }
+            let block = render(edit, udp_ports(&tokens).is_some())?;
             let mut insert = vec![
                 "--new".to_owned(),
                 String::new(),
@@ -443,7 +496,7 @@ pub fn apply(text: &str, target: &CircularTarget, edit: &CircularEdit) -> anyhow
             (*after, insert, false)
         }
     };
-    let count = parse(&args(text)).len() as u32;
+    let count = parsed.len() as u32;
     anyhow::ensure!(at < count, "the strategy has no profile {}", at + 1);
 
     let mut out: Vec<String> = Vec::new();
@@ -537,7 +590,8 @@ pub enum NoteKind {
     Same,
     /// Not in `names` (no profile with the same filter): taken from the first.
     Missing,
-    /// Not TCP only: circular counts failures by TCP retransmissions. Taken from the first.
+    /// Both TCP and UDP, or neither: circular's ranges count TCP sequence or UDP packets, not
+    /// both. Taken from the first.
     NotTcp,
     /// Already circular in `names`: taken from the first.
     Circular,
@@ -567,10 +621,11 @@ pub struct Merged {
 }
 
 /// One strategy of `sources` (name, text) made of all of them: the first one's text, where each
-/// TCP profile that every strategy has (the same filter options, in any order) and whose
+/// TCP or UDP profile that every strategy has (the same filter options, in any order) and whose
 /// instances differ between them becomes a circular profile with one variant per distinct set,
 /// in the order of `sources`. Everything else stays as in the first one; the notes say why. The
-/// `--blob=` and `--lua-init=` options of the others that the first lacks are added.
+/// `--blob=` and `--lua-init=` options of the others that the first lacks are added. A UDP one
+/// gets the UDP detector and packet ranges, and its ports go into `--wf-udp-out`/`--wf-udp-in`.
 pub fn merge(sources: &[(String, String)]) -> anyhow::Result<Merged> {
     anyhow::ensure!(
         (2..=5).contains(&sources.len()),
@@ -586,6 +641,7 @@ pub fn merge(sources: &[(String, String)]) -> anyhow::Result<Merged> {
     let mut used: Vec<Vec<bool>> = parsed.iter().map(|p| vec![false; p.len()]).collect();
     let mut notes = Vec::new();
     let mut edits = Vec::new();
+    let mut udp: Vec<String> = Vec::new();
     let names: Vec<String> = sources.iter().map(|(name, _)| name.clone()).collect();
     for p in parsed[0].iter().filter(|p| p.number > 0) {
         let note = |kind, names: Vec<String>, variants| MergeNote {
@@ -640,18 +696,22 @@ pub fn merge(sources: &[(String, String)]) -> anyhow::Result<Merged> {
             notes.push(note(NoteKind::NoDesync, bare, 0));
             continue;
         }
-        let tcp = p.filter.iter().any(|t| t.starts_with("--filter-tcp="))
-            && !p.filter.iter().any(|t| t.starts_with("--filter-udp="));
-        if !tcp {
+        let has = |prefix: &str| p.filter.iter().any(|t| t.starts_with(prefix));
+        if has("--filter-tcp=") == has("--filter-udp=") {
             notes.push(note(NoteKind::NotTcp, Vec::new(), 0));
             continue;
+        }
+        let mut settings = CircularSettings::default();
+        if let Some(ports) = udp_ports(&p.filter) {
+            settings.extra = UDP_DETECTOR.map(str::to_owned).to_vec();
+            udp.push(ports);
         }
         let count = variants.len() as u32;
         let from = variants.iter().map(|(_, name)| name.clone()).collect();
         edits.push((
             p.index,
             CircularEdit {
-                settings: CircularSettings::default(),
+                settings,
                 variants: variants
                     .iter()
                     .map(|(instances, _)| lines(instances))
@@ -716,7 +776,28 @@ pub fn merge(sources: &[(String, String)]) -> anyhow::Result<Merged> {
         }
     }
 
-    let base = sources[0].1.trim_start_matches('\u{feff}');
+    let mut base = sources[0].1.trim_start_matches('\u{feff}').to_owned();
+    for option in UDP_WF {
+        let prefix = format!("{option}=");
+        // winws2 keeps the last one.
+        let last = quoted_tokens(&args(&base))
+            .into_iter()
+            .rfind(|t| t.starts_with(&prefix));
+        let token = udp.iter().fold(
+            last.clone().unwrap_or_else(|| prefix.clone()),
+            |token, ports| widen(&token, ports),
+        );
+        match last {
+            Some(last) => {
+                if let Some(at) = base.rfind(&last) {
+                    base.replace_range(at..at + last.len(), &token);
+                }
+            }
+            None if token != prefix => added.push(token),
+            None => {}
+        }
+    }
+    let base = base.as_str();
     let newline = if base.contains("\r\n") { "\r\n" } else { "\n" };
     let mut text = format!(
         "# circular over {}: the profiles they share rotate between their variants{newline}",
@@ -749,7 +830,7 @@ mod tests {
             stop: true,
         };
         assert_eq!(
-            render(&edit).unwrap(),
+            render(&edit, false).unwrap(),
             [
                 OUT_RANGE,
                 "--in-range=-s5556 --lua-desync=circular",

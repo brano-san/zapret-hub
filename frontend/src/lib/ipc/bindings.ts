@@ -422,7 +422,10 @@ export type NoteKind =
 "Same" | 
 /**  Not in `names` (no profile with the same filter): taken from the first. */
 "Missing" | 
-/**  Not TCP only: circular counts failures by TCP retransmissions. Taken from the first. */
+/**
+ *  Both TCP and UDP, or neither: circular's ranges count TCP sequence or UDP packets, not
+ *  both. Taken from the first.
+ */
 "NotTcp" | 
 /**  Already circular in `names`: taken from the first. */
 "Circular" | 

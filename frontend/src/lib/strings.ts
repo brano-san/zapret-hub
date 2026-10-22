@@ -327,7 +327,8 @@ export const S = {
     stop: "Последний вариант финальный: дальше не перебирать",
     write: "Записать в текст",
     written: "Текст обновлён: проверьте его и сохраните.",
-    notTcp: "circular считает неудачи по TCP: в профиле без --filter-tcp он почти не срабатывает.",
+    notTcp: "circular считает неудачи по одному протоколу: нужен либо --filter-tcp, либо --filter-udp.",
+    udp: "UDP: circular считает пакеты, поэтому порты профиля должны быть целиком в --wf-udp-out и --wf-udp-in.",
     merge: "Сделать circular из стратегий…",
     mergeTitle: "Circular из нескольких стратегий",
     mergeHint:
@@ -342,7 +343,7 @@ export const S = {
       Rotates: (where: string, names: string[], variants: number) => `${where}: circular из ${variants} вариантов (${names.join(", ")})`,
       Same: (where: string) => `${where}: одинаковый во всех — без изменений`,
       Missing: (where: string, names: string[], first: string) => `${where}: нет в ${names.join(", ")} — взят из ${first}`,
-      NotTcp: (where: string, _names: string[], first: string) => `${where}: не TCP, а circular считает неудачи по TCP — взят из ${first}`,
+      NotTcp: (where: string, _names: string[], first: string) => `${where}: TCP и UDP вместе, а circular считает неудачи по одному протоколу — взят из ${first}`,
       Circular: (where: string, names: string[], first: string) => `${where}: уже circular в ${names.join(", ")} — взят из ${first}`,
       NoDesync: (where: string, names: string[], first: string) =>
         `${where}: в ${names.join(", ")} пропускает трафик без изменений — взят из ${first}`,

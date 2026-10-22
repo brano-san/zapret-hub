@@ -379,7 +379,7 @@ fn merging_rotates_shared_tcp_profiles_and_explains_the_rest() {
     assert_eq!(
         notes,
         [
-            (NoteKind::NotTcp, 1, vec![], 0),
+            (NoteKind::Rotates, 1, names(&["ALT11", "mine"]), 2),
             (NoteKind::Same, 2, vec![], 1),
             (NoteKind::Missing, 3, names(&["mine"]), 0),
             (NoteKind::Rotates, 4, names(&["ALT11", "mine"]), 2),
@@ -394,7 +394,11 @@ fn merging_rotates_shared_tcp_profiles_and_explains_the_rest() {
     );
     assert_eq!(merged.notes[10].filter, "tls_max");
     let text = &merged.text;
-    assert!(text.starts_with("# circular over ALT11, mine: the profiles they share rotate between their variants\n--blob=quic_vk:@\"%BIN%quic_vk.bin\"\n# Port of Flowseal general to zapret2\n"), "{text}");
+    assert!(text.starts_with("# circular over ALT11, mine: the profiles they share rotate between their variants\n--blob=quic_vk:@\"%BIN%quic_vk.bin\"\n--wf-udp-in=443\n# Port of Flowseal general to zapret2\n"), "{text}");
+    assert!(
+        text.contains("\n--wf-udp-out=%GameFilterUDP%,443\n"),
+        "{text}"
+    );
     let analysis = analyze(&args(text));
     assert!(
         analysis.errors.is_empty() && analysis.warnings.is_empty(),
@@ -410,6 +414,55 @@ fn merging_rotates_shared_tcp_profiles_and_explains_the_rest() {
             "--payload=tls_client_hello\n--lua-desync=multidisorder:pos=midsld",
         ]
     );
+}
+
+#[test]
+fn udp_profiles_rotate() {
+    let strategy = |desync: &str| {
+        format!(
+            "--wf-udp-out=443\n--filter-tcp=443\n--lua-desync=multisplit\n--new\n--filter-udp=50000-50100\n--payload=discord_ip_discovery --lua-desync={desync}\n"
+        )
+    };
+    let merged = merge(&[
+        ("a".into(), strategy("fake:blob=x:repeats=6")),
+        ("b".into(), strategy("fake:blob=y:repeats=2")),
+    ])
+    .unwrap();
+    let kinds: Vec<(NoteKind, u32)> = merged
+        .notes
+        .iter()
+        .map(|n| (n.kind.clone(), n.number))
+        .collect();
+    assert_eq!(kinds, [(NoteKind::Same, 1), (NoteKind::Rotates, 2)]);
+    let text = &merged.text;
+    assert!(text.contains("--wf-udp-out=443,50000-50100\n"), "{text}");
+    assert!(text.contains("--wf-udp-in=50000-50100\n"), "{text}");
+    assert!(
+        text.contains(
+            "--filter-udp=50000-50100\n--out-range=-n4\n--in-range=-n2 --lua-desync=circular:udp_out=4:udp_in=1\n--in-range=x\n"
+        ),
+        "{text}"
+    );
+    let analysis = analyze(&args(text));
+    assert!(
+        analysis.errors.is_empty() && analysis.warnings.is_empty(),
+        "{analysis:?}"
+    );
+    assert_eq!(analysis.profiles[1].variants.len(), 2);
+}
+
+#[test]
+fn mixed_tcp_udp_still_not_tcp() {
+    let strategy =
+        |desync: &str| format!("--filter-tcp=443 --filter-udp=443\n--lua-desync={desync}\n");
+    let merged = merge(&[
+        ("a".into(), strategy("fake")),
+        ("b".into(), strategy("multisplit")),
+    ])
+    .unwrap();
+    assert_eq!(merged.notes.len(), 1);
+    assert_eq!(merged.notes[0].kind, NoteKind::NotTcp);
+    assert!(!merged.text.contains("circular:"), "{}", merged.text);
 }
 
 #[test]

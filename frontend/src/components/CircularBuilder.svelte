@@ -33,6 +33,7 @@
   const listToken = $derived(list === "domains" ? (domains.trim() ? `--hostlist-domains=${domains.replace(/\s+/g, "")}` : "") : list);
   const newFilter = $derived(circularFilter(ports, l7, listToken));
   const tcp = $derived((chosen?.filter ?? newFilter).includes("--filter-tcp="));
+  const udp = $derived((chosen?.filter ?? newFilter).includes("--filter-udp="));
   const ready = $derived(variants.length > 0 && (target !== "new" || ports.trim() !== ""));
 
   function variant(text: string): { id: number; text: string } {
@@ -141,7 +142,7 @@
       </select>
     </div>
   {/if}
-  {#if !tcp}<p class="warn">{S.circular.notTcp}</p>{/if}
+  {#if tcp === udp}<p class="warn">{S.circular.notTcp}</p>{:else if udp}<p class="warn">{S.circular.udp}</p>{/if}
 
   <div class="row settings">
     <label for="circular-fails">{S.circular.fails}</label>
