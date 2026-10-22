@@ -173,6 +173,7 @@ fn dispatch(app: &AppHandle, request: Request) -> Result<Value, String> {
         Request::DiagProfiles => json(block_on(commands::diag_profiles(handle))?),
         Request::StartDiag { request } => json(block_on(commands::start_diag(handle, request))?),
         Request::DiagStatus => json(state.diag_live()),
+        Request::DiagFailed => json(state.diag_failed()),
         Request::DiagAnswer { answer } => json(commands::diag_answer(state, answer)?),
         Request::DiagChoose { keys } => json(commands::diag_choose(state, keys)?),
         Request::CancelDiag => {

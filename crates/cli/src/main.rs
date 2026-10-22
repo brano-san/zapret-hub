@@ -820,7 +820,10 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
             return Ok(Done::Json(json!({ "started": true, "request": request })));
         }
         Command::Diag(DiagCommand::Status) => {
-            return Ok(Done::Json(json!({ "live": call(Request::DiagStatus)? })));
+            return Ok(Done::Json(json!({
+                "live": call(Request::DiagStatus)?,
+                "failed": call(Request::DiagFailed)?,
+            })));
         }
         Command::Diag(DiagCommand::Show { id }) => {
             let id = report_id(call, id)?;
@@ -1164,10 +1167,13 @@ fn wait_for_diag(
         Some(id) if Some(&id) != before.as_ref() => {
             Ok(Done::Json(call(Request::DiagReport { id })?))
         }
-        _ => Err(Fail::new(
-            FAILED,
-            "the diagnostics ended without a report (canceled or failed): see Zapret Hub",
-        )),
+        _ => {
+            let failed: Option<String> = read(call(Request::DiagFailed)?)?;
+            Err(Fail::new(
+                FAILED,
+                failed.unwrap_or_else(|| "the diagnostics ended without a report: canceled".into()),
+            ))
+        }
     }
 }
 
@@ -2220,14 +2226,39 @@ mod tests {
         let old = json!([["2026-10-21_10-00-00", "discord"]]);
         let (outcome, _) = drive(
             &["diag", "run", "--profile", "discord", "--wait"],
-            vec![Ok(old.clone()), Ok(Value::Null), Ok(Value::Null), Ok(old)],
+            vec![
+                Ok(old.clone()),
+                Ok(Value::Null),
+                Ok(Value::Null),
+                Ok(old),
+                Ok(Value::Null),
+            ],
         );
         assert_eq!(
             outcome,
             Err(Fail::new(
                 FAILED,
-                "the diagnostics ended without a report (canceled or failed): see Zapret Hub"
+                "the diagnostics ended without a report: canceled"
             ))
+        );
+    }
+
+    #[test]
+    fn diag_run_wait_prints_why_the_diagnostics_failed() {
+        let old = json!([["2026-10-21_10-00-00", "discord"]]);
+        let (outcome, _) = drive(
+            &["diag", "run", "--profile", "discord", "--wait"],
+            vec![
+                Ok(old.clone()),
+                Ok(Value::Null),
+                Ok(Value::Null),
+                Ok(old),
+                Ok(json!("WinDivert refused the sniff handle")),
+            ],
+        );
+        assert_eq!(
+            outcome,
+            Err(Fail::new(FAILED, "WinDivert refused the sniff handle"))
         );
     }
 

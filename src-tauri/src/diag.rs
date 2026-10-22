@@ -166,6 +166,7 @@ fn finish(app: &AppHandle, outcome: anyhow::Result<Summary>, ends: DiagEnds<'_>)
         }
         Err(err) => {
             let text = format!("{err:#}");
+            state(app).set_diag_failed(text.clone());
             if window_hidden(app) {
                 notify::show(app, texts::DIAG_FAILED, &text);
             }

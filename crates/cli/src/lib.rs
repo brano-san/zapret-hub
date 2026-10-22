@@ -30,7 +30,7 @@ pub const AUTOSTART_TASK: &str = "Zapret Hub";
 pub const OFF: &str = "the CLI is off: enable it in Zapret Hub → Settings";
 
 /// One command: the variant in snake_case and its fields are an IPC command of the window and its
-/// arguments (`bindings.ts`). `tests_status` and `diag_status` are the only ones the window lacks.
+/// arguments (`bindings.ts`). `tests_status`, `diag_status` and `diag_failed` are the only ones the window lacks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "cmd", content = "args", rename_all = "snake_case")]
 pub enum Request {
@@ -157,6 +157,8 @@ pub enum Request {
     },
     /// The window's `diag_live`: the run in progress, or `null`.
     DiagStatus,
+    /// Why the newest diagnostics failed, or `null`: the window shows it as a notice.
+    DiagFailed,
     DiagAnswer {
         answer: Answer,
     },
@@ -451,6 +453,7 @@ mod tests {
                 },
             },
             Request::DiagStatus,
+            Request::DiagFailed,
             Request::DiagAnswer {
                 answer: Answer::Unknown,
             },
@@ -524,7 +527,7 @@ mod tests {
             let cmd = value["cmd"].as_str().unwrap().to_owned();
             assert_eq!(request.name(), cmd);
             // `tests_status` and `diag_status` are the CLI's; the window has `test_live` and `diag_live`.
-            if cmd != "tests_status" && cmd != "diag_status" {
+            if !matches!(cmd.as_str(), "tests_status" | "diag_status" | "diag_failed") {
                 let mut args: Vec<String> = value
                     .get("args")
                     .and_then(Value::as_object)

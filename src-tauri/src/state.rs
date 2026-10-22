@@ -83,6 +83,8 @@ pub struct AppState {
     diagnosing: AtomicBool,
     diag_cancel: AtomicBool,
     diag_live: Mutex<Option<diag::run::Live>>,
+    /// Why the newest diagnostics failed: `diag_failed` for the CLI, which has no notices.
+    diag_failed: Mutex<Option<String>>,
     /// The page's answer or choice the diagnostics wait for.
     diag_reply: Mutex<Option<Reply>>,
     diag_wake: Condvar,
@@ -116,6 +118,7 @@ impl AppState {
             diagnosing: AtomicBool::new(false),
             diag_cancel: AtomicBool::new(false),
             diag_live: Mutex::new(None),
+            diag_failed: Mutex::new(None),
             diag_reply: Mutex::new(None),
             diag_wake: Condvar::new(),
             downloading: AtomicBool::new(false),
@@ -234,8 +237,18 @@ impl AppState {
         self.diag_cancel.store(false, Ordering::SeqCst);
         *lock(&self.diag_reply) = None;
         *lock(&self.diag_live) = Some(live);
+        *lock(&self.diag_failed) = None;
         self.diagnosing.store(true, Ordering::SeqCst);
         Ok(())
+    }
+
+    /// Set before the diagnostics end, so whoever sees them over also sees why they failed.
+    pub fn set_diag_failed(&self, error: String) {
+        *lock(&self.diag_failed) = Some(error);
+    }
+
+    pub fn diag_failed(&self) -> Option<String> {
+        lock(&self.diag_failed).clone()
     }
 
     fn end_diag(&self) {
