@@ -25,14 +25,32 @@ fn split_id(line: &str) -> Option<(&str, Option<u32>, &str)> {
     let rest = &line[line.find("] [")? + 3..];
     let end = rest.find(']')?;
     let (id, dur) = rest[..end].split_once(' ')?;
-    let ms = match dur.strip_suffix("ms") {
-        Some(v) => v.parse().ok(),
-        None => dur
-            .strip_suffix('s')
-            .and_then(|v| v.parse::<f64>().ok())
-            .map(|s| (s * 1000.0) as u32),
-    };
-    Some((id, ms, rest[end + 1..].trim_start()))
+    Some((id, go_ms(dur), rest[end + 1..].trim_start()))
+}
+
+/// A Go duration (`166ms`, `5.1s`, `1m5.2s`, `2h0m3s`, `900µs`) in whole ms.
+fn go_ms(d: &str) -> Option<u32> {
+    let mut ms = 0.0;
+    let mut rest = d;
+    while !rest.is_empty() {
+        let digits = rest.find(|c: char| !c.is_ascii_digit() && c != '.')?;
+        let n: f64 = rest[..digits].parse().ok()?;
+        rest = &rest[digits..];
+        let unit = rest
+            .find(|c: char| c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        ms += n * match &rest[..unit] {
+            "h" => 3_600_000.0,
+            "m" => 60_000.0,
+            "s" => 1000.0,
+            "ms" => 1.0,
+            "us" | "µs" => 0.001,
+            "ns" => 0.000_001,
+            _ => return None,
+        };
+        rest = &rest[unit..];
+    }
+    Some(ms as u32)
 }
 
 fn classify(kind: &str, tag: &str) -> Route {

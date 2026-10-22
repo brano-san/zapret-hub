@@ -40,6 +40,17 @@ fn line_secs(line: &str) -> Option<f64> {
     Some(n(0..2)? * 3600.0 + n(3..5)? * 60.0 + n(6..12)?)
 }
 
+/// The host of `a.b.c.d:port`, `[v6]:port` or a bare IPv6 address.
+fn host_of(address: &str) -> Option<String> {
+    if let Some(inner) = address.strip_prefix('[') {
+        return inner.split_once(']').map(|(h, _)| h.to_owned());
+    }
+    if address.parse::<std::net::Ipv6Addr>().is_ok() {
+        return Some(address.to_owned());
+    }
+    address.rsplit_once(':').map(|(h, _)| h.to_owned())
+}
+
 fn num_after(s: &str, key: &str) -> Option<u32> {
     let rest = &s[s.find(key)? + key.len()..];
     rest.split(|c: char| !c.is_ascii_digit())
@@ -74,11 +85,7 @@ pub fn parse(lines: &[String], wall: Option<f64>) -> Voice {
         } else if let Some((_, rest)) =
             l.split_once("[Connection(default)] Connected with local address ")
         {
-            v.local_address = rest
-                .split(' ')
-                .next()
-                .and_then(|a| a.rsplit_once(':'))
-                .map(|(h, _)| h.trim_matches(['[', ']']).to_owned());
+            v.local_address = rest.split(' ').next().and_then(host_of);
         } else if let Some((_, rest)) = l.split_once(", default)] RTC connected to media server: ")
         {
             v.media_server = Some(rest.trim().to_owned());

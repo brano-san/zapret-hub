@@ -37,14 +37,22 @@ pub fn tail_from(path: &Path, offset: u64, max_bytes: u64) -> std::io::Result<Op
     };
     let len = f.metadata()?.len();
     let from = if len < offset { 0 } else { offset };
-    let cut = len - from > max_bytes;
-    f.seek(SeekFrom::Start(if cut { len - max_bytes } else { from }))?;
+    let start = if len - from > max_bytes {
+        len - max_bytes
+    } else {
+        from
+    };
+    // The byte before the start too: a start mid-line (a cut, or a mark taken between two writes
+    // of one line) leaves the rest of that line out.
+    let back = u64::from(start > 0);
+    f.seek(SeekFrom::Start(start - back))?;
     let mut buf = Vec::new();
-    f.take(max_bytes).read_to_end(&mut buf)?;
-    let text = String::from_utf8_lossy(&buf);
+    f.take(max_bytes + back).read_to_end(&mut buf)?;
+    let mid_line = back == 1 && buf.first() != Some(&b'\n');
+    let text = String::from_utf8_lossy(buf.get(back as usize..).unwrap_or_default());
     let mut lines = text.lines();
-    if cut {
-        lines.next(); // the first line is most likely cut in the middle
+    if mid_line {
+        lines.next();
     }
     Ok(Some(lines.map(str::to_owned).collect()))
 }
