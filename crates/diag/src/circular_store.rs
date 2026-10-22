@@ -118,23 +118,39 @@ fn refilter(text: &str, filter: &str) -> String {
     tokens.join(" ")
 }
 
-/// `token` from a group's global part into `globals`: port lists widened (winws2 keeps the last
-/// of each), `--wf-raw-part`, `--lua-init` and `--blob` added once; a blob already named stays as
+/// The ports of `filter`'s `--filter-tcp=` or `--filter-udp=` (`protocol` is `tcp` or `udp`).
+fn filter_ports(filter: &str, protocol: &str) -> Option<String> {
+    let prefix = format!("--filter-{protocol}=");
+    quoted_tokens(filter)
+        .into_iter()
+        .find_map(|t| t.replace('"', "").strip_prefix(&prefix).map(str::to_owned))
+}
+
+/// `token` from the global part of the group of `filter` into `globals`: a `--wf-` port list
+/// the trick needs takes the group's own ports (not the trick strategy's whole list, nor its `~`
+/// exclusion), widening the one `globals` has (winws2 keeps the last of each);
+/// `--wf-raw-part`, `--lua-init` and `--blob` are added once; a blob already named stays as
 /// `globals` has it. Other `--wf-` options stay as `globals` has them.
-fn add_global(globals: &mut Vec<String>, token: String) {
+fn add_global(globals: &mut Vec<String>, token: String, filter: &str) {
     let bare = token.replace('"', "");
     let ports = [
-        "--wf-tcp-out=",
-        "--wf-tcp-in=",
-        "--wf-udp-out=",
-        "--wf-udp-in=",
+        ("--wf-tcp-out=", "tcp"),
+        ("--wf-tcp-in=", "tcp"),
+        ("--wf-udp-out=", "udp"),
+        ("--wf-udp-in=", "udp"),
     ]
     .into_iter()
-    .find(|prefix| bare.starts_with(prefix));
-    if let Some(prefix) = ports {
-        match globals.iter().rposition(|t| t.starts_with(prefix)) {
-            Some(i) => globals[i] = widen(&globals[i], &bare[prefix.len()..]),
-            None => globals.push(token),
+    .find(|(prefix, _)| bare.starts_with(prefix));
+    if let Some((prefix, protocol)) = ports {
+        let Some(own) = filter_ports(filter, protocol) else {
+            return;
+        };
+        match globals
+            .iter()
+            .rposition(|t| t.replace('"', "").starts_with(prefix))
+        {
+            Some(i) => globals[i] = widen(&globals[i].replace('"', ""), &own),
+            None => globals.push(format!("{prefix}{own}")),
         }
         return;
     }
@@ -180,7 +196,7 @@ pub fn generate(current: &str, store: &Store) -> anyhow::Result<String> {
         };
         let (global, profiles) = split(&args(&text));
         for token in quoted_tokens(&global) {
-            add_global(&mut globals, token);
+            add_global(&mut globals, token, &group.filter);
         }
         front.extend(profiles);
     }

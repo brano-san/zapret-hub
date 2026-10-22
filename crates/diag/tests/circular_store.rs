@@ -151,7 +151,8 @@ fn generate_parses_clean() {
     let out = generate(ALT11, &s).unwrap();
     let analysis = analyze(&args(&out));
     assert!(analysis.errors.is_empty(), "{:?}\n{out}", analysis.errors);
-    let tokens: Vec<&str> = args(&out).leak().split(' ').collect();
+    let out_args = args(&out);
+    let tokens: Vec<&str> = out_args.split(' ').collect();
     // Defined once, the voice ports intercepted whole both ways, 2053 already was.
     assert_eq!(
         tokens
@@ -180,4 +181,28 @@ fn generate_parses_clean() {
         profiles[1]
     );
     assert!(profiles[1].contains("circular"), "{}", profiles[1]);
+}
+
+#[test]
+fn a_trick_brings_only_its_group_ports_into_the_wf_lists() {
+    let current = "--wf-udp-out=443 --wf-tcp-out=443\n--filter-tcp=443 --lua-desync=multisplit";
+    let trick_text = |wf: &str| {
+        format!("{wf} --filter-udp=50000-50100 --ipset-ip=1.2.3.0/24 --lua-desync=fake:blob=0x00")
+    };
+    for wf in [
+        "--wf-udp-out=443,19294-19344,50000-50100 --wf-udp-in=19294-19344,50000-50100",
+        "--wf-udp-out=~1-100 --wf-udp-in=~1-100",
+    ] {
+        let s = store(vec![(VOICE, vec![trick(&trick_text(wf), 3, None)])]);
+        let out = generate(current, &s).unwrap();
+        let out_args = args(&out);
+        let tokens: Vec<&str> = out_args.split(' ').collect();
+        assert!(
+            tokens.contains(&"--wf-udp-out=443,50000-50100"),
+            "{wf}: {out}"
+        );
+        assert!(tokens.contains(&"--wf-udp-in=50000-50100"), "{wf}: {out}");
+        assert!(tokens.contains(&"--wf-tcp-out=443"), "{wf}: {out}");
+        assert!(!out.contains("19294") && !out.contains('~'), "{wf}: {out}");
+    }
 }
