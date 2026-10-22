@@ -8,7 +8,7 @@ use crate::circular_store::{Trick, is_filter};
 use crate::culprits::{Fault, Group, Verdict};
 use crate::evaluate::{Score, works};
 use crate::paths::{Ctx, PathKind, protocol_text};
-use crate::patterns::Pattern;
+use crate::patterns::{Pattern, unique};
 use crate::profiles::ProbeKind;
 use crate::run::{GroupResult, Outcome};
 
@@ -16,6 +16,8 @@ const WHITELIST: &str =
     "провайдер пускает только в разрешённые сети; ни zapret, ни прокси это не обходят";
 const ONLY_PROXY: &str = "провайдер блокирует адрес; zapret не помогает; через прокси работает";
 const NOTHING: &str = "адрес недоступен ни одним путём, включая прокси: вероятно, проблема на стороне сервиса или прокси";
+const NOTHING_NO_PROXY: &str =
+    "адрес недоступен ни одним проверенным путём; прокси не проверен: он не отвечает";
 const LIVE_ONLY: &str = "не проверяется автоматически: нужен режим „со мной“";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
@@ -25,8 +27,17 @@ pub enum Fix {
     EditRule { name: String, protocol: Protocol },
     ApplyStrategy { name: String },
     ApplyHubCircular { tricks: Vec<Trick>, filter: String },
-    TurnOff { what: String },
+    TurnOff { target: TurnOffTarget, text: String },
     Manual { text: String },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum TurnOffTarget {
+    /// The zapret service.
+    Zapret,
+    /// Whatever the culprit goes through now: the zapret strategy or a routing rule.
+    Current,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
@@ -96,10 +107,16 @@ fn explain(gr: &GroupResult, best: Option<&PathKind>) -> String {
             .filter(|(_, s)| measured(s))
             .map(|(p, _)| p.label())
             .collect();
+        let proxy_measured = gr.results.iter().any(|(p, s)| is_proxy(p) && measured(s));
+        let head = if gr.skipped.is_empty() && proxy_measured {
+            NOTHING
+        } else {
+            NOTHING_NO_PROXY
+        };
         return if checked.is_empty() {
             "пути не проверены".into()
         } else {
-            format!("{NOTHING}. Проверено: {}", checked.join(", "))
+            format!("{head}. Проверено: {}", checked.join(", "))
         };
     };
     match best {
@@ -170,7 +187,8 @@ fn fixes_for(gr: &GroupResult, best: &PathKind, ctx: &Ctx, id: &str, out: &mut V
                 push(
                     out,
                     Fix::TurnOff {
-                        what: format!(
+                        target: TurnOffTarget::Current,
+                        text: format!(
                             "стратегию zapret или правило маршрутизации, через которые идёт {}",
                             gr.group.key
                         ),
@@ -184,7 +202,8 @@ fn fixes_for(gr: &GroupResult, best: &PathKind, ctx: &Ctx, id: &str, out: &mut V
             push(
                 out,
                 Fix::TurnOff {
-                    what: "zapret".into(),
+                    target: TurnOffTarget::Zapret,
+                    text: "службу zapret: через прокси адрес работает только без неё".into(),
                 },
             );
         }
@@ -259,7 +278,8 @@ fn pattern_texts(patterns: &[Pattern], explanations: &mut Vec<String>, fixes: &m
             Pattern::R5Whitelist => {}
             Pattern::R6DaveStalled {
                 alone,
-                control_route,
+                direct,
+                ..
             } => {
                 if *alone {
                     explanations.push(
@@ -284,11 +304,11 @@ fn pattern_texts(patterns: &[Pattern], explanations: &mut Vec<String>, fixes: &m
                         },
                     );
                 }
-                if control_route.as_deref() == Some("напрямую") {
+                if *direct {
                     push(
                         fixes,
                         Fix::Manual {
-                            text: "Настройки → Маршрутизация → Basic: убрать `discord.media` из Direct, добавить в Proxy".into(),
+                            text: "Настройки → Маршрутизация → Basic: убрать discord.media из Direct, добавить в Proxy".into(),
                         },
                     );
                 }
@@ -349,6 +369,7 @@ pub fn summarize(
     if live_only && unmeasured {
         explanations.push(LIVE_ONLY.into());
     }
+    let explanations = unique(explanations);
     let verdict_text = match verdict {
         _ if whitelist => WHITELIST.into(),
         Verdict::NoFlows => {

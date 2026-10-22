@@ -37,6 +37,8 @@ pub enum Pattern {
         alone: bool,
         /// Where NekoBox sent the voice control channel (`*.discord.media`).
         control_route: Option<String>,
+        /// The control channel went direct (not through the VPN).
+        direct: bool,
     },
 }
 
@@ -124,14 +126,26 @@ pub fn detect(evidence: &Evidence, outcome: &Outcome, ctx: &Ctx) -> Vec<Pattern>
     if let Some(v) = &evidence.voice
         && discord::stalled(v)
     {
+        let route = evidence
+            .neko
+            .as_ref()
+            .and_then(|c| neko::route_of(c, "discord.media"));
         out.push(Pattern::R6DaveStalled {
             alone: v.peers.is_empty(),
-            control_route: evidence
-                .neko
-                .as_ref()
-                .and_then(|c| neko::route_of(c, "discord.media"))
-                .map(|r| route_text(&r)),
+            direct: route == Some(Route::Direct),
+            control_route: route.map(|r| route_text(&r)),
         });
+    }
+    unique(out)
+}
+
+/// First occurrences only, in order.
+pub(crate) fn unique<T: PartialEq>(v: Vec<T>) -> Vec<T> {
+    let mut out = Vec::with_capacity(v.len());
+    for x in v {
+        if !out.contains(&x) {
+            out.push(x);
+        }
     }
     out
 }

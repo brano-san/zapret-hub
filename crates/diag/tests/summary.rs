@@ -8,7 +8,7 @@ use diag::patterns::{Evidence, Pattern, detect};
 use diag::profiles::{ProbeKind, ProbeSpec, Profile};
 use diag::report;
 use diag::run::{GroupResult, Outcome};
-use diag::summary::{Fix, summarize, warn_breaks};
+use diag::summary::{Fix, TurnOffTarget, summarize, warn_breaks};
 use router::observe::FlowCounters;
 use router::rules::{Protocol, Rule};
 
@@ -319,7 +319,8 @@ fn r6_with_peer_blames_peer() {
         p,
         vec![Pattern::R6DaveStalled {
             alone: false,
-            control_route: Some("через VPN".into())
+            control_route: Some("через VPN".into()),
+            direct: false,
         }]
     );
     let s = summarize(&Verdict::Clean, &empty(), &p, &ctx(), ID.into(), 30);
@@ -351,13 +352,14 @@ fn r6_alone_blames_us() {
         p,
         vec![Pattern::R6DaveStalled {
             alone: true,
-            control_route: Some("напрямую".into())
+            control_route: Some("напрямую".into()),
+            direct: true,
         }]
     );
     let s = summarize(&Verdict::Clean, &empty(), &p, &ctx(), ID.into(), 30);
     assert!(!s.explanations.iter().any(|x| x.contains("собеседник")));
     assert!(s.fixes.contains(&Fix::Manual {
-        text: "Настройки → Маршрутизация → Basic: убрать `discord.media` из Direct, добавить в Proxy"
+        text: "Настройки → Маршрутизация → Basic: убрать discord.media из Direct, добавить в Proxy"
             .into()
     }));
 }
@@ -412,7 +414,11 @@ fn nothing_works_text() {
     let g = group(Protocol::Udp, "104.29.1.5:19300");
     let out = outcome(
         g.clone(),
-        vec![(PathKind::Current, bad()), (PathKind::Direct, bad())],
+        vec![
+            (PathKind::Current, bad()),
+            (PathKind::Direct, bad()),
+            (PathKind::ProxyPoint { rule: point_rule() }, bad()),
+        ],
     );
     let s = summarize(
         &Verdict::Culprits(vec![g]),
@@ -428,6 +434,68 @@ fn nothing_works_text() {
     ));
     assert!(s.groups[0].explanation.contains("Напрямую мимо всего"));
     assert!(s.fixes.is_empty());
+}
+
+#[test]
+fn nothing_works_proxy_not_checked_text() {
+    let g = group(Protocol::Udp, "104.29.1.5:19300");
+    let mut out = outcome(
+        g.clone(),
+        vec![(PathKind::Current, bad()), (PathKind::Direct, bad())],
+    );
+    out.per_group[0].skipped = vec!["Прокси точечно: прокси не отвечает".into()];
+    let s = summarize(
+        &Verdict::Culprits(vec![g.clone()]),
+        &out,
+        &[],
+        &ctx(),
+        ID.into(),
+        30,
+    );
+    assert_eq!(
+        s.groups[0].explanation,
+        "адрес недоступен ни одним проверенным путём; прокси не проверен: он не отвечает. Проверено: Как сейчас, Напрямую мимо всего"
+    );
+    // Proxy measured and failing: the full text.
+    let out = outcome(
+        g.clone(),
+        vec![
+            (PathKind::Current, bad()),
+            (PathKind::ProxyPoint { rule: point_rule() }, bad()),
+        ],
+    );
+    let s = summarize(
+        &Verdict::Culprits(vec![g]),
+        &out,
+        &[],
+        &ctx(),
+        ID.into(),
+        30,
+    );
+    assert!(s.groups[0].explanation.contains("включая прокси"));
+}
+
+#[test]
+fn same_pattern_once() {
+    let extend = PathKind::ExtendRule {
+        rule: "DBD Process".into(),
+        protocol: Protocol::Both,
+    };
+    let mut out = outcome(
+        group(Protocol::Tcp, "9.9.9.9:443"),
+        vec![(extend.clone(), ok())],
+    );
+    out.per_group.push(GroupResult {
+        group: group(Protocol::Tcp, "8.8.8.8:443"),
+        results: vec![(extend, ok())],
+        skipped: vec![],
+        not_checked: vec![],
+    });
+    let p = detect(&evidence(), &out, &ctx());
+    assert_eq!(p.len(), 1);
+    let s = summarize(&Verdict::Clean, &out, &p, &ctx(), ID.into(), 30);
+    assert_eq!(s.explanations.len(), 1);
+    assert_eq!(s.fixes.len(), 1);
 }
 
 #[test]
@@ -458,7 +526,13 @@ fn other_templates_and_fixes() {
         s.groups[0].explanation,
         "мешает текущая стратегия/маршрутизация"
     );
-    assert!(matches!(s.fixes[..], [Fix::TurnOff { .. }]));
+    assert!(matches!(
+        s.fixes[..],
+        [Fix::TurnOff {
+            target: TurnOffTarget::Current,
+            ..
+        }]
+    ));
     // A strategy.
     let out = outcome(
         g.clone(),
@@ -590,4 +664,33 @@ fn list_newest_first() {
             ("2026-09-30_23-59-59".to_owned(), "DbD".to_owned()),
         ]
     );
+}
+
+#[test]
+fn list_skips_corrupt() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = report::dir(tmp.path());
+    report::save(&dir, &summary("2026-10-21_09-00-00".into(), "YouTube")).unwrap();
+    std::fs::write(dir.join("2026-10-22_08-00-00.json"), "{ broken").unwrap();
+    assert_eq!(
+        report::list(&dir).unwrap(),
+        vec![("2026-10-21_09-00-00".to_owned(), "YouTube".to_owned())]
+    );
+    assert!(!dir.join("2026-10-21_09-00-00.json.tmp").exists());
+}
+
+#[test]
+fn save_keeps_the_saved_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = report::dir(tmp.path());
+    for i in 0..20 {
+        report::save(
+            &dir,
+            &summary(format!("2026-10-22_12-00-{i:02}"), "Discord"),
+        )
+        .unwrap();
+    }
+    // Older than all 20 (a clock set back): kept anyway.
+    report::save(&dir, &summary("2026-01-01_00-00-00".into(), "Discord")).unwrap();
+    assert!(report::load(&dir, "2026-01-01_00-00-00").is_ok());
 }

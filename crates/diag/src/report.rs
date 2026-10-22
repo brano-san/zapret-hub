@@ -42,24 +42,27 @@ pub fn save(dir: &Path, summary: &Summary) -> anyhow::Result<()> {
     ensure!(is_id(&summary.id), "неверный номер отчёта: {}", summary.id);
     std::fs::create_dir_all(dir).with_context(|| dir.display().to_string())?;
     let path = dir.join(format!("{}.json", summary.id));
-    std::fs::write(&path, serde_json::to_string_pretty(summary)?)
-        .with_context(|| path.display().to_string())?;
-    for old in ids(dir)?.into_iter().skip(KEEP) {
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(summary)?)
+        .with_context(|| tmp.display().to_string())?;
+    std::fs::rename(&tmp, &path).with_context(|| path.display().to_string())?;
+    let olds = ids(dir)?.into_iter().skip(KEEP);
+    for old in olds.filter(|old| *old != summary.id) {
         let path = dir.join(format!("{old}.json"));
         std::fs::remove_file(&path).with_context(|| path.display().to_string())?;
     }
     Ok(())
 }
 
-/// `(id, profile)`, newest first.
+/// `(id, profile)`, newest first; unreadable reports are left out.
 pub fn list(dir: &Path) -> anyhow::Result<Vec<(String, String)>> {
-    ids(dir)?
+    Ok(ids(dir)?
         .into_iter()
-        .map(|id| {
-            let profile = load(dir, &id)?.profile;
-            Ok((id, profile))
+        .filter_map(|id| {
+            let profile = load(dir, &id).ok()?.profile;
+            Some((id, profile))
         })
-        .collect()
+        .collect())
 }
 
 pub fn load(dir: &Path, id: &str) -> anyhow::Result<Summary> {
