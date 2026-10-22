@@ -1,4 +1,5 @@
-//! Network checks: `curl.exe` with the arguments `test zapret.ps1` uses, ICMP ping, SOCKS5.
+//! Network checks: `curl.exe` with the arguments `test zapret.ps1` uses (and HTTPS to a pinned
+//! address, DoH), ICMP ping, SOCKS5, and UDP probes: Discord IP discovery, STUN, DNS.
 
 pub mod curl;
 pub mod ping;

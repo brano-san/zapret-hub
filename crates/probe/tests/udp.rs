@@ -107,3 +107,29 @@ fn dns_udp_failure_or_garbage_is_no_answer() {
         assert_eq!(probe::udp::dns_udp("discord.com", addr, T), None);
     }
 }
+
+#[test]
+fn stun_wrong_transaction_is_none() {
+    let addr = server(|req| {
+        let mut r = req.to_vec();
+        r[0] = 0x01;
+        r[1] = 0x01;
+        r[19] ^= 0xFF;
+        Some(r)
+    });
+    assert!(probe::udp::stun(addr, Duration::from_millis(300)).is_none());
+}
+
+#[test]
+fn only_host_names_are_asked() {
+    use probe::udp::dns_name;
+    assert!(dns_name("discord.com") && dns_name("discord.com.") && dns_name("a-1.b"));
+    for bad in ["", ".", "a..b", ".a", "a b", "a&type=AAAA", "ä.com"] {
+        assert!(!dns_name(bad), "{bad:?}");
+    }
+    assert!(!dns_name(&format!("{}.com", "a".repeat(64))));
+    assert!(!dns_name(&["abc"; 64].join(".")), "over 253 bytes");
+    let addr = server(|_| panic!("nothing is sent"));
+    assert_eq!(probe::udp::dns_udp("a..b", addr, T), None);
+    assert_eq!(probe::curl::dns_doh("a&type=AAAA", None), None);
+}

@@ -67,16 +67,32 @@ fn seed_bytes<const N: usize>() -> [u8; N] {
     out
 }
 
-/// One A query over UDP. `None`: no answer, a failure (SERVFAIL, REFUSED, ..) or a malformed reply;
-/// `Some(vec![])`: NXDOMAIN or no A record.
+/// A host name a query can carry as it is: letters, digits, `-`, labels of 1-63 bytes, 253 at
+/// most (a trailing dot aside).
+pub fn dns_name(name: &str) -> bool {
+    let name = name.strip_suffix('.').unwrap_or(name);
+    (1..=253).contains(&name.len())
+        && name.split('.').all(|label| {
+            (1..=63).contains(&label.len())
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+}
+
+/// One A query over UDP. `None`: not a host name (`dns_name`), no answer, a failure (SERVFAIL,
+/// REFUSED, ..) or a malformed reply; `Some(vec![])`: NXDOMAIN or no A record.
 pub fn dns_udp(name: &str, server: SocketAddr, timeout: Duration) -> Option<Vec<Ipv4Addr>> {
+    if !dns_name(name) {
+        return None;
+    }
     let id = seed_bytes::<2>();
     let mut q = Vec::with_capacity(32 + name.len());
     q.extend_from_slice(&id);
     q.extend_from_slice(&[0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0]); // RD, one question
     for label in name.trim_end_matches('.').split('.') {
-        q.push(label.len().min(63) as u8);
-        q.extend_from_slice(&label.as_bytes()[..label.len().min(63)]);
+        q.push(label.len() as u8);
+        q.extend_from_slice(label.as_bytes());
     }
     q.extend_from_slice(&[0, 0, 1, 0, 1]); // root, A, IN
     let (_, reply) = exchange(server, &q, timeout, |r| {

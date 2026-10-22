@@ -435,8 +435,12 @@ pub fn parse_doh_json(text: &str) -> Vec<Ipv4Addr> {
         .collect()
 }
 
-/// An A lookup over DoH (Cloudflare), optionally through SOCKS5. `None`: the request failed.
+/// An A lookup over DoH (Cloudflare), optionally through SOCKS5. `None`: not a host name (so
+/// nothing else lands in the URL) or the request failed.
 pub fn dns_doh(name: &str, socks5: Option<&str>) -> Option<Vec<Ipv4Addr>> {
+    if !crate::udp::dns_name(name) {
+        return None;
+    }
     let mut cmd = get(
         &format!("https://cloudflare-dns.com/dns-query?name={name}&type=A"),
         socks5,
