@@ -587,6 +587,7 @@ mod tests {
             progress: None,
             question: None,
             choosing: None,
+            results: Vec::new(),
         }
     }
 

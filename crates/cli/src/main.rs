@@ -2010,6 +2010,7 @@ mod tests {
             progress: Some(step),
             question: question.map(str::to_owned),
             choosing: choosing.then(Vec::new),
+            results: Vec::new(),
         })
         .unwrap()
     }

@@ -26,6 +26,8 @@ pub trait Env {
     fn cancelled(&self) -> bool;
     fn elapsed(&self) -> Duration;
     fn progress(&mut self, step: Progress);
+    /// The finished paths of the group being tried, after each one; empty when a group starts.
+    fn results(&mut self, results: &[(PathKind, Score)]);
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
@@ -119,6 +121,9 @@ pub struct Live {
     pub progress: Option<Progress>,
     pub question: Option<String>,
     pub choosing: Option<Vec<Group>>,
+    /// The finished paths of the group being tried, in the order tried (spec 10: the live table).
+    #[serde(default)]
+    pub results: Vec<(PathKind, Score)>,
 }
 
 /// Even count: the lower middle, as in `culprits::fault`.
@@ -185,6 +190,7 @@ pub fn run(env: &mut dyn Env, ctx: &Ctx, groups: &[Group], settings: &Settings) 
             skipped,
             not_checked: vec![],
         };
+        env.results(&gr.results);
         for (i, path) in paths.iter().enumerate() {
             let label = path.label();
             if !stopped && env.cancelled() {
@@ -210,6 +216,7 @@ pub fn run(env: &mut dyn Env, ctx: &Ctx, groups: &[Group], settings: &Settings) 
                 gr.not_checked
                     .push(format!("{label}: не удалось поставить: {e:#}"));
                 gr.results.push((path.clone(), Score::default()));
+                env.results(&gr.results);
                 continue;
             }
             let Some(mut s) = evaluate(env, ctx, group) else {
@@ -232,6 +239,7 @@ pub fn run(env: &mut dyn Env, ctx: &Ctx, groups: &[Group], settings: &Settings) 
                     .push(format!("{label}: не проверен: нет попыток программы"));
             }
             gr.results.push((path.clone(), s));
+            env.results(&gr.results);
         }
         rank(&mut gr.results);
         out.per_group.push(gr);

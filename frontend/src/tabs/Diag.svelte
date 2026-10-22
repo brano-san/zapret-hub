@@ -3,9 +3,10 @@
   import { call } from "$lib/api";
   import { app, change, refreshDiag } from "$lib/app.svelte";
   import { confirmation } from "$lib/confirm.svelte";
-  import { faultText, fixApplies, fixText, ms, pathLabel, patternTitle, quickSummary, runDate, scoreWorks } from "$lib/format";
+  import { faultText, fixApplies, fixText, patternTitle, quickSummary, runDate } from "$lib/format";
   import { S } from "$lib/strings";
   import CopyButton from "../components/CopyButton.svelte";
+  import PathTable from "../components/PathTable.svelte";
 
   /** The «Любая программа» choice of the profile list. */
   const ANY = "";
@@ -166,6 +167,10 @@
     {:else}
       <p>{S.diag.rollingBack}</p>
     {/if}
+    <!-- The paths of this culprit tried so far (diag spec 10); a new culprit starts an empty table. -->
+    {#if live.results?.length && (step?.step === "Path" || step?.step === "Question")}
+      <PathTable results={live.results} />
+    {/if}
     <div class="buttons">
       <button class="danger" disabled={step?.step === "RollingBack"} onclick={() => commands.cancelDiag()}>{S.common.cancel}</button>
     </div>
@@ -251,30 +256,7 @@
         <h3>{summary.group.key}</h3>
         <p class="muted">{summary.seen}</p>
         <p>{summary.explanation}</p>
-        {#if summary.results.length > 0}
-          <table>
-            <thead>
-              <tr>
-                <th>{S.diag.columns.path}</th>
-                <th>{S.diag.columns.works}</th>
-                <th>{S.diag.columns.latency}</th>
-                <th>{S.diag.columns.loss}</th>
-                <th>{S.diag.columns.answer}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each summary.results as [path, score], i (i)}
-                <tr class:selected={summary.best === i}>
-                  <td>{pathLabel(path)}{#if summary.best === i}<span class="muted"> · {S.diag.best}</span>{/if}</td>
-                  <td class={scoreWorks(score) ? "ok" : "bad"}>{S.diag.works(scoreWorks(score), score.ok, score.total)}</td>
-                  <td>{ms(score.median_ms)}</td>
-                  <td>{score.loss_pct === null ? "—" : `${score.loss_pct} %`}</td>
-                  <td>{score.answer ? S.diag.answers[score.answer] : "—"}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        {/if}
+        {#if summary.results.length > 0}<PathTable results={summary.results} best={summary.best} />{/if}
       {/each}
 
       <div class="buttons">

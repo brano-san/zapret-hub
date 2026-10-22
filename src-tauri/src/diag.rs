@@ -101,6 +101,7 @@ pub fn start_diag(app: &AppHandle, request: Request) -> anyhow::Result<()> {
         progress: None,
         question: None,
         choosing: None,
+        results: Vec::new(),
     })?;
     let handle = app.clone();
     std::thread::spawn(move || {
@@ -613,6 +614,10 @@ impl Env for AppEnv {
 
     fn progress(&mut self, step: Progress) {
         progress(&self.app, step);
+    }
+
+    fn results(&mut self, results: &[(PathKind, Score)]) {
+        live_changed(&self.app, |live| live.results = results.to_vec());
     }
 }
 

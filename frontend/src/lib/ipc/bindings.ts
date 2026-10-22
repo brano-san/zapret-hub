@@ -127,6 +127,8 @@ export const commands = {
 	progress: DiagStep | null,
 	question: string | null,
 	choosing: Group[] | null,
+	/**  The finished paths of the group being tried, in the order tried (spec 10: the live table). */
+	results?: ([PathKind, DiagScore])[],
 } | null>("diag_live"),
 	/**  «Работает?» in the "with me" mode. */
 	diagAnswer: (answer: Answer) => typedError<null, string>(__TAURI_INVOKE("diag_answer", { answer })),
@@ -283,6 +285,8 @@ export type DiagLive = {
 	progress: DiagStep | null,
 	question: string | null,
 	choosing: Group[] | null,
+	/**  The finished paths of the group being tried, in the order tried (spec 10: the live table). */
+	results?: ([PathKind, DiagScore])[],
 };
 
 export type DiagProfile = {

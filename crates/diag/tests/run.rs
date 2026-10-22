@@ -74,6 +74,8 @@ struct Fake {
     sets: Vec<String>,
     rolled_back: u32,
     clock: Duration,
+    /// How many finished paths each `results` call carried.
+    results: Vec<usize>,
 }
 
 impl Env for Fake {
@@ -116,6 +118,9 @@ impl Env for Fake {
         self.clock
     }
     fn progress(&mut self, _: Progress) {}
+    fn results(&mut self, results: &[(PathKind, Score)]) {
+        self.results.push(results.len());
+    }
 }
 
 fn settings(mode: Mode, budget_secs: u64) -> Settings {
@@ -429,4 +434,17 @@ fn request_check() {
 fn mode_is_lowercase() {
     assert_eq!(serde_json::to_string(&Mode::Auto).unwrap(), "\"auto\"");
     assert_eq!(serde_json::from_str::<Mode>("\"ask\"").unwrap(), Mode::Ask);
+}
+
+#[test]
+fn each_finished_path_reaches_the_env_and_a_new_group_starts_empty() {
+    let mut env = Fake::default();
+    let groups = [group(Protocol::Tcp, 443), group(Protocol::Tcp, 80)];
+    let out = run(&mut env, &ctx(true), &groups, &settings(Mode::Auto, 3600));
+    let (first, second) = (
+        out.per_group[0].results.len(),
+        out.per_group[1].results.len(),
+    );
+    let expected: Vec<usize> = (0..=first).chain(0..=second).collect();
+    assert_eq!(env.results, expected);
 }
