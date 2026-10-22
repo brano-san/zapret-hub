@@ -20,7 +20,7 @@ pub enum PathKind {
     ExtendRule { rule: String, protocol: Protocol },
 }
 
-fn protocol_text(p: Protocol) -> &'static str {
+pub(crate) fn protocol_text(p: Protocol) -> &'static str {
     match p {
         Protocol::Tcp => "TCP",
         Protocol::Udp => "UDP",

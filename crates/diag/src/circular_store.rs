@@ -84,7 +84,7 @@ pub fn add(store: &mut Store, filter: &str, found: Vec<Trick>) {
     tricks.sort_by_key(|t| (std::cmp::Reverse(t.ok), t.median_ms.unwrap_or(u32::MAX)));
 }
 
-fn is_filter(token: &str) -> bool {
+pub(crate) fn is_filter(token: &str) -> bool {
     ["--filter-tcp=", "--filter-udp=", "--filter-l7="]
         .iter()
         .any(|prefix| token.starts_with(prefix))

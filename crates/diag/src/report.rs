@@ -1,0 +1,70 @@
+//! Saved results: `data\diag\<id>.json`, the newest 20 kept (spec 9).
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, ensure};
+
+use crate::summary::Summary;
+
+const KEEP: usize = 20;
+
+pub fn dir(data: &Path) -> PathBuf {
+    data.join("diag")
+}
+
+/// `YYYY-MM-DD_HH-MM-SS`: also keeps an id from the CLI out of other folders.
+fn is_id(s: &str) -> bool {
+    s.len() == 19
+        && s.bytes().enumerate().all(|(i, b)| match i {
+            4 | 7 | 13 | 16 => b == b'-',
+            10 => b == b'_',
+            _ => b.is_ascii_digit(),
+        })
+}
+
+/// Report ids, newest first (ids sort as dates do).
+fn ids(dir: &Path) -> anyhow::Result<Vec<String>> {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => return Err(e).with_context(|| dir.display().to_string()),
+    };
+    let mut ids: Vec<String> = rd
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter_map(|n| n.strip_suffix(".json").map(str::to_owned))
+        .filter(|n| is_id(n))
+        .collect();
+    ids.sort_unstable_by(|a, b| b.cmp(a));
+    Ok(ids)
+}
+
+pub fn save(dir: &Path, summary: &Summary) -> anyhow::Result<()> {
+    ensure!(is_id(&summary.id), "неверный номер отчёта: {}", summary.id);
+    std::fs::create_dir_all(dir).with_context(|| dir.display().to_string())?;
+    let path = dir.join(format!("{}.json", summary.id));
+    std::fs::write(&path, serde_json::to_string_pretty(summary)?)
+        .with_context(|| path.display().to_string())?;
+    for old in ids(dir)?.into_iter().skip(KEEP) {
+        let path = dir.join(format!("{old}.json"));
+        std::fs::remove_file(&path).with_context(|| path.display().to_string())?;
+    }
+    Ok(())
+}
+
+/// `(id, profile)`, newest first.
+pub fn list(dir: &Path) -> anyhow::Result<Vec<(String, String)>> {
+    ids(dir)?
+        .into_iter()
+        .map(|id| {
+            let profile = load(dir, &id)?.profile;
+            Ok((id, profile))
+        })
+        .collect()
+}
+
+pub fn load(dir: &Path, id: &str) -> anyhow::Result<Summary> {
+    ensure!(is_id(id), "неверный номер отчёта: {id}");
+    let path = dir.join(format!("{id}.json"));
+    let text = std::fs::read_to_string(&path).with_context(|| path.display().to_string())?;
+    serde_json::from_str(&text).with_context(|| path.display().to_string())
+}
