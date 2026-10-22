@@ -1,0 +1,84 @@
+# Port of Flowseal general to zapret2
+--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP%
+--wf-udp-out=%GameFilterUDP%
+--wf-raw-part=@"init.d\windivert.filter.examples\windivert_part.quic_initial_ietf.txt"
+--wf-raw-part=@"init.d\windivert.filter.examples\windivert_part.discord_media.txt"
+--wf-raw-part=@"init.d\windivert.filter.examples\windivert_part.stun.txt"
+--lua-init=@"%LUA%zapret-lib.lua" --lua-init=@"%LUA%zapret-antidpi.lua"
+--blob=quic_google:@"%BIN%quic_initial_www_google_com.bin"
+--blob=tls_google:@"%BIN%tls_clienthello_www_google_com.bin"
+--blob=tls_max:@"%BIN%tls_clienthello_max_ru.bin"
+--blob=stun2:@"%BIN%stun2.bin"
+--blob=discord_udp:@"%BIN%ACTIVE_DISCORD_UDP.bin"
+--blob=game_udp:@"%BIN%ACTIVE_GAME_UDP.bin"
+
+# QUIC, general lists
+--filter-udp=443 --filter-l7=quic
+--hostlist="%LISTS%list-general.txt" --hostlist="%LISTS%list-general-user.txt"
+--hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt"
+--ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
+--payload=quic_initial --lua-desync=fake:blob=quic_google:repeats=11
+--new
+
+# Discord voice
+--filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun
+--payload=discord_ip_discovery,stun --lua-desync=fake:blob=discord_udp:repeats=6
+--new
+
+# discord.media on its TLS ports
+--filter-tcp=2053,2083,2087,2096,8443 --filter-l7=tls --hostlist-domains=discord.media
+--out-range=-d10 --payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:tcp_ts=-600000:repeats=8
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_google
+--new
+
+# Google / YouTube
+--filter-tcp=443 --filter-l7=tls --hostlist="%LISTS%list-google.txt"
+--out-range=-d10 --payload=tls_client_hello
+--lua-desync=fake:blob=tls_google:tcp_ts=-600000:repeats=8:ip_id=zero
+--lua-desync=multisplit:pos=1:seqovl=681:seqovl_pattern=tls_google:ip_id=zero
+--new
+
+# General lists over TLS and HTTP
+--filter-tcp=80,443 --filter-l7=tls,http
+--hostlist="%LISTS%list-general.txt" --hostlist="%LISTS%list-general-user.txt"
+--hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt"
+--ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
+--out-range=-d10
+--payload=tls_client_hello --lua-desync=fake:blob=stun2:tcp_ts=-600000:repeats=8
+--payload=tls_client_hello,http_req
+--lua-desync=fake:blob=tls_max:tcp_ts=-600000:repeats=8
+--lua-desync=multisplit:pos=1:seqovl=664:seqovl_pattern=tls_max
+--new
+
+# QUIC, ipset-all
+--filter-udp=443 --filter-l7=quic --ipset="%LISTS%ipset-all.txt"
+--hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt"
+--ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
+--payload=quic_initial --lua-desync=fake:blob=quic_google:repeats=11
+--new
+
+# TLS and HTTP, ipset-all
+--filter-tcp=80,443,8443 --filter-l7=tls,http --ipset="%LISTS%ipset-all.txt"
+--hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt"
+--ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
+--out-range=-d10
+--payload=tls_client_hello --lua-desync=fake:blob=stun2:tcp_ts=-600000:repeats=8
+--payload=tls_client_hello,http_req
+--lua-desync=fake:blob=tls_max:tcp_ts=-600000:repeats=8
+--lua-desync=multisplit:pos=1:seqovl=664:seqovl_pattern=tls_max
+--new
+
+# Games over TCP
+--filter-tcp=%GameFilterTCP% --ipset="%LISTS%ipset-all.txt"
+--ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
+--out-range=-d2 --payload=known,unknown
+--lua-desync=fake:blob=stun2:tcp_ts=-600000:repeats=8:payload=all
+--lua-desync=fake:blob=tls_max:tcp_ts=-600000:repeats=8:payload=all
+--lua-desync=multisplit:pos=1:seqovl=664:seqovl_pattern=tls_max:payload=all
+--new
+
+# Games over UDP
+--filter-udp=%GameFilterUDP% --ipset="%LISTS%ipset-all.txt"
+--ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt"
+--out-range=-n3 --lua-desync=fake:blob=game_udp:repeats=10:payload=all
