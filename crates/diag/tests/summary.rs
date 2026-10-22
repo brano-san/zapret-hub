@@ -87,6 +87,7 @@ fn profile(kind: ProbeKind) -> Profile {
 
 fn ctx() -> Ctx {
     Ctx {
+        proxy_set: true,
         proxy_ok: true,
         ranking: vec![],
         strategies: vec![],
@@ -458,7 +459,27 @@ fn nothing_works_proxy_not_checked_text() {
     );
     assert_eq!(
         s.groups[0].explanation,
-        "адрес недоступен ни одним проверенным путём; прокси не проверен: он не отвечает. Проверено: Как сейчас, Напрямую мимо всего"
+        "адрес недоступен ни одним проверенным путём; путь через прокси не проверен: прокси не отвечает. Проверено: Как сейчас, Напрямую мимо всего"
+    );
+    // No proxy in the settings, and a strategy left out: the reason is the setting.
+    out.per_group[0].skipped = vec![
+        "Стратегия B: фильтр не покрывает UDP 19300".into(),
+        "Прокси точечно: прокси не задан в настройках".into(),
+    ];
+    let s = summarize(
+        &Verdict::Culprits(vec![g.clone()]),
+        &out,
+        &[],
+        &ctx(),
+        ID.into(),
+        30,
+    );
+    assert!(
+        s.groups[0]
+            .explanation
+            .starts_with("адрес недоступен ни одним проверенным путём; путь через прокси не проверен: прокси не задан в настройках."),
+        "{}",
+        s.groups[0].explanation
     );
     // Proxy measured and failing: the full text.
     let out = outcome(
@@ -469,6 +490,21 @@ fn nothing_works_proxy_not_checked_text() {
         ],
     );
     let s = summarize(
+        &Verdict::Culprits(vec![g.clone()]),
+        &out,
+        &[],
+        &ctx(),
+        ID.into(),
+        30,
+    );
+    assert!(s.groups[0].explanation.contains("включая прокси"));
+    // The proxy measured, another path left out: still the full text.
+    let mut out = outcome(
+        g.clone(),
+        vec![(PathKind::ProxyPoint { rule: point_rule() }, bad())],
+    );
+    out.per_group[0].skipped = vec!["Стратегия B: фильтр не покрывает UDP 19300".into()];
+    let s = summarize(
         &Verdict::Culprits(vec![g]),
         &out,
         &[],
@@ -477,6 +513,15 @@ fn nothing_works_proxy_not_checked_text() {
         30,
     );
     assert!(s.groups[0].explanation.contains("включая прокси"));
+}
+
+#[test]
+fn a_report_that_cannot_take_its_place_is_an_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = report::dir(tmp.path());
+    std::fs::create_dir_all(dir.join(format!("{ID}.json"))).unwrap();
+    let s = summarize(&Verdict::Clean, &empty(), &[], &ctx(), ID.into(), 30);
+    assert!(report::save(&dir, &s).is_err());
 }
 
 #[test]

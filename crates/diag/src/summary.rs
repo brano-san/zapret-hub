@@ -7,7 +7,7 @@ use zapret::custom::quoted_tokens;
 use crate::circular_store::{Trick, is_filter};
 use crate::culprits::{Fault, Group, Verdict};
 use crate::evaluate::{Score, works};
-use crate::paths::{Ctx, PathKind, protocol_text};
+use crate::paths::{Ctx, PROXY_SILENT, PROXY_UNSET, PathKind, protocol_text};
 use crate::patterns::{Pattern, unique};
 use crate::profiles::ProbeKind;
 use crate::run::{GroupResult, Outcome};
@@ -17,7 +17,7 @@ const WHITELIST: &str =
 const ONLY_PROXY: &str = "провайдер блокирует адрес; zapret не помогает; через прокси работает";
 const NOTHING: &str = "адрес недоступен ни одним путём, включая прокси: вероятно, проблема на стороне сервиса или прокси";
 const NOTHING_NO_PROXY: &str =
-    "адрес недоступен ни одним проверенным путём; прокси не проверен: он не отвечает";
+    "адрес недоступен ни одним проверенным путём; путь через прокси не проверен";
 const LIVE_ONLY: &str = "не проверяется автоматически: нужен режим „со мной“";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
@@ -110,10 +110,16 @@ fn explain(gr: &GroupResult, best: Option<&PathKind>) -> String {
             .map(|(p, _)| p.label())
             .collect();
         let proxy_measured = gr.results.iter().any(|(p, s)| is_proxy(p) && measured(s));
-        let head = if gr.skipped.is_empty() && proxy_measured {
-            NOTHING
-        } else {
-            NOTHING_NO_PROXY
+        // Why the proxy paths were left out, if they were.
+        let why = gr.skipped.iter().find_map(|s| {
+            [PROXY_SILENT, PROXY_UNSET]
+                .into_iter()
+                .find(|w| s.ends_with(w))
+        });
+        let head = match why {
+            _ if proxy_measured => NOTHING.to_owned(),
+            Some(why) => format!("{NOTHING_NO_PROXY}: {why}"),
+            None => NOTHING_NO_PROXY.to_owned(),
         };
         return if checked.is_empty() {
             "пути не проверены".into()

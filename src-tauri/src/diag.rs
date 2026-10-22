@@ -345,6 +345,7 @@ fn context(
     engine2: Option<&zapret2::Engine>,
     profile: Profile,
 ) -> Ctx {
+    let proxy_set = state.socks5().is_some();
     let proxy_ok = state.socks5().is_some_and(|addr| {
         router::parse_proxy(Some(&addr)).is_ok() && probe::socks::check(&addr).ok
     });
@@ -369,6 +370,7 @@ fn context(
         .filter(|rule| !rule.apps.is_empty())
         .collect();
     Ctx {
+        proxy_set,
         proxy_ok,
         ranking,
         strategies,

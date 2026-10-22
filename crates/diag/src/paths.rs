@@ -10,6 +10,8 @@ use crate::profiles::Profile;
 
 const PROXY_POINT: &str = "Прокси точечно";
 const PROXY_NO_ZAPRET: &str = "Прокси без zapret";
+pub(crate) const PROXY_SILENT: &str = "прокси не отвечает";
+pub(crate) const PROXY_UNSET: &str = "прокси не задан в настройках";
 
 pub const NO_TRICKS_FOR_SYN: &str = "приёмы zapret2 не проверяются: сервер не отвечает на SYN";
 
@@ -63,6 +65,9 @@ impl PathKind {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ctx {
+    /// A SOCKS5 proxy is set in the settings ...
+    pub proxy_set: bool,
+    /// ... and answers.
     pub proxy_ok: bool,
     /// Strategy full names, by the last test ranking.
     pub ranking: Vec<String>,
@@ -135,8 +140,13 @@ pub fn plan(group: &Group, ctx: &Ctx) -> (Vec<PathKind>, Vec<String>) {
         paths.push(PathKind::ProxyPoint { rule: rule.clone() });
         paths.push(PathKind::ProxyNoZapret { rule });
     } else {
+        let why = if ctx.proxy_set {
+            PROXY_SILENT
+        } else {
+            PROXY_UNSET
+        };
         for p in [PROXY_POINT, PROXY_NO_ZAPRET] {
-            skipped.push(format!("{p}: прокси не отвечает"));
+            skipped.push(format!("{p}: {why}"));
         }
     }
     // Pattern R1: the program's rule lacks the culprit's protocol.

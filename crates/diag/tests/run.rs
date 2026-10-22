@@ -39,6 +39,7 @@ fn profile(kind: ProbeKind) -> Profile {
 
 fn ctx(proxy_ok: bool) -> Ctx {
     Ctx {
+        proxy_set: true,
         proxy_ok,
         ranking: vec!["A".into(), "B".into(), "C".into()],
         strategies: vec![
