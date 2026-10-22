@@ -8,7 +8,7 @@ use diag::patterns::{Evidence, Pattern, detect};
 use diag::profiles::{ProbeKind, ProbeSpec, Profile};
 use diag::report;
 use diag::run::{GroupResult, Outcome};
-use diag::summary::{Fix, TurnOffTarget, summarize, warn_breaks};
+use diag::summary::{Fix, TurnOffTarget, add_rule, summarize, warn_breaks};
 use router::observe::FlowCounters;
 use router::rules::{Protocol, Rule};
 
@@ -693,4 +693,37 @@ fn save_keeps_the_saved_one() {
     // Older than all 20 (a clock set back): kept anyway.
     report::save(&dir, &summary("2026-01-01_00-00-00".into(), "Discord")).unwrap();
     assert!(report::load(&dir, "2026-01-01_00-00-00").is_ok());
+}
+
+#[test]
+fn apply_unites_with_the_rule_of_that_name() {
+    let rule = |protocol, port: &str, ip: &str| Rule {
+        name: "diag-discord".into(),
+        enabled: true,
+        protocol,
+        ports: vec![port.into()],
+        ips: vec![ip.into()],
+        domains: vec![],
+        apps: vec![],
+    };
+    let mut list = vec![Rule {
+        enabled: false,
+        ..rule(Protocol::Udp, "19294", "104.29.152.0/24")
+    }];
+    add_rule(&mut list, rule(Protocol::Udp, "19300", "104.29.160.0/24"));
+    add_rule(&mut list, rule(Protocol::Tcp, "443", "104.29.160.0/24"));
+    assert_eq!(list.len(), 1);
+    let r = &list[0];
+    assert!(r.enabled);
+    assert_eq!(r.protocol, Protocol::Both);
+    assert_eq!(r.ports, ["19294", "19300", "443"]);
+    assert_eq!(r.ips, ["104.29.152.0/24", "104.29.160.0/24"]);
+    add_rule(
+        &mut list,
+        Rule {
+            name: "diag-game1".into(),
+            ..rule(Protocol::Udp, "7777", "5.6.7.0/24")
+        },
+    );
+    assert_eq!(list.len(), 2);
 }

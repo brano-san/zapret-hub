@@ -79,7 +79,7 @@ fn point_rule(group: &Group, profile: &Profile) -> Rule {
         (vec![], vec![group.key.clone()])
     };
     Rule {
-        name: format!("diag-{}", profile.id),
+        name: profile.rule_name(),
         enabled: true,
         protocol: group.protocol,
         ports: group.ports.iter().map(u16::to_string).collect(),

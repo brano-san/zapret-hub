@@ -55,3 +55,23 @@ fn any_program_probes_observed() {
         ]
     );
 }
+
+#[test]
+fn each_program_gets_its_own_rule() {
+    use router::rules::{Protocol, Rule, check};
+    assert_eq!(builtin()[0].rule_name(), "diag-discord");
+    assert_eq!(any_program("game1.exe").rule_name(), "diag-game1");
+    let odd = any_program("Game (x64) — Ünïcode build of a very long program name.exe").rule_name();
+    assert_eq!(odd.chars().count(), 40, "{odd}");
+    assert!(odd.starts_with("diag-Game -x64- - "), "{odd}");
+    let rule = Rule {
+        name: odd,
+        enabled: true,
+        protocol: Protocol::Tcp,
+        ports: vec!["443".into()],
+        ips: vec!["1.2.3.0/24".into()],
+        domains: vec![],
+        apps: vec![],
+    };
+    assert!(check(&rule).is_empty(), "{:?}", check(&rule));
+}

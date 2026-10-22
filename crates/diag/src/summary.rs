@@ -143,6 +143,39 @@ fn explain(gr: &GroupResult, best: Option<&PathKind>) -> String {
     }
 }
 
+/// `rule` into `old`: ports, addresses, domains and programs united; both protocols if they
+/// differ.
+pub fn unite(old: &mut Rule, rule: &Rule) {
+    if old.protocol != rule.protocol {
+        old.protocol = Protocol::Both;
+    }
+    for (to, from) in [
+        (&mut old.ports, &rule.ports),
+        (&mut old.ips, &rule.ips),
+        (&mut old.domains, &rule.domains),
+        (&mut old.apps, &rule.apps),
+    ] {
+        for x in from {
+            if !to.contains(x) {
+                to.push(x.clone());
+            }
+        }
+    }
+}
+
+/// «Применить» of an `AddRule`: united with the rule of that name (names match regardless of
+/// case, as in `rules`) and turned on, so what earlier diagnostics fixed stays fixed; else added.
+pub fn add_rule(list: &mut Vec<Rule>, rule: Rule) {
+    let name = rule.name.to_lowercase();
+    match list.iter_mut().find(|r| r.name.to_lowercase() == name) {
+        Some(old) => {
+            unite(old, &rule);
+            old.enabled = true;
+        }
+        None => list.push(rule),
+    }
+}
+
 /// `AddRule`s of the same name become one rule; other duplicates are dropped.
 fn push(fixes: &mut Vec<Fix>, fix: Fix) {
     if let Fix::AddRule { rule } = &fix
@@ -151,20 +184,7 @@ fn push(fixes: &mut Vec<Fix>, fix: Fix) {
             _ => None,
         })
     {
-        if old.protocol != rule.protocol {
-            old.protocol = Protocol::Both;
-        }
-        for (to, from) in [
-            (&mut old.ports, &rule.ports),
-            (&mut old.ips, &rule.ips),
-            (&mut old.domains, &rule.domains),
-        ] {
-            for x in from {
-                if !to.contains(x) {
-                    to.push(x.clone());
-                }
-            }
-        }
+        unite(old, rule);
         return;
     }
     if !fixes.contains(&fix) {
@@ -175,7 +195,7 @@ fn push(fixes: &mut Vec<Fix>, fix: Fix) {
 fn fixes_for(gr: &GroupResult, best: &PathKind, ctx: &Ctx, id: &str, out: &mut Vec<Fix>) {
     let add_rule = |rule: &Rule, out: &mut Vec<Fix>| {
         let rule = Rule {
-            name: format!("diag-{}", ctx.profile.id),
+            name: ctx.profile.rule_name(),
             ..rule.clone()
         };
         push(out, Fix::AddRule { rule });

@@ -71,6 +71,35 @@ pub fn load(dir: &Path) -> anyhow::Result<Vec<Profile>> {
     Ok(all)
 }
 
+/// The id of the "any program" profile.
+pub const ANY: &str = "app";
+
+impl Profile {
+    /// The name of the proxy rule «Применить» adds: `diag-<id>`, for "any program"
+    /// `diag-<exe stem>`, so each program gets its own. Characters a rule name refuses become
+    /// `-`; 40 characters at most.
+    pub fn rule_name(&self) -> String {
+        let stem = match (self.id.as_str(), self.apps.first()) {
+            (ANY, Some(exe)) => Path::new(exe)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| ANY.into()),
+            _ => self.id.clone(),
+        };
+        let allowed = |c: char| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, 'а'..='я' | 'А'..='Я' | 'ё' | 'Ё' | ' ' | '-' | '_' | '.')
+        };
+        let name: String = format!("diag-{stem}")
+            .chars()
+            .map(|c| if allowed(c) { c } else { '-' })
+            .take(40)
+            .collect();
+        name.trim_end().to_owned()
+    }
+}
+
 /// The "any program" profile, built on the fly from an exe name.
 pub fn any_program(exe: &str) -> Profile {
     let observed = |kind| ProbeSpec {
@@ -78,7 +107,7 @@ pub fn any_program(exe: &str) -> Profile {
         target: "observed".into(),
     };
     Profile {
-        id: "app".into(),
+        id: ANY.into(),
         name: exe.into(),
         apps: vec![exe.into()],
         hint: String::new(),

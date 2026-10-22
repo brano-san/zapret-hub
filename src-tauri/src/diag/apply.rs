@@ -3,7 +3,7 @@
 use anyhow::Context as _;
 use diag::circular_store::{self, Store};
 use diag::report;
-use diag::summary::Fix;
+use diag::summary::{self, Fix};
 use router::rules::{self, Rule};
 use tauri::AppHandle;
 use zapret::service::QuickCheck;
@@ -68,11 +68,8 @@ pub fn apply(app: &AppHandle, id: &str, fix: u32) -> anyhow::Result<Option<Quick
     match fix {
         Fix::AddRule { rule } => {
             state.router.edit(|list| {
-                if rules::find(list, &rule.name).is_ok() {
-                    rules::replace(list, rule)
-                } else {
-                    rules::add(list, rule)
-                }
+                summary::add_rule(list, rule);
+                Ok(())
             })?;
             let enabled = routing::set_enabled(app, true);
             actions::changed(app);
