@@ -477,6 +477,7 @@ export type Group = {
 	fault: Fault,
 };
 
+/**  `Default` fills what a report from another version lacks (`report::load`). */
 export type GroupSummary = {
 	group: Group,
 	seen: string,
@@ -860,6 +861,7 @@ export type StrategyRow = {
 
 export type Suite = "Standard" | "Dpi";
 
+/**  `Default` fills what a report from another version lacks (`report::load`). */
 export type Summary = {
 	/**  `YYYY-MM-DD_HH-MM-SS`. */
 	id: string,

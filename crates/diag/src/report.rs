@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, ensure};
 
-use crate::summary::Summary;
+use serde_json::Value;
+
+use crate::summary::{GroupSummary, Summary};
 
 const KEEP: usize = 20;
 
@@ -75,5 +77,28 @@ pub fn load(dir: &Path, id: &str) -> anyhow::Result<Summary> {
     ensure!(is_id(id), "неверный номер отчёта: {id}");
     let path = dir.join(format!("{id}.json"));
     let text = std::fs::read_to_string(&path).with_context(|| path.display().to_string())?;
-    serde_json::from_str(&text).with_context(|| path.display().to_string())
+    let mut value: Value =
+        serde_json::from_str(&text).with_context(|| path.display().to_string())?;
+    fill_defaults(&mut value)?;
+    serde_json::from_value(value).with_context(|| path.display().to_string())
+}
+
+/// The fields a report from another version lacks, from `Default`. Not `#[serde(default)]`:
+/// specta would make every field optional in the page's types.
+fn fill_defaults(report: &mut Value) -> anyhow::Result<()> {
+    fn fill(value: &mut Value, defaults: Value) {
+        if let (Value::Object(map), Value::Object(defaults)) = (value, defaults) {
+            for (key, default) in defaults {
+                map.entry(key).or_insert(default);
+            }
+        }
+    }
+    fill(report, serde_json::to_value(Summary::default())?);
+    let group = serde_json::to_value(GroupSummary::default())?;
+    if let Some(Value::Array(groups)) = report.get_mut("groups") {
+        for g in groups {
+            fill(g, group.clone());
+        }
+    }
+    Ok(())
 }

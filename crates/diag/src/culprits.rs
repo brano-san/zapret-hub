@@ -6,19 +6,32 @@ use router::observe::FlowCounters;
 use router::rules::Protocol;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "kind")]
 pub enum Fault {
-    SynUnanswered { syns: u32 },
+    SynUnanswered {
+        syns: u32,
+    },
+    // The default only for reading a report that lacks it.
+    #[default]
     ResetEarly,
     RedirectEarly,
-    DataRetrans { count: u32 },
-    UdpNoReply { up: u32, down: u32 },
-    Slow { median_ms: u32 },
-    Lossy { loss_pct: u32 },
+    DataRetrans {
+        count: u32,
+    },
+    UdpNoReply {
+        up: u32,
+        down: u32,
+    },
+    Slow {
+        median_ms: u32,
+    },
+    Lossy {
+        loss_pct: u32,
+    },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, specta::Type)]
 pub struct Group {
     /// Domain, SNI, or `a.b.c.0/24`.
     pub key: String,

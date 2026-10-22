@@ -40,7 +40,8 @@ pub enum TurnOffTarget {
     Current,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
+/// `Default` fills what a report from another version lacks (`report::load`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, specta::Type)]
 pub struct GroupSummary {
     pub group: Group,
     pub seen: String,
@@ -51,7 +52,8 @@ pub struct GroupSummary {
     pub explanation: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
+/// `Default` fills what a report from another version lacks (`report::load`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, specta::Type)]
 pub struct Summary {
     /// `YYYY-MM-DD_HH-MM-SS`.
     pub id: String,

@@ -700,6 +700,22 @@ fn save_keeps_the_saved_one() {
 }
 
 #[test]
+fn a_report_with_fewer_fields_loads() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = report::dir(tmp.path());
+    std::fs::create_dir_all(&dir).unwrap();
+    let text = r#"{"id": "2026-10-22_12-00-00", "profile": "Discord",
+        "groups": [{"seen": "UDP", "best": null}]}"#;
+    std::fs::write(dir.join("2026-10-22_12-00-00.json"), text).unwrap();
+    let s = report::load(&dir, "2026-10-22_12-00-00").unwrap();
+    assert_eq!(
+        (s.profile.as_str(), s.groups[0].seen.as_str()),
+        ("Discord", "UDP")
+    );
+    assert!(s.fixes.is_empty() && !s.canceled);
+}
+
+#[test]
 fn an_old_report_that_stays_does_not_fail_the_save() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = report::dir(tmp.path());
