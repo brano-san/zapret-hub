@@ -45,6 +45,8 @@ const BUSY: Duration = Duration::from_secs(10);
 const START_WAIT: Duration = Duration::from_secs(30);
 /// How often `tests wait` asks (spec 7.1).
 const POLL: Duration = Duration::from_secs(2);
+/// `diag run --wait` asks this often; tests do not wait.
+const DIAG_POLL: Duration = if cfg!(test) { Duration::ZERO } else { POLL };
 
 #[derive(Debug, Parser)]
 #[command(
@@ -1134,7 +1136,7 @@ fn wait_for_diag(call: Call, before: Option<String>, mode: Mode, note: Note) -> 
             );
         }
         last.2 = choosing;
-        std::thread::sleep(POLL);
+        std::thread::sleep(DIAG_POLL);
     }
     match newest_report(call)? {
         Some(id) if Some(&id) != before.as_ref() => {
@@ -1142,7 +1144,7 @@ fn wait_for_diag(call: Call, before: Option<String>, mode: Mode, note: Note) -> 
         }
         _ => Err(Fail::new(
             FAILED,
-            "the diagnostics ended without a report: see the notice in Zapret Hub",
+            "the diagnostics ended without a report (canceled or failed): see Zapret Hub",
         )),
     }
 }
@@ -1745,15 +1747,7 @@ mod tests {
             ("diag_observe_secs", "120", json!(120)),
             ("diag_budget_min", "1", json!(1)),
             ("diag_budget_min", "60", json!(60)),
-            (
-                "nekobox_dir",
-                r"E:
-ekoray",
-                json!(
-                    r"E:
-ekoray"
-                ),
-            ),
+            ("nekobox_dir", r"E:\nekoray", json!("E:\\nekoray")),
             ("nekobox_dir", " ", Value::Null),
         ] {
             let (outcome, asked) = drive(&["settings", "set", key, value], vec![Ok(settings())]);
@@ -2173,6 +2167,22 @@ ekoray"
             Request::DiagReport {
                 id: "2026-10-22_10-00-00".into()
             }
+        );
+    }
+
+    #[test]
+    fn diag_run_wait_after_a_cancel_without_a_report_is_neutral() {
+        let old = json!([["2026-10-21_10-00-00", "discord"]]);
+        let (outcome, _) = drive(
+            &["diag", "run", "--profile", "discord", "--wait"],
+            vec![Ok(old.clone()), Ok(Value::Null), Ok(Value::Null), Ok(old)],
+        );
+        assert_eq!(
+            outcome,
+            Err(Fail::new(
+                FAILED,
+                "the diagnostics ended without a report (canceled or failed): see Zapret Hub"
+            ))
         );
     }
 
