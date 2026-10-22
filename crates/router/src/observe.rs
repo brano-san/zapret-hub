@@ -430,7 +430,9 @@ struct Shared {
     /// (late packets).
     ports: Mutex<HashSet<(Protocol, u16)>>,
     sockets: Handle,
-    dns: Handle,
+    /// `None` when WinDivert refused it (seen while the router holds its own DNS sniffer): names
+    /// then come from SNI and Host only.
+    dns: Option<Handle>,
     sniff: Mutex<Option<Arc<Handle>>>,
 }
 
@@ -492,7 +494,10 @@ impl Observer {
         let sockets = Handle::open(&dll, SOCKET_FILTER, Layer::Socket, passive)
             .map_err(|e| anyhow!("WinDivert refused the socket handle: {e}"))?;
         let dns = Handle::open(&dll, DNS_FILTER, Layer::Network, passive)
-            .map_err(|e| anyhow!("WinDivert refused the DNS handle: {e}"))?;
+            .inspect_err(|e| {
+                log::warn!("observing without DNS names: WinDivert refused the handle: {e}")
+            })
+            .ok();
         let sniff = open_sniff(&dll, &[])
             .map_err(|e| anyhow!("WinDivert refused the sniff handle: {e}"))?;
         let shared = Arc::new(Shared {
@@ -530,8 +535,9 @@ impl Observer {
 
         let s = shared.clone();
         threads.push(std::thread::spawn(move || {
+            let Some(dns) = &s.dns else { return };
             let mut buf = vec![0u8; MAX_PACKET];
-            while let Ok((n, _)) = s.dns.recv(&mut buf) {
+            while let Ok((n, _)) = dns.recv(&mut buf) {
                 if let Some(answer) = parse_udp(&buf[..n]).and_then(|u| dns::parse(u.payload)) {
                     s.names.lock().unwrap().record(&answer, Instant::now());
                 }
@@ -606,7 +612,9 @@ impl Observer {
     fn halt(&mut self) {
         self.shared.stopped.store(true, Ordering::SeqCst);
         self.shared.sockets.shutdown();
-        self.shared.dns.shutdown();
+        if let Some(dns) = &self.shared.dns {
+            dns.shutdown();
+        }
         for t in self.threads.drain(..) {
             let _ = t.join();
         }
