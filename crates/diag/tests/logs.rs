@@ -1,4 +1,4 @@
-use diag::logs::{discord, neko, neko_routes, tail_since};
+use diag::logs::{discord, neko, neko_routes, size, tail_from, tail_since};
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -60,7 +60,7 @@ fn discord_stalled_with_peer() {
     let v = discord::parse(&lines("discord-dave-stalled.log"));
     assert_eq!(v.own_ssrc, Some(11029));
     assert_eq!(v.peers, vec![10923]);
-    assert_eq!(v.local_address.as_deref(), Some("203.0.113.10:16444"));
+    assert_eq!(v.local_address.as_deref(), Some("203.0.113.10"));
     assert_eq!(v.media_server.as_deref(), Some("104.29.149.39:19327"));
     assert!(v.no_voice_state);
     assert_eq!(v.ws_closed.len(), 1);
@@ -114,4 +114,55 @@ fn tail_limits_bytes() {
     let l = tail_since(&p, 8 << 20, |_| true).unwrap().unwrap();
     assert!(l.iter().map(|s| s.len() as u64 + 1).sum::<u64>() <= 8 << 20);
     assert_eq!(l.last().unwrap(), "LAST");
+}
+
+#[test]
+fn tail_from_reads_new_lines_and_survives_rotation() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("neko.log");
+    std::fs::write(
+        &p, "a
+b
+c
+",
+    )
+    .unwrap();
+    let off = size(&p).unwrap();
+    let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
+    f.write_all(
+        b"d
+e
+",
+    )
+    .unwrap();
+    assert_eq!(tail_from(&p, off, 1 << 20).unwrap().unwrap(), ["d", "e"]);
+    std::fs::write(
+        &p, "x
+",
+    )
+    .unwrap();
+    assert_eq!(tail_from(&p, off, 1 << 20).unwrap().unwrap(), ["x"]);
+    assert!(
+        tail_from(&dir.path().join("none"), 0, 10)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn rule_forms() {
+    let mk = |d: &[&str]| neko_routes::Routes {
+        direct: d.iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
+    };
+    let hit = |rule: &str, host: &str| neko_routes::rule_for(&mk(&[rule]), host).map(|x| x.1);
+    assert_eq!(hit("full:a.com", "A.com").as_deref(), Some("full:a.com"));
+    assert_eq!(hit("full:a.com", "x.a.com"), None);
+    assert!(hit("domain:a.com", "x.a.com").is_some());
+    assert!(hit("domain:a.com", "xa.com").is_none());
+    assert!(hit(".a.com", "x.A.com").is_some());
+    assert!(hit("A.com", "a.com").is_some());
+    assert!(hit("keyword:disc", "c1.discord.media").is_some());
+    assert!(hit("regexp:.*", "a.com").is_none());
+    assert!(hit("geosite:ru", "a.ru").is_none());
 }

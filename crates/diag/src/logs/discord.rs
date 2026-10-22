@@ -64,7 +64,11 @@ pub fn parse(lines: &[String]) -> Voice {
         } else if let Some((_, rest)) =
             l.split_once("[Connection(default)] Connected with local address ")
         {
-            v.local_address = rest.split(' ').next().map(str::to_owned);
+            v.local_address = rest
+                .split(' ')
+                .next()
+                .and_then(|a| a.rsplit_once(':'))
+                .map(|(h, _)| h.trim_matches(['[', ']']).to_owned());
         } else if let Some((_, rest)) = l.split_once(", default)] RTC connected to media server: ")
         {
             v.media_server = Some(rest.trim().to_owned());

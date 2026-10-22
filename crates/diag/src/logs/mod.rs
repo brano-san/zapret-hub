@@ -9,12 +9,23 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// Lines of the last `max_bytes` of the file for which `keep` holds; `Ok(None)` if there is no file.
-/// The file is opened with full sharing: its owner keeps writing to it.
 pub fn tail_since(
     path: &Path,
     max_bytes: u64,
     keep: impl Fn(&str) -> bool,
 ) -> std::io::Result<Option<Vec<String>>> {
+    Ok(tail_from(path, 0, max_bytes)?.map(|l| l.into_iter().filter(|s| keep(s)).collect()))
+}
+
+/// Size of the file now (the offset to pass to `tail_from` later); `None` if there is no file.
+pub fn size(path: &Path) -> Option<u64> {
+    std::fs::metadata(path).ok().map(|m| m.len())
+}
+
+/// Lines written after `offset`, at most the last `max_bytes` of that range; a file shorter than
+/// `offset` was rotated and is read from 0. `Ok(None)` if there is no file. The file is opened
+/// with full sharing: its owner keeps writing to it.
+pub fn tail_from(path: &Path, offset: u64, max_bytes: u64) -> std::io::Result<Option<Vec<String>>> {
     let mut opts = OpenOptions::new();
     opts.read(true);
     #[cfg(windows)]
@@ -25,10 +36,9 @@ pub fn tail_since(
         Err(e) => return Err(e),
     };
     let len = f.metadata()?.len();
-    let cut = len > max_bytes;
-    if cut {
-        f.seek(SeekFrom::Start(len - max_bytes))?;
-    }
+    let from = if len < offset { 0 } else { offset };
+    let cut = len - from > max_bytes;
+    f.seek(SeekFrom::Start(if cut { len - max_bytes } else { from }))?;
     let mut buf = Vec::new();
     f.take(max_bytes).read_to_end(&mut buf)?;
     let text = String::from_utf8_lossy(&buf);
@@ -36,7 +46,7 @@ pub fn tail_since(
     if cut {
         lines.next(); // the first line is most likely cut in the middle
     }
-    Ok(Some(lines.filter(|l| keep(l)).map(str::to_owned).collect()))
+    Ok(Some(lines.map(str::to_owned).collect()))
 }
 
 /// Existing `renderer_js.log` files of Discord, PTB and Canary.
