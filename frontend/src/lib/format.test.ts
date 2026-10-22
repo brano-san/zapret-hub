@@ -285,6 +285,10 @@ describe("diagnostics", () => {
     const fixes = [alt, hub, add];
     expect(fixWarnings(alt, fixes, warnings)).toEqual([warnings[0], warnings[2]]);
     expect(fixWarnings(hub, fixes, warnings)).toEqual([warnings[1], warnings[2]]);
-    expect(fixWarnings(add, fixes, warnings)).toEqual([]);
+    expect(fixWarnings(add, fixes, warnings)).toEqual([warnings[2]]);
+    const taken = "diag-discord — уведёт через прокси и YouTube: www.youtube.com";
+    expect(fixWarnings(add, fixes, [...warnings, taken])).toEqual([warnings[2], taken]);
+    expect(fixWarnings(alt, fixes, [taken])).toEqual([]);
+    expect(fixWarnings({ kind: "Manual", text: "x" }, fixes, warnings)).toEqual([]);
   });
 });

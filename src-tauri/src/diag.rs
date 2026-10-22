@@ -781,8 +781,34 @@ fn probe_all(probes: &[(String, ProbeSpec)]) -> Vec<(String, bool)> {
     })
 }
 
+/// A proxy rule `diag-*` takes every program's traffic to its subnet or domain (I3). Its effect on
+/// another profile is a change of path, not measured: the check run's rule also takes curl, so a
+/// probe could not tell. Named here instead: each other profile's host the rule's domains cover.
+fn rule_overlaps(fixes: &[Fix], probes: &[(String, ProbeSpec)]) -> Vec<String> {
+    let covers = |domain: &str, host: &str| {
+        host == domain
+            || host
+                .strip_suffix(domain)
+                .is_some_and(|rest| rest.ends_with('.'))
+    };
+    fixes
+        .iter()
+        .filter_map(|fix| match fix {
+            Fix::AddRule { rule } => Some(rule),
+            _ => None,
+        })
+        .flat_map(|rule| {
+            probes
+                .iter()
+                .filter(|(_, spec)| rule.domains.iter().any(|d| covers(d, &spec.target)))
+                .map(move |(key, _)| format!("{} — уведёт через прокси и {key}", rule.name))
+        })
+        .collect()
+}
+
 /// Spec 8: the other profiles as they are and under each fix that changes the strategy; what
-/// works now and stops under a fix is a warning. Rules affect only their programs: not checked.
+/// works now and stops under a fix is a warning. A rule fix is named where it covers another
+/// profile's host (`rule_overlaps`), not probed.
 fn recheck(
     env: &mut AppEnv,
     state: &AppState,
@@ -817,19 +843,16 @@ fn recheck(
             _ => None,
         })
         .collect();
-    if candidates.is_empty() || env.cancelled() {
-        return Vec::new();
-    }
     let others: Vec<Profile> = profiles(state)
         .unwrap_or_default()
         .into_iter()
         .filter(|p| p.id != profile.id)
         .collect();
     let probes = other_probes(&others);
-    if probes.is_empty() {
-        return Vec::new();
+    let mut warnings = rule_overlaps(fixes, &probes);
+    if candidates.is_empty() || probes.is_empty() || env.cancelled() {
+        return warnings;
     }
-    let mut warnings = Vec::new();
     let over = |env: &AppEnv, warnings: &mut Vec<String>| {
         let over = env.elapsed() >= budget;
         if over {
@@ -1127,6 +1150,29 @@ mod tests {
         );
         zapret2::strategies::write(root, circular_store::NAME, &own).unwrap();
         assert_eq!(name(Some("zapret2:hub-circular")), "");
+    }
+
+    #[test]
+    fn a_rule_fix_names_the_other_hosts_it_takes() {
+        let rule = |domains: &[&str]| Fix::AddRule {
+            rule: Rule {
+                name: "diag-discord".into(),
+                enabled: true,
+                protocol: Protocol::Tcp,
+                ports: vec!["443".into()],
+                ips: vec![],
+                domains: domains.iter().map(|d| d.to_string()).collect(),
+                apps: vec![],
+            },
+        };
+        let probes = other_probes(&profiles::builtin());
+        assert_eq!(
+            rule_overlaps(&[rule(&["youtube.com"])], &probes),
+            ["diag-discord — уведёт через прокси и YouTube: www.youtube.com"]
+        );
+        assert!(rule_overlaps(&[rule(&["tube.com", "discord.gg"])], &probes).is_empty());
+        let strategy = Fix::ApplyStrategy { name: "x".into() };
+        assert!(rule_overlaps(&[strategy], &probes).is_empty());
     }
 
     #[test]

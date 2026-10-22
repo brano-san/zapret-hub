@@ -351,11 +351,17 @@ export function fixText(fix: Fix): string {
 }
 
 /** Fixes «Применить» can do; the rest are for the user (diag spec 8). */
-/** The strategy a fix starts, as the recheck names it in its warnings. */
+/** What the recheck names a fix by in its warnings: the strategy it starts, the rule it adds. */
 const fixStrategy = (fix: Fix): string | null =>
-  fix.kind === "ApplyStrategy" ? fix.name : fix.kind === "ApplyHubCircular" ? "zapret2:hub-circular" : null;
+  fix.kind === "ApplyStrategy"
+    ? fix.name
+    : fix.kind === "ApplyHubCircular"
+      ? "zapret2:hub-circular"
+      : fix.kind === "AddRule"
+        ? fix.rule.name
+        : null;
 
-/** The recheck's warnings about this fix, and those about none in particular (time ran out). Rules are not rechecked. */
+/** The recheck's warnings about this fix, and those about none in particular (time ran out). */
 export function fixWarnings(fix: Fix, fixes: Fix[], warnings: string[]): string[] {
   const own = fixStrategy(fix);
   if (own === null) return [];
