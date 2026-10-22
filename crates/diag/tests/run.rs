@@ -462,7 +462,7 @@ fn syn_dead_everywhere_stops_before_strategies() {
     let out = run(
         &mut env,
         &ctx(true),
-        &[dead.clone()],
+        std::slice::from_ref(&dead),
         &settings(Mode::Auto, 600),
     );
     assert_eq!(
@@ -488,7 +488,7 @@ fn syn_dead_everywhere_stops_before_strategies() {
     run(
         &mut env,
         &ctx(true),
-        &[dead.clone()],
+        std::slice::from_ref(&dead),
         &settings(Mode::Auto, 600),
     );
     assert!(
