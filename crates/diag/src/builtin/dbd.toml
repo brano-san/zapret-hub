@@ -1,0 +1,13 @@
+id = "dbd"
+name = "Dead by Daylight"
+apps = ["DeadByDaylight-Win64-Shipping.exe"]
+hint = "Начните поиск матча"
+domains = ["bhvrdbd.com", "bhvronline.com"]
+
+[[probe]]
+kind = "https"
+target = "steam.live.bhvrdbd.com"
+
+[[probe]]
+kind = "live"
+target = "observed"

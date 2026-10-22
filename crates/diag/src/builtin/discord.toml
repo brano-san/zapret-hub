@@ -1,0 +1,17 @@
+id = "discord"
+name = "Discord"
+apps = ["Discord.exe", "DiscordPTB.exe", "DiscordCanary.exe"]
+hint = "Зайдите в голосовой канал"
+domains = ["discord.com", "discord.gg", "discord.media", "discordapp.com", "discordapp.net"]
+
+[[probe]]
+kind = "https"
+target = "discord.com"
+
+[[probe]]
+kind = "discord-ip-discovery"
+target = "observed"
+
+[[probe]]
+kind = "stun"
+target = "observed"

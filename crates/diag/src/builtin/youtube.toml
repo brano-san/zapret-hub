@@ -1,0 +1,9 @@
+id = "youtube"
+name = "YouTube"
+apps = ["chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe"]
+hint = "Откройте видео на YouTube"
+domains = ["youtube.com", "googlevideo.com"]
+
+[[probe]]
+kind = "https"
+target = "www.youtube.com"

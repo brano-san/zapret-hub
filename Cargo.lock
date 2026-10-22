@@ -873,6 +873,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "diag"
+version = "0.7.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "specta",
+ "tempfile",
+ "toml 1.1.8+spec-1.1.0",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

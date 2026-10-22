@@ -12,6 +12,7 @@ publish = false
 [workspace.dependencies]
 exec = { path = "crates/exec" }
 probe = { path = "crates/probe" }
+diag = { path = "crates/diag" }
 zapret = { path = "crates/zapret" }
 zapret2 = { path = "crates/zapret2" }
 tester = { path = "crates/tester" }
