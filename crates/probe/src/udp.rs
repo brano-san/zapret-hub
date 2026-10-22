@@ -67,7 +67,8 @@ fn seed_bytes<const N: usize>() -> [u8; N] {
     out
 }
 
-/// One A query over UDP. `None`: no answer; `Some(vec![])`: NXDOMAIN or no A record.
+/// One A query over UDP. `None`: no answer, a failure (SERVFAIL, REFUSED, ..) or a malformed reply;
+/// `Some(vec![])`: NXDOMAIN or no A record.
 pub fn dns_udp(name: &str, server: SocketAddr, timeout: Duration) -> Option<Vec<Ipv4Addr>> {
     let id = seed_bytes::<2>();
     let mut q = Vec::with_capacity(32 + name.len());
@@ -81,13 +82,16 @@ pub fn dns_udp(name: &str, server: SocketAddr, timeout: Duration) -> Option<Vec<
     let (_, reply) = exchange(server, &q, timeout, |r| {
         r.len() >= 12 && r[..2] == id && r[2] & 0x80 != 0
     })?;
-    Some(parse_a_records(&reply).unwrap_or_default())
+    parse_a_records(&reply)
 }
 
-/// The A records of a DNS response; `None` when it is malformed.
+/// The A records of a DNS response; `None` when it is malformed or failed (an RCODE other than
+/// NOERROR and NXDOMAIN).
 fn parse_a_records(r: &[u8]) -> Option<Vec<Ipv4Addr>> {
-    if r[3] & 0x0f == 3 {
-        return Some(vec![]);
+    match r[3] & 0x0f {
+        0 => {}
+        3 => return Some(vec![]),
+        _ => return None,
     }
     let qd = u16::from_be_bytes([r[4], r[5]]);
     let an = u16::from_be_bytes([r[6], r[7]]);

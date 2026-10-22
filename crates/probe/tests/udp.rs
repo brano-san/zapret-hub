@@ -84,3 +84,26 @@ fn dns_udp_parses_a_and_nxdomain() {
     );
     assert_eq!(probe::udp::dns_udp("nope.invalid", addr, T), Some(vec![]));
 }
+
+#[test]
+fn dns_udp_failure_or_garbage_is_no_answer() {
+    let n = std::sync::atomic::AtomicU32::new(0);
+    let addr = server(move |req| {
+        let mut r = req.to_vec();
+        r[2] = 0x81;
+        match n.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+            0 => r[3] = 0x82, // SERVFAIL
+            1 => r[3] = 0x85, // REFUSED
+            _ => {
+                // NOERROR, one answer that is cut off
+                r[3] = 0x80;
+                r[6..8].copy_from_slice(&[0, 1]);
+                r.extend_from_slice(&[0xC0, 12, 0, 1]);
+            }
+        }
+        Some(r)
+    });
+    for _ in 0..3 {
+        assert_eq!(probe::udp::dns_udp("discord.com", addr, T), None);
+    }
+}
