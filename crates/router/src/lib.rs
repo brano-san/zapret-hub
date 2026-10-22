@@ -3,6 +3,7 @@ pub mod dns;
 pub mod doh;
 pub mod flows;
 mod live_tcp;
+pub mod observe;
 pub mod owner;
 pub mod packet;
 pub mod rules;

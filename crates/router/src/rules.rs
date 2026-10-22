@@ -179,7 +179,7 @@ fn valid_app(a: &str) -> bool {
 }
 
 /// Lowercase with backslash separators: how programs are compared.
-fn norm_app(a: &str) -> String {
+pub(crate) fn norm_app(a: &str) -> String {
     a.to_lowercase().replace('/', "\\")
 }
 

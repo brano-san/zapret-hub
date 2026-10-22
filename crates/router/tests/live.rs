@@ -277,6 +277,27 @@ fn an_app_rule_follows_curl() {
 }
 
 #[test]
+#[ignore = "opens WinDivert: run elevated with WINDIVERT_DLL set"]
+fn observes_curl() {
+    use router::observe::Observer;
+    use router::rules::Protocol;
+    let dll = PathBuf::from(std::env::var("WINDIVERT_DLL").expect("set WINDIVERT_DLL"));
+    let o = Observer::start(&dll, vec!["curl.exe".into()], None).unwrap();
+    let out = std::process::Command::new("curl.exe")
+        .args(["-s", "--max-time", "10", "https://example.com"])
+        .output()
+        .expect("curl.exe runs");
+    assert!(out.status.success(), "{out:?}");
+    let rows = o.stop();
+    assert!(
+        rows.iter().any(|f| f.protocol == Protocol::Tcp
+            && f.dst.ends_with(":443")
+            && f.sni.as_deref() == Some("example.com")),
+        "no example.com flow: {rows:?}"
+    );
+}
+
+#[test]
 #[ignore = "loads WinDivert.dll (no elevation needed): run with WINDIVERT_DLL set"]
 fn the_largest_capture_filters_compile() {
     use router::divert::{capture_filter, filter};
@@ -310,8 +331,10 @@ fn the_largest_capture_filters_compile() {
         ports: (0..150).map(|i| (1000 + 2 * i).to_string()).collect(),
         ..rules::preset(Preset::Discord)
     }]);
+    let many: Vec<u16> = (0..300).map(|i| 10000 + 7 * i).collect();
     let dll = dll();
     for text in [
+        router::observe::sniff_filter(&many).unwrap(),
         capture_filter(&table, Some(61000), &held).unwrap(),
         filter(&ranges).unwrap(),
         capture_filter(&ports, Some(61000), &[]).unwrap(),

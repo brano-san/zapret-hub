@@ -117,7 +117,7 @@ impl Part {
 
 /// Inside one list, merges the two neighbouring items with the smallest gap (ties: the first).
 /// False when no list has two items.
-fn merge_closest<T: Copy + Ord + Into<u64>>(lists: Vec<&mut Vec<(T, T)>>) -> bool {
+pub(crate) fn merge_closest<T: Copy + Ord + Into<u64>>(lists: Vec<&mut Vec<(T, T)>>) -> bool {
     let closest = lists
         .iter()
         .enumerate()
