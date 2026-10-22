@@ -1251,6 +1251,56 @@ mod tests {
     }
 
     #[test]
+    fn hub_circular_builds_on_the_strategy_in_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for file in [
+            "winws2.exe",
+            "cygwin1.dll",
+            "WinDivert.dll",
+            "WinDivert64.sys",
+        ] {
+            std::fs::write(root.join(file), b"").unwrap();
+        }
+        std::fs::create_dir_all(root.join("lua")).unwrap();
+        std::fs::write(
+            root.join("lua").join("zapret-lib.lua"),
+            "NFQWS2_COMPAT_VER_REQUIRED=6
+",
+        )
+        .unwrap();
+        std::fs::write(root.join("lua").join("zapret-antidpi.lua"), "").unwrap();
+        let engine = zapret2::Engine::open(root).unwrap();
+        zapret2::strategies::write(
+            root,
+            "mine",
+            "--filter-tcp=443
+",
+        )
+        .unwrap();
+        let name = |active: Option<&str>| base(&engine, active).0;
+        assert_eq!(name(None), "");
+        assert_eq!(name(Some("zapret2:mine")), "mine");
+        assert_eq!(name(Some("general")), "general (Flowseal)");
+        assert_eq!(name(Some("general (ALT)")), "general (ALT)");
+        assert_eq!(name(Some("my own flowseal")), "", "no copy of it");
+        // hub-circular names its base, and is never its own.
+        let hub = format!(
+            "{BASE_LINE}mine
+--filter-udp=443
+"
+        );
+        zapret2::strategies::write(root, circular_store::NAME, &hub).unwrap();
+        assert_eq!(name(Some("zapret2:hub-circular")), "mine");
+        let own = format!(
+            "{BASE_LINE}hub-circular
+"
+        );
+        zapret2::strategies::write(root, circular_store::NAME, &own).unwrap();
+        assert_eq!(name(Some("zapret2:hub-circular")), "");
+    }
+
+    #[test]
     fn other_profiles_are_probed_by_named_hosts() {
         let profiles = profiles::builtin();
         let keys: Vec<String> = other_probes(&profiles)
