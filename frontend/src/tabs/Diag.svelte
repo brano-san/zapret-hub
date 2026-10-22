@@ -3,7 +3,7 @@
   import { call } from "$lib/api";
   import { app, change, refreshDiag } from "$lib/app.svelte";
   import { confirmation } from "$lib/confirm.svelte";
-  import { faultText, fixApplies, fixText, patternTitle, quickSummary, runDate } from "$lib/format";
+  import { faultText, fixApplies, fixText, fixWarnings, patternTitle, quickSummary, runDate } from "$lib/format";
   import { S } from "$lib/strings";
   import CopyButton from "../components/CopyButton.svelte";
   import PathTable from "../components/PathTable.svelte";
@@ -84,7 +84,7 @@
   }
 
   async function apply(report: Summary, fix: Fix, index: number): Promise<void> {
-    const text = [fixText(fix), ...report.warnings].join("\n\n");
+    const text = [fixText(fix), ...fixWarnings(fix, report.fixes, report.warnings)].join("\n\n");
     if (!(await confirmation.ask({ title: S.diag.applyTitle, text, yes: S.common.apply }))) return;
     status = "";
     const check = await change(S.failed.diagApply, () => commands.diagApply(report.id, index));

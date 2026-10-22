@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Rule, StrategyResult } from "./ipc/bindings";
-import { copyStem, faultText, fixApplies, fixText, pathLabel, patternTitle, scoreWorks, defaultTestable, blockSummary, bytes, programName, proxyLabel, routeDraft, routeSummary, viaLabel, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, foldersReady, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
+import type { Fix, Rule, StrategyResult } from "./ipc/bindings";
+import { copyStem, faultText, fixApplies, fixText, fixWarnings, pathLabel, patternTitle, scoreWorks, defaultTestable, blockSummary, bytes, programName, proxyLabel, routeDraft, routeSummary, viaLabel, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, foldersReady, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
 import { S } from "./strings";
 
 describe("blockSummary", () => {
@@ -271,5 +271,20 @@ describe("diagnostics", () => {
     expect(fixApplies({ kind: "Manual", text: "x" })).toBe(false);
     expect(fixApplies({ kind: "TurnOff", target: "zapret", text: "службу zapret" })).toBe(false);
     expect(fixText({ kind: "AddRule", rule })).toBe("Правило маршрута «diag-discord» (UDP · 1 подсеть) и включить маршрутизацию");
+  });
+
+  it("shows each fix only its own recheck warnings", () => {
+    const alt: Fix = { kind: "ApplyStrategy", name: "general (ALT)" };
+    const hub: Fix = { kind: "ApplyHubCircular", tricks: [], filter: "--filter-udp=443" };
+    const add: Fix = { kind: "AddRule", rule };
+    const warnings = [
+      "general (ALT) — сломает: YouTube (www.youtube.com не отвечает)",
+      "zapret2:hub-circular: не проверено, как она скажется на других профилях: нет папки",
+      "перепроверка других профилей прервана: время диагностики вышло",
+    ];
+    const fixes = [alt, hub, add];
+    expect(fixWarnings(alt, fixes, warnings)).toEqual([warnings[0], warnings[2]]);
+    expect(fixWarnings(hub, fixes, warnings)).toEqual([warnings[1], warnings[2]]);
+    expect(fixWarnings(add, fixes, warnings)).toEqual([]);
   });
 });
