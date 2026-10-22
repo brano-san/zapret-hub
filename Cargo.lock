@@ -878,6 +878,7 @@ name = "diag"
 version = "0.8.0"
 dependencies = [
  "anyhow",
+ "log",
  "router",
  "serde",
  "serde_json",

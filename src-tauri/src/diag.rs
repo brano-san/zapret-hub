@@ -331,10 +331,11 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
             summary.rollback_error = Some(format!("{err:#}"));
         }
     }
-    report::save(&state.paths.diag(), &summary)?;
+    // First: put back is done, and a report that cannot be saved must not leave it pending.
     if env.is_some() && summary.rollback_error.is_none() {
         Snapshot::clear(&pending)?;
     }
+    report::save(&state.paths.diag(), &summary)?;
     Ok(summary)
 }
 

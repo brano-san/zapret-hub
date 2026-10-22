@@ -700,6 +700,23 @@ fn save_keeps_the_saved_one() {
 }
 
 #[test]
+fn an_old_report_that_stays_does_not_fail_the_save() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = report::dir(tmp.path());
+    // Cannot be removed as a file.
+    std::fs::create_dir_all(dir.join("2026-01-01_00-00-00.json")).unwrap();
+    for i in 0..21 {
+        report::save(
+            &dir,
+            &summary(format!("2026-10-22_12-00-{i:02}"), "Discord"),
+        )
+        .unwrap();
+    }
+    assert!(dir.join("2026-01-01_00-00-00.json").exists());
+    assert_eq!(report::list(&dir).unwrap().len(), 20);
+}
+
+#[test]
 fn apply_unites_with_the_rule_of_that_name() {
     let rule = |protocol, port: &str, ip: &str| Rule {
         name: "diag-discord".into(),

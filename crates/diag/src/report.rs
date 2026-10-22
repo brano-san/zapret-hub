@@ -46,10 +46,16 @@ pub fn save(dir: &Path, summary: &Summary) -> anyhow::Result<()> {
     std::fs::write(&tmp, serde_json::to_string_pretty(summary)?)
         .with_context(|| tmp.display().to_string())?;
     std::fs::rename(&tmp, &path).with_context(|| path.display().to_string())?;
-    let olds = ids(dir)?.into_iter().skip(KEEP);
-    for old in olds.filter(|old| *old != summary.id) {
+    // Best effort: a report an editor or antivirus holds stays until the next save.
+    let olds = ids(dir).unwrap_or_else(|err| {
+        log::warn!("old diagnostics reports are kept: {err:#}");
+        Vec::new()
+    });
+    for old in olds.into_iter().skip(KEEP).filter(|old| *old != summary.id) {
         let path = dir.join(format!("{old}.json"));
-        std::fs::remove_file(&path).with_context(|| path.display().to_string())?;
+        if let Err(err) = std::fs::remove_file(&path) {
+            log::warn!("cannot remove the old report {}: {err}", path.display());
+        }
     }
     Ok(())
 }
