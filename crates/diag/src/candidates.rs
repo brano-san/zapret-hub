@@ -2,10 +2,12 @@
 
 use std::net::Ipv4Addr;
 
+use serde::{Deserialize, Serialize};
+
 use crate::cover::{cover, covers};
 use crate::culprits::Group;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 pub struct Candidate {
     /// The strategy's full name.
     pub source: String,
@@ -16,7 +18,7 @@ pub struct Candidate {
 }
 
 /// `a.b.c.0/24`: a group by address; anything else is by domain.
-fn is_subnet(key: &str) -> bool {
+pub(crate) fn is_subnet(key: &str) -> bool {
     key.strip_suffix("/24")
         .and_then(|ip| ip.parse::<Ipv4Addr>().ok())
         .is_some_and(|ip| ip.octets()[3] == 0)
