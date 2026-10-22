@@ -376,6 +376,7 @@ export type Fakes = {
 	game: string | null,
 };
 
+/**  `ResetEarly` is the default only for reading a report that lacks the fault. */
 export type Fault = { kind: "SynUnanswered"; syns: number } | { kind: "ResetEarly" } | { kind: "RedirectEarly" } | { kind: "DataRetrans"; count: number } | { kind: "UdpNoReply"; up: number; down: number } | { kind: "Slow"; median_ms: number } | { kind: "Lossy"; loss_pct: number };
 
 export type FieldError = {

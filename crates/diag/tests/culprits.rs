@@ -106,6 +106,11 @@ fn loss_21_pct_lossy() {
     };
     assert_eq!(fault(&f(21)), Some(Fault::Lossy { loss_pct: 21 }));
     assert_eq!(fault(&f(20)), None);
+    let tcp = FlowCounters {
+        protocol: Protocol::Tcp,
+        ..f(50)
+    };
+    assert_eq!(fault(&tcp), None, "UDP windows mean nothing for TCP");
 }
 
 #[test]

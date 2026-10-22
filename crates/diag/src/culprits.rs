@@ -6,13 +6,13 @@ use router::observe::FlowCounters;
 use router::rules::Protocol;
 use serde::{Deserialize, Serialize};
 
+/// `ResetEarly` is the default only for reading a report that lacks the fault.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "kind")]
 pub enum Fault {
     SynUnanswered {
         syns: u32,
     },
-    // The default only for reading a report that lacks it.
     #[default]
     ResetEarly,
     RedirectEarly,
@@ -84,7 +84,8 @@ pub fn fault(f: &FlowCounters) -> Option<Fault> {
     {
         return Some(Fault::Slow { median_ms });
     }
-    if let Some(loss_pct) = (f.udp_silent_windows * 100).checked_div(f.udp_windows)
+    if f.protocol == Protocol::Udp
+        && let Some(loss_pct) = (f.udp_silent_windows * 100).checked_div(f.udp_windows)
         && loss_pct > 20
     {
         return Some(Fault::Lossy { loss_pct });
@@ -112,7 +113,7 @@ fn port_of(f: &FlowCounters) -> Option<u16> {
 /// Faulty flows only, by name or /24 (and protocol), in order of first appearance.
 pub fn group(flows: &[FlowCounters]) -> Vec<Group> {
     let mut groups: Vec<Group> = vec![];
-    for f in flows.iter().filter(|f| fault(f).is_some()) {
+    for (f, fault) in flows.iter().filter_map(|f| Some((f, fault(f)?))) {
         let key = key_of(f);
         match groups
             .iter_mut()
@@ -125,8 +126,8 @@ pub fn group(flows: &[FlowCounters]) -> Vec<Group> {
                 ports: vec![],
                 members: vec![f.clone()],
                 representatives: vec![],
-                // Replaced below by the first representative's.
-                fault: Fault::ResetEarly,
+                // The first representative's, below.
+                fault,
             }),
         }
     }
@@ -134,7 +135,9 @@ pub fn group(flows: &[FlowCounters]) -> Vec<Group> {
         let mut by_up: Vec<&FlowCounters> = g.members.iter().collect();
         by_up.sort_by_key(|f| std::cmp::Reverse(f.up_packets)); // stable
         g.representatives = by_up.into_iter().take(3).cloned().collect();
-        g.fault = fault(&g.representatives[0]).unwrap();
+        if let Some(f) = fault(&g.representatives[0]) {
+            g.fault = f;
+        }
         g.ports = g.members.iter().filter_map(port_of).collect();
         g.ports.sort_unstable();
         g.ports.dedup();
