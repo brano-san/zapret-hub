@@ -170,6 +170,18 @@ fn dispatch(app: &AppHandle, request: Request) -> Result<Value, String> {
             json(block_on(commands::add_route_preset(handle, preset))?)
         }
         Request::RouteFlows { all } => json(commands::route_flows(state, all)),
+        Request::DiagProfiles => json(block_on(commands::diag_profiles(handle))?),
+        Request::StartDiag { request } => json(block_on(commands::start_diag(handle, request))?),
+        Request::DiagStatus => json(state.diag_live()),
+        Request::DiagAnswer { answer } => json(commands::diag_answer(state, answer)?),
+        Request::DiagChoose { keys } => json(commands::diag_choose(state, keys)?),
+        Request::CancelDiag => {
+            commands::cancel_diag(state);
+            Ok(Value::Null)
+        }
+        Request::DiagReports => json(block_on(commands::diag_reports(handle))?),
+        Request::DiagReport { id } => json(block_on(commands::diag_report(handle, id))?),
+        Request::DiagApply { id, fix } => json(block_on(commands::diag_apply(handle, id, fix))?),
     }
 }
 

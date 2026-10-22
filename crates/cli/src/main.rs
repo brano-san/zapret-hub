@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use cli::{Live, Outcome, PROTOCOL, Request, Response, TestsStatus};
+use diag::evaluate::Answer;
+use diag::run::{DiagStep, Live as DiagLive, Mode, Request as DiagRequest};
 use probe::curl::{CheckStatus, DpiStatus};
 use router::rules::{Preset, parse_rule_file};
 use serde::de::DeserializeOwned;
@@ -142,6 +144,9 @@ enum Command {
     /// The routing rules of data\routes.toml.
     #[command(subcommand)]
     Routes(RoutesCommand),
+    /// Diagnostics: find what breaks a program or a profile and which path fixes it.
+    #[command(subcommand)]
+    Diag(DiagCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -245,6 +250,86 @@ enum TestsCommand {
     },
     /// A run as test zapret.ps1 writes it (text).
     Report { id: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum DiagCommand {
+    /// The profiles.
+    Profiles,
+    /// Start diagnostics of a profile or of a program (one of --profile and --app).
+    Run {
+        /// A profile id from `diag profiles`.
+        #[arg(long, conflicts_with = "app")]
+        profile: Option<String>,
+        /// A program's exe name, e.g. game.exe.
+        #[arg(long)]
+        app: Option<String>,
+        /// auto: every culprit is tried without you; ask: it asks "does it work?" (`diag answer`).
+        #[arg(long, value_enum, default_value_t = DiagMode::Auto)]
+        mode: DiagMode,
+        /// Seconds to watch the program (10-120); none: the setting.
+        #[arg(long)]
+        observe: Option<u32>,
+        /// Minutes the paths may take (1-60); none: the setting.
+        #[arg(long)]
+        budget: Option<u32>,
+        /// Wait for the end and print the report; the progress goes to stderr.
+        #[arg(long)]
+        wait: bool,
+    },
+    /// The step, the progress and the question, if it waits for an answer.
+    Status,
+    /// Answer "does it work?" of a run in the ask mode.
+    Answer { answer: DiagAnswer },
+    /// Check only these culprit groups (their keys, from `diag status`) instead of all.
+    Choose {
+        #[arg(required = true)]
+        keys: Vec<String>,
+    },
+    /// Cancel the diagnostics; the changes are rolled back.
+    Cancel,
+    /// The saved reports, newest first.
+    List,
+    /// A report; none: the newest.
+    Show { id: Option<String> },
+    /// Apply a fix of a report (needs --yes); none: the newest report, fix 0.
+    Apply {
+        id: Option<String>,
+        #[arg(long)]
+        fix: Option<u32>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum DiagMode {
+    Auto,
+    Ask,
+}
+
+impl From<DiagMode> for Mode {
+    fn from(mode: DiagMode) -> Self {
+        match mode {
+            DiagMode::Auto => Mode::Auto,
+            DiagMode::Ask => Mode::Ask,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum DiagAnswer {
+    Yes,
+    No,
+    Skip,
+}
+
+impl From<DiagAnswer> for Answer {
+    fn from(answer: DiagAnswer) -> Self {
+        match answer {
+            DiagAnswer::Yes => Answer::Yes,
+            DiagAnswer::No => Answer::No,
+            DiagAnswer::Skip => Answer::Unknown,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -372,6 +457,9 @@ enum Key {
     StartMinimized,
     Theme,
     CliEnabled,
+    DiagObserveSecs,
+    DiagBudgetMin,
+    NekoboxDir,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -593,6 +681,7 @@ fn needs_yes(command: &Command) -> bool {
             | Command::Discord(DiscordCommand::ClearCache)
             | Command::Service(ServiceCommand::Remove)
             | Command::Routes(RoutesCommand::Remove { .. })
+            | Command::Diag(DiagCommand::Apply { .. })
     )
 }
 
@@ -697,6 +786,44 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
                 "repeats": repeats,
             })));
         }
+        Command::Diag(DiagCommand::Run {
+            profile,
+            app,
+            mode,
+            observe,
+            budget,
+            wait,
+        }) => {
+            let request = DiagRequest {
+                profile,
+                app,
+                mode: mode.into(),
+                observe_secs: observe,
+                budget_min: budget,
+            };
+            request
+                .check()
+                .map_err(|err| Fail::new(USAGE, format!("{err:#}")))?;
+            let before = if wait { newest_report(call)? } else { None };
+            call(Request::StartDiag {
+                request: request.clone(),
+            })?;
+            if wait {
+                return wait_for_diag(call, before, request.mode, note);
+            }
+            return Ok(Done::Json(json!({ "started": true, "request": request })));
+        }
+        Command::Diag(DiagCommand::Status) => {
+            return Ok(Done::Json(json!({ "live": call(Request::DiagStatus)? })));
+        }
+        Command::Diag(DiagCommand::Show { id }) => {
+            let id = report_id(call, id)?;
+            return Ok(Done::Json(call(Request::DiagReport { id })?));
+        }
+        Command::Diag(DiagCommand::Apply { id, fix }) => Request::DiagApply {
+            id: report_id(call, id)?,
+            fix: fix.unwrap_or(0),
+        },
         Command::Tests(TestsCommand::Wait { timeout }) => {
             return wait_for_run(call, timeout, note);
         }
@@ -783,6 +910,13 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
             preset: preset.into(),
         },
         Command::Routes(RoutesCommand::Flows { all }) => Request::RouteFlows { all },
+        Command::Diag(DiagCommand::Profiles) => Request::DiagProfiles,
+        Command::Diag(DiagCommand::Answer { answer }) => Request::DiagAnswer {
+            answer: answer.into(),
+        },
+        Command::Diag(DiagCommand::Choose { keys }) => Request::DiagChoose { keys },
+        Command::Diag(DiagCommand::Cancel) => Request::CancelDiag,
+        Command::Diag(DiagCommand::List) => Request::DiagReports,
     };
     // Only `flowseal check-update` has a `null` that means something (no update).
     let silent = !matches!(request, Request::CheckFlowsealUpdate);
@@ -819,7 +953,20 @@ fn setting(key: Key, value: &str) -> Result<Value, Fail> {
             .map_err(|_| bad("true or false")),
         Key::Theme if ["system", "light", "dark"].contains(&value) => Ok(value.into()),
         Key::Theme => Err(bad("system, light or dark")),
+        // The ranges save_settings enforces, so the app does not have to refuse them.
+        Key::DiagObserveSecs => in_range(value, 10..=120)
+            .map(Value::from)
+            .ok_or_else(|| bad("10 to 120")),
+        Key::DiagBudgetMin => in_range(value, 1..=60)
+            .map(Value::from)
+            .ok_or_else(|| bad("1 to 60")),
+        Key::NekoboxDir if value.trim().is_empty() => Ok(Value::Null),
+        Key::NekoboxDir => Ok(value.into()),
     }
+}
+
+fn in_range(value: &str, range: std::ops::RangeInclusive<u32>) -> Option<u32> {
+    value.parse().ok().filter(|n| range.contains(n))
 }
 
 /// A file, or stdin for `-` (spec 7.3). PowerShell 5.1 and Notepad start the file with a BOM: a
@@ -919,6 +1066,84 @@ fn wait_for_run(call: Call, timeout: Option<u64>, note: Note) -> Result<Done, Fa
             ));
         }
         std::thread::sleep(left.min(POLL));
+    }
+}
+
+/// The id of the newest saved diagnostics report, if there is one.
+fn newest_report(call: Call) -> Result<Option<String>, Fail> {
+    let reports: Vec<(String, String)> = read(call(Request::DiagReports)?)?;
+    Ok(reports.into_iter().next().map(|(id, _)| id))
+}
+
+/// `id`, or the newest report's.
+fn report_id(call: Call, id: Option<String>) -> Result<String, Fail> {
+    match id {
+        Some(id) => Ok(id),
+        None => newest_report(call)?
+            .ok_or_else(|| Fail::new(FAILED, "there are no diagnostics reports yet")),
+    }
+}
+
+/// What a diagnostics step says on stderr; a question has its own line.
+fn diag_step(step: &DiagStep) -> Option<String> {
+    Some(match step {
+        DiagStep::Observing { .. } => "watching the program's connections".to_owned(),
+        DiagStep::Culprits { groups } => format!(
+            "culprits: {}",
+            groups
+                .iter()
+                .map(|group| group.key.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        DiagStep::Path {
+            group,
+            index,
+            total,
+            label,
+        } => format!("culprit {}: path {}/{total} {label}", group + 1, index + 1),
+        DiagStep::Question { .. } => return None,
+        DiagStep::Rechecking => "rechecking the other profiles".to_owned(),
+        DiagStep::RollingBack => "rolling back".to_owned(),
+    })
+}
+
+/// Asks `diag_status` every 2 s until the run is over, then prints its report. The progress and the
+/// question go to stderr, each once. In `auto` the app takes every culprit itself; in `ask` the
+/// culprits wait for `diag choose` (else all after 120 s).
+fn wait_for_diag(call: Call, before: Option<String>, mode: Mode, note: Note) -> Result<Done, Fail> {
+    let mut last = (None, None, false);
+    loop {
+        let live: Option<DiagLive> = read(call(Request::DiagStatus)?)?;
+        let Some(live) = live else { break };
+        let step = live.progress.as_ref().and_then(diag_step);
+        if step.is_some() && step != last.0 {
+            note(step.as_deref().unwrap_or_default());
+            last.0 = step;
+        }
+        if live.question != last.1 {
+            if let Some(question) = &live.question {
+                note(question);
+            }
+            last.1 = live.question;
+        }
+        let choosing = live.choosing.is_some();
+        if choosing && !last.2 && mode == Mode::Ask {
+            note(
+                "choose the culprits with `zapret-hub-cli diag choose <key>…`: all are checked after 120 s",
+            );
+        }
+        last.2 = choosing;
+        std::thread::sleep(POLL);
+    }
+    match newest_report(call)? {
+        Some(id) if Some(&id) != before.as_ref() => {
+            Ok(Done::Json(call(Request::DiagReport { id })?))
+        }
+        _ => Err(Fail::new(
+            FAILED,
+            "the diagnostics ended without a report: see the notice in Zapret Hub",
+        )),
     }
 }
 
@@ -1516,6 +1741,20 @@ mod tests {
             ("theme", "dark", json!("dark")),
             ("cli_enabled", "false", json!(false)),
             ("start_minimized", "false", json!(false)),
+            ("diag_observe_secs", "10", json!(10)),
+            ("diag_observe_secs", "120", json!(120)),
+            ("diag_budget_min", "1", json!(1)),
+            ("diag_budget_min", "60", json!(60)),
+            (
+                "nekobox_dir",
+                r"E:
+ekoray",
+                json!(
+                    r"E:
+ekoray"
+                ),
+            ),
+            ("nekobox_dir", " ", Value::Null),
         ] {
             let (outcome, asked) = drive(&["settings", "set", key, value], vec![Ok(settings())]);
             assert_eq!(outcome, Ok(Done::Json(json!({ "ok": true }))), "{key}");
@@ -1537,6 +1776,11 @@ mod tests {
             ("theme", "blue"),
             ("autostart", "yes"),
             ("cli_enabled", "1"),
+            ("diag_observe_secs", "9"),
+            ("diag_observe_secs", "121"),
+            ("diag_observe_secs", "fast"),
+            ("diag_budget_min", "0"),
+            ("diag_budget_min", "61"),
         ] {
             let (outcome, asked) = drive(&["settings", "set", key, value], vec![Ok(settings())]);
             assert_eq!(code(outcome), USAGE, "{key} {value}");
@@ -1760,6 +2004,205 @@ mod tests {
         assert!(compact["ranking"][0].get("targets").is_none());
     }
 
+    fn diag_live(step: DiagStep, question: Option<&str>, choosing: bool) -> Value {
+        serde_json::to_value(DiagLive {
+            request: DiagRequest {
+                profile: Some("discord".into()),
+                app: None,
+                mode: Mode::Auto,
+                observe_secs: None,
+                budget_min: None,
+            },
+            progress: Some(step),
+            question: question.map(str::to_owned),
+            choosing: choosing.then(Vec::new),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn diag_run_requires_profile_or_app() {
+        let (outcome, asked) = drive(&["diag", "run"], Vec::new());
+        assert_eq!(code(outcome), USAGE);
+        assert!(asked.is_empty());
+    }
+
+    #[test]
+    fn diag_observe_out_of_range() {
+        for flag in [
+            ["--observe", "5"],
+            ["--observe", "121"],
+            ["--budget", "0"],
+            ["--budget", "61"],
+        ] {
+            let (outcome, asked) = drive(
+                &["diag", "run", "--profile", "discord", flag[0], flag[1]],
+                Vec::new(),
+            );
+            assert_eq!(code(outcome), USAGE, "{flag:?}");
+            assert!(asked.is_empty());
+        }
+    }
+
+    #[test]
+    fn diag_run_starts_with_the_request() {
+        let (outcome, asked) = drive(
+            &[
+                "diag",
+                "run",
+                "--app",
+                "game.exe",
+                "--mode",
+                "ask",
+                "--observe",
+                "10",
+                "--budget",
+                "5",
+            ],
+            Vec::new(),
+        );
+        assert_eq!(code(outcome), 0);
+        assert_eq!(
+            asked,
+            [Request::StartDiag {
+                request: DiagRequest {
+                    profile: None,
+                    app: Some("game.exe".into()),
+                    mode: Mode::Ask,
+                    observe_secs: Some(10),
+                    budget_min: Some(5),
+                }
+            }]
+        );
+    }
+
+    #[test]
+    fn diag_apply_needs_yes() {
+        let (outcome, asked) = drive(&["diag", "apply"], Vec::new());
+        assert_eq!(code(outcome), USAGE);
+        assert!(asked.is_empty());
+        // No id: the newest report; no --fix: fix 0.
+        let (_, asked) = drive(
+            &["diag", "apply", "--yes"],
+            vec![Ok(json!([
+                ["2026-10-22_10-00-00", "discord"],
+                ["2026-10-21_10-00-00", "dbd"]
+            ]))],
+        );
+        assert_eq!(
+            asked,
+            [
+                Request::DiagReports,
+                Request::DiagApply {
+                    id: "2026-10-22_10-00-00".into(),
+                    fix: 0
+                }
+            ]
+        );
+        let (_, asked) = drive(&["diag", "apply", "a", "--fix", "2", "--yes"], Vec::new());
+        assert_eq!(
+            asked,
+            [Request::DiagApply {
+                id: "a".into(),
+                fix: 2
+            }]
+        );
+    }
+
+    #[test]
+    fn diag_show_takes_the_newest_report_without_an_id() {
+        let (_, asked) = drive(&["diag", "show"], vec![Ok(json!([["b", "x"], ["a", "y"]]))]);
+        assert_eq!(
+            asked,
+            [Request::DiagReports, Request::DiagReport { id: "b".into() }]
+        );
+        let (outcome, _) = drive(&["diag", "show"], vec![Ok(json!([]))]);
+        assert_eq!(code(outcome), FAILED);
+    }
+
+    #[test]
+    fn diag_answer_and_choose_send_their_replies() {
+        let (_, asked) = drive(&["diag", "answer", "skip"], Vec::new());
+        assert_eq!(
+            asked,
+            [Request::DiagAnswer {
+                answer: Answer::Unknown
+            }]
+        );
+        let (_, asked) = drive(&["diag", "choose", "a.com", "b.com"], Vec::new());
+        assert_eq!(
+            asked,
+            [Request::DiagChoose {
+                keys: vec!["a.com".into(), "b.com".into()]
+            }]
+        );
+    }
+
+    #[test]
+    fn diag_run_wait_prints_progress_and_summary() {
+        let step = |index| DiagStep::Path {
+            group: 0,
+            index,
+            total: 4,
+            label: "zapret".into(),
+        };
+        let summary = json!({ "id": "2026-10-22_10-00-00", "verdict_text": "готово" });
+        let (outcome, asked, notes) = drive_noted(
+            &["diag", "run", "--profile", "discord", "--wait"],
+            vec![
+                Ok(json!([["2026-10-21_10-00-00", "discord"]])),
+                Ok(Value::Null),
+                Ok(diag_live(step(0), None, false)),
+                Ok(diag_live(step(1), None, false)),
+                Ok(Value::Null),
+                Ok(json!([
+                    ["2026-10-22_10-00-00", "discord"],
+                    ["2026-10-21_10-00-00", "discord"]
+                ])),
+                Ok(summary.clone()),
+            ],
+        );
+        assert_eq!(outcome, Ok(Done::Json(summary)));
+        assert_eq!(
+            notes,
+            ["culprit 1: path 1/4 zapret", "culprit 1: path 2/4 zapret"]
+        );
+        assert_eq!(asked.len(), 7);
+        assert_eq!(
+            asked[6],
+            Request::DiagReport {
+                id: "2026-10-22_10-00-00".into()
+            }
+        );
+    }
+
+    #[test]
+    fn diag_run_wait_prints_a_question_once_and_fails_without_a_new_report() {
+        let asking = || diag_live(DiagStep::Rechecking, Some("Работает?"), false);
+        let old = json!([["2026-10-21_10-00-00", "discord"]]);
+        let (outcome, _, notes) = drive_noted(
+            &[
+                "diag",
+                "run",
+                "--profile",
+                "discord",
+                "--mode",
+                "ask",
+                "--wait",
+            ],
+            vec![
+                Ok(old.clone()),
+                Ok(Value::Null),
+                Ok(asking()),
+                Ok(asking()),
+                Ok(Value::Null),
+                Ok(old),
+            ],
+        );
+        assert_eq!(code(outcome), FAILED);
+        assert_eq!(notes, ["rechecking the other profiles", "Работает?"]);
+    }
+
     #[test]
     fn tests_wait_reports_how_the_run_ended() {
         let idle = |last: Value| json!({ "testing": false, "live": null, "last": last });
@@ -1933,7 +2376,7 @@ more",
             outcome,
             Ok(Done::Json(json!({
                 "cli": env!("CARGO_PKG_VERSION"),
-                "protocol": 4,
+                "protocol": 5,
                 "app": null,
             })))
         );

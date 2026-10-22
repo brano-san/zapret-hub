@@ -4,6 +4,8 @@
 
 pub mod pipe;
 
+use diag::evaluate::Answer;
+use diag::run::Request as DiagRequest;
 use router::rules::{Preset, Rule};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,7 +18,7 @@ use zapret::ipset::IpsetMode;
 use zapret::user_lists::UserList;
 
 /// Grows only with an incompatible change; a new command is not one.
-pub const PROTOCOL: u32 = 4;
+pub const PROTOCOL: u32 = 5;
 
 /// A longer request is refused (spec 5).
 pub const MAX_REQUEST: usize = 1024 * 1024;
@@ -28,7 +30,7 @@ pub const AUTOSTART_TASK: &str = "Zapret Hub";
 pub const OFF: &str = "the CLI is off: enable it in Zapret Hub → Settings";
 
 /// One command: the variant in snake_case and its fields are an IPC command of the window and its
-/// arguments (`bindings.ts`). `tests_status` is the only one the window lacks.
+/// arguments (`bindings.ts`). `tests_status` and `diag_status` are the only ones the window lacks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "cmd", content = "args", rename_all = "snake_case")]
 pub enum Request {
@@ -149,6 +151,28 @@ pub enum Request {
     RouteFlows {
         all: bool,
     },
+    DiagProfiles,
+    StartDiag {
+        request: DiagRequest,
+    },
+    /// The window's `diag_live`: the run in progress, or `null`.
+    DiagStatus,
+    DiagAnswer {
+        answer: Answer,
+    },
+    /// The keys of the culprit groups to check.
+    DiagChoose {
+        keys: Vec<String>,
+    },
+    CancelDiag,
+    DiagReports,
+    DiagReport {
+        id: String,
+    },
+    DiagApply {
+        id: String,
+        fix: u32,
+    },
 }
 
 impl Request {
@@ -168,7 +192,7 @@ struct Outgoing<'a> {
     request: &'a Request,
 }
 
-/// The line the CLI sends, without its `\n`: `{"v":4,"cmd":"apply_strategy","args":{"name":"…"}}`.
+/// The line the CLI sends, without its `\n`: `{"v":5,"cmd":"apply_strategy","args":{"name":"…"}}`.
 pub fn encode(request: &Request) -> String {
     serde_json::to_string(&Outgoing {
         v: PROTOCOL,
@@ -280,6 +304,7 @@ pub enum Outcome {
 
 #[cfg(test)]
 mod tests {
+    use diag::run::Mode;
     use serde_json::json;
     use tester::model::Suite;
     use zapret::game_filter::GameFilterMode;
@@ -415,11 +440,37 @@ mod tests {
                 preset: Preset::DiscordVoice,
             },
             Request::RouteFlows { all: true },
+            Request::DiagProfiles,
+            Request::StartDiag {
+                request: DiagRequest {
+                    profile: Some("discord".into()),
+                    app: None,
+                    mode: Mode::Ask,
+                    observe_secs: Some(30),
+                    budget_min: None,
+                },
+            },
+            Request::DiagStatus,
+            Request::DiagAnswer {
+                answer: Answer::Unknown,
+            },
+            Request::DiagChoose {
+                keys: vec!["discord.com".into()],
+            },
+            Request::CancelDiag,
+            Request::DiagReports,
+            Request::DiagReport {
+                id: "2026-10-22_10-00-00".into(),
+            },
+            Request::DiagApply {
+                id: "2026-10-22_10-00-00".into(),
+                fix: 0,
+            },
         ]
     }
 
     /// Window commands the CLI leaves out (spec 6).
-    const WINDOW_ONLY: [&str; 16] = [
+    const WINDOW_ONLY: [&str; 17] = [
         "detect_folders",
         "check_folder",
         "check_zapret2_folder",
@@ -439,6 +490,8 @@ mod tests {
         // The editor checks a rule as it is typed and fills its IP list from a pasted text.
         "validate_route",
         "import_route_lines",
+        // `diag_status` replaces it, as `tests_status` replaces `test_live`.
+        "diag_live",
     ];
 
     /// `("cmd", { a, b })` → the argument names in `bindings.ts`, sorted.
@@ -470,7 +523,8 @@ mod tests {
             let value = serde_json::to_value(&request).unwrap();
             let cmd = value["cmd"].as_str().unwrap().to_owned();
             assert_eq!(request.name(), cmd);
-            if cmd != "tests_status" {
+            // `tests_status` and `diag_status` are the CLI's; the window has `test_live` and `diag_live`.
+            if cmd != "tests_status" && cmd != "diag_status" {
                 let mut args: Vec<String> = value
                     .get("args")
                     .and_then(Value::as_object)
@@ -501,14 +555,23 @@ mod tests {
     }
 
     #[test]
+    fn protocol_is_5() {
+        assert_eq!(PROTOCOL, 5);
+        assert!(
+            refusal(br#"{"v":4,"cmd":"apply_best"}"#, true)
+                .starts_with("protocol v4 is not supported")
+        );
+    }
+
+    #[test]
     fn a_request_line_carries_the_version_first() {
         assert_eq!(
             encode(&Request::ApplyStrategy {
                 name: "general (ALT11)".into()
             }),
-            r#"{"v":4,"cmd":"apply_strategy","args":{"name":"general (ALT11)"}}"#
+            r#"{"v":5,"cmd":"apply_strategy","args":{"name":"general (ALT11)"}}"#
         );
-        assert_eq!(encode(&Request::ApplyBest), r#"{"v":4,"cmd":"apply_best"}"#);
+        assert_eq!(encode(&Request::ApplyBest), r#"{"v":5,"cmd":"apply_best"}"#);
     }
 
     #[test]
@@ -539,7 +602,7 @@ mod tests {
         );
         assert!(refusal(b"not json", true).starts_with("the request does not parse"));
         assert!(
-            refusal(br#"{"v":4,"cmd":"format_disk"}"#, true).contains("format_disk"),
+            refusal(br#"{"v":5,"cmd":"format_disk"}"#, true).contains("format_disk"),
             "an unknown command is named"
         );
         assert!(refusal(br#"{"cmd":"apply_best"}"#, true).contains("`v`"));
@@ -552,7 +615,7 @@ mod tests {
     #[test]
     fn a_refusal_is_one_line_whatever_the_request_holds() {
         // serde names an unknown `cmd` as sent; the app journals the reason as `cli: refused: …`.
-        let reason = refusal(br#"{"v":4,"cmd":"x\ncli: apply_best: ok"}"#, true);
+        let reason = refusal(br#"{"v":5,"cmd":"x\ncli: apply_best: ok"}"#, true);
         assert!(!reason.contains(char::is_control), "{reason:?}");
         assert!(reason.contains("x cli: apply_best: ok"), "{reason}");
     }
