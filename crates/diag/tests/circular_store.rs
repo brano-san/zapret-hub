@@ -40,6 +40,7 @@ fn store(groups: Vec<(&str, Vec<Trick>)>) -> Store {
             .into_iter()
             .map(|(filter, tricks)| GroupTricks {
                 filter: filter.into(),
+                list: String::new(),
                 tricks,
             })
             .collect(),
@@ -66,6 +67,34 @@ fn add_reorders_by_ok_then_median() {
     assert_eq!(order(&s), ["a", "c", "b", "d"]);
     add(&mut s, "--filter-tcp=443", vec![trick("e", 1, None)]);
     assert_eq!(s.groups.len(), 2);
+}
+
+#[test]
+fn tricks_for_other_addresses_stay_apart() {
+    let voice = |subnet: &str| {
+        trick(
+            &format!("{VOICE} --ipset-ip={subnet} --lua-desync=fake:blob=0x00"),
+            3,
+            Some(40),
+        )
+    };
+    let mut s = Store::default();
+    add(&mut s, VOICE, vec![voice("104.29.152.0/24")]);
+    add(&mut s, VOICE, vec![voice("104.29.160.0/24")]);
+    add(&mut s, VOICE, vec![voice("104.29.160.0/24")]);
+    assert_eq!(s.groups.len(), 2);
+    let out = generate("", &s).unwrap();
+    let (_, profiles) = split(&args(&out));
+    assert_eq!(profiles.len(), 2, "{out}");
+    assert!(profiles[0].contains("--ipset-ip=104.29.152.0/24"), "{out}");
+    assert!(profiles[1].contains("--ipset-ip=104.29.160.0/24"), "{out}");
+}
+
+#[test]
+fn a_store_without_lists_loads() {
+    let s: Store =
+        toml::from_str("[[groups]]\nfilter = \"--filter-tcp=443\"\ntricks = []\n").unwrap();
+    assert_eq!(s.groups[0].list, "");
 }
 
 #[test]

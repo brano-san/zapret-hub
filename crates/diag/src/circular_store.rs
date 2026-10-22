@@ -32,6 +32,10 @@ pub struct GroupTricks {
     /// The group's filter options: `--filter-udp=50000-50100 --filter-l7=discord`. Every trick's
     /// `--filter-tcp/udp/l7` is replaced by them, so `merge` sees one profile.
     pub filter: String,
+    /// The culprit list every trick of the group carries: `--ipset-ip=<subnet>` or
+    /// `--hostlist-domains=<domain>`. Part of the key: `merge` needs one list per profile.
+    #[serde(default)]
+    pub list: String,
     /// Best first.
     pub tricks: Vec<Trick>,
 }
@@ -61,14 +65,28 @@ pub fn save(path: &Path, store: &Store) -> anyhow::Result<()> {
     std::fs::rename(&tmp, path).with_context(|| path.display().to_string())
 }
 
-/// `found` into the group of `filter`: a trick with the same text takes the new measurements;
+/// The culprit list token of a trick's text, empty without one.
+fn list_of(text: &str) -> String {
+    quoted_tokens(text)
+        .into_iter()
+        .find(|t| t.starts_with("--ipset-ip=") || t.starts_with("--hostlist-domains="))
+        .unwrap_or_default()
+}
+
+/// `found` into the group of `filter` and the tricks' culprit list: a trick with the same text takes the new measurements;
 /// then most successes first, the faster first among equals, unmeasured last.
 pub fn add(store: &mut Store, filter: &str, found: Vec<Trick>) {
-    let at = match store.groups.iter().position(|g| g.filter == filter) {
+    let list = found.first().map(|t| list_of(&t.text)).unwrap_or_default();
+    let at = match store
+        .groups
+        .iter()
+        .position(|g| g.filter == filter && g.list == list)
+    {
         Some(at) => at,
         None => {
             store.groups.push(GroupTricks {
                 filter: filter.to_owned(),
+                list,
                 tricks: Vec::new(),
             });
             store.groups.len() - 1
