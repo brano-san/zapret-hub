@@ -101,7 +101,12 @@ fn spoofed(name: &str, socks5: Option<&str>) -> bool {
 
 /// The proxy's external address, as a site sees it through the proxy.
 fn proxy_ip(socks5: &str) -> Option<String> {
-    let mut cmd = probe::curl::get("https://api.ipify.org", Some(socks5));
+    egress_ip(Some(socks5))
+}
+
+/// The external address a site sees, direct or through the proxy.
+pub(super) fn egress_ip(socks5: Option<&str>) -> Option<String> {
+    let mut cmd = probe::curl::get("https://api.ipify.org", socks5);
     let out = exec::run(&mut cmd, Duration::from_secs(15), None).ok()?;
     let ip = out.stdout.trim();
     (out.success() && ip.parse::<IpAddr>().is_ok()).then(|| ip.to_owned())
