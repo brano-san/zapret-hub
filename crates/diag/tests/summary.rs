@@ -553,7 +553,7 @@ fn no_flows_text() {
     let s = summarize(&Verdict::NoFlows, &empty(), &[], &ctx(), ID.into(), 45);
     assert_eq!(
         s.verdict_text,
-        "программа не соединялась за 45 с: запустите её и повторите"
+        "программа не открывала новых соединений за 45 с: запустите её и повторите проблему во время наблюдения"
     );
     let s = summarize(&Verdict::Clean, &empty(), &[], &ctx(), ID.into(), 45);
     assert_eq!(

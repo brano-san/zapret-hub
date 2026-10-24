@@ -458,7 +458,10 @@ pub fn summarize(
     let verdict_text = match verdict {
         _ if whitelist => WHITELIST.into(),
         Verdict::NoFlows => {
-            format!("программа не соединялась за {observe_secs} с: запустите её и повторите")
+            // The hub sees only connections opened while it watches.
+            format!(
+                "программа не открывала новых соединений за {observe_secs} с: запустите её и повторите проблему во время наблюдения"
+            )
         }
         Verdict::Clean if !proxied_broken.is_empty() => format!(
             "напрямую соединения программы проходят; через системный прокси не работает: {}",

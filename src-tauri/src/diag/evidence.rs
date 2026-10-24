@@ -159,7 +159,8 @@ pub(super) fn evidence(
         .find(|v| v.media_server.is_some())
         .or(voices.first())
         .cloned();
-    if ctx.profile.id == "discord" && voice.is_none() {
+    // Missing is no file; a log without a voice session is a source that said nothing.
+    if ctx.profile.id == "discord" && marks.discord.is_empty() {
         missing.push("журнал Discord".to_owned());
     }
     // The network part asks the network: not after a cancel.
