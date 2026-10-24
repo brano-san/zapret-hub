@@ -21,7 +21,7 @@ const DESCRIPTION: &str = "zapret2 DPI bypass software";
 
 fn cmd(program: &str, args: &[&str]) -> anyhow::Result<exec::Output> {
     Ok(exec::run(
-        Command::new(program).args(args),
+        crate::root::c_locale(&mut Command::new(program)).args(args),
         Duration::from_secs(60),
         None,
     )?)

@@ -49,8 +49,15 @@ impl Via {
             }
         };
         cmd.args(args);
+        c_locale(&mut cmd);
         cmd
     }
+}
+
+/// English messages from a tool whose output is read (`sudo`, `pkexec`, `nft`, `systemctl`,
+/// `getcap`): a localized desktop must not hide a refusal from the phrases matched here.
+pub fn c_locale(cmd: &mut Command) -> &mut Command {
+    cmd.env("LC_ALL", "C").env("LANG", "C")
 }
 
 fn order(root: bool) -> &'static [Via] {
@@ -258,6 +265,16 @@ mod tests {
             pkexec.get_args().collect::<Vec<_>>(),
             ["--disable-internal-agent", "nft", "-f", "x"]
         );
+        for via in [Via::Direct, Via::Sudo, Via::Pkexec] {
+            let cmd = via.command("nft", &[]);
+            let envs: Vec<_> = cmd.get_envs().collect();
+            for key in ["LC_ALL", "LANG"] {
+                assert!(
+                    envs.contains(&(key.as_ref(), Some("C".as_ref()))),
+                    "{via:?} {key}"
+                );
+            }
+        }
     }
 
     #[test]
