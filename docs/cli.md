@@ -145,14 +145,14 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `routes preset discord-voice\|discord\|dbd` | добавляет готовое правило «Discord голос», «Discord целиком» или «Dead by Daylight» | `add_route_preset` |
 | `routes flows [--all]` | открытые потоки и закрытые за последние 30 с; `--all` — и потоки без правила, пойманные ради правил по программе | `route_flows` |
 | `diag profiles` | профили диагностики | `diag_profiles` |
-| `diag run (--profile <id>\|--app <exe>) [--mode auto\|ask] [--observe <с>] [--budget <мин>] [--wait] [--timeout <s>]` | запускает диагностику (раздел «Диагностика») | `start_diag` |
+| `diag run (--profile <id>\|--app <exe>) [--mode auto\|ask] [--observe <с>] [--budget <мин>] [--wait [--full]] [--timeout <s>]` | запускает диагностику (раздел «Диагностика») | `start_diag` |
 | `diag status` | идёт ли диагностика, её шаг, вопрос и список виновников для выбора | `diag_live` |
 | `diag answer yes\|no\|skip` | ответ на вопрос «Работает?» режима `ask` | `diag_answer` |
 | `diag choose <key>…` | проверить только эти группы виновников | `diag_choose` |
 | `diag cancel` | отменяет диагностику с откатом | `cancel_diag` |
 | `diag stop` | останавливает: наблюдение кончается раньше и идёт дальше; перебор кончается, откат и отчёт по проверенным путям | `stop_diag` |
 | `diag list` | сохранённые отчёты, новые первыми | `diag_reports` |
-| `diag show [<id>]` | отчёт; без `<id>` — самый новый | `diag_reports`, `diag_report` |
+| `diag show [<id>] [--full]` | компактный отчёт (`--full` — весь); без `<id>` — самый новый | `diag_reports`, `diag_report` |
 | `diag apply [<id>] [--fix <n>] --yes` | применяет исправление отчёта; без `<id>` — самый новый отчёт, без `--fix` — исправление 0 | `diag_apply` |
 
 `--yes` повторяет подтверждения окна и ставится в любом месте команды. Без него эти команды не отправляются:
@@ -307,10 +307,11 @@ domains = ["discord.media"]
 
 - Без `--wait` команда печатает `{"started": true, …}` и возвращается; ход — `diag status` (`{"live": …, "failed": …}`: `live` — `null`, когда не идёт; `failed` — почему упала последняя диагностика, иначе `null`).
 - `--wait` опрашивает `diag_status` раз в 2 с, пишет ход в stderr (каждую смену шага один раз) и в конце печатает отчёт —
-  тот же JSON, что `diag show`. Виновники — одной строкой после наблюдения (`culprits: <ключ> (<протокол> <порты>), …`);
+  тот же JSON, что `diag show`: компактный (см. ниже), а с `--full` — весь `Summary`. Виновники — одной строкой после наблюдения (`culprits: <ключ> (<протокол> <порты>), …`);
   каждый законченный путь — строкой `culprit 1 35.217.19.0/24 · path 5/36 Прокси точечно: работает, 3/3, 26 ms`
   (или `не работает, 0/3`), каждая законченная группа — строкой с лучшим путём. Остановленная диагностика тоже
   печатает отчёт (`stopped: true`). Если отчёта не появилось, код 1 и в `error` — причина сбоя (тот же текст, что в уведомлении приложения) или «canceled».
+- Если ни одна программа профиля не запущена, диагностика кончается сразу, без наблюдения: `verdict.code = not_reproducible`, `client.app = not_running`, в `next_steps` — `ask_user: Запустите <exe>` и команда повтора.
 - Режим `ask`: на вопрос «Работает?» (в stderr один раз) отвечайте `diag answer yes|no|skip`. Выбор виновников —
   `diag choose <key>…`; пока окно приложения открыто, приложение ждёт выбор 120 с, потом проверяет всех. В `auto` выбор
   не ждётся.
@@ -319,6 +320,7 @@ domains = ["discord.media"]
   картины, системные проверки; `stopped: true`, вердикт начинается с «перебор остановлен: результаты по проверенным
   путям», перепроверка других профилей пропускается (предупреждение в `warnings`). `diag apply --yes` применяет исправление отчёта и, если оно меняло стратегию,
   печатает быструю проверку.
+- Компактный отчёт (по умолчанию для `diag run --wait` и `diag show`; поля без значения не печатаются): `report_id`, `profile`, `status` (`done`/`stopped`/`canceled`/`budget_hit`), `duration_s`, `verdict {code, text}`, `confidence {level, why}`, `client`, `observed`, `culprits` (`key`, `proto`, `ports`, `fault {code, args}`, `route`, `tried`, `working`), `best_paths` (`culprit`, `path`, `source`, `ok` вида `3/3`, `median_ms`, `tried`, `working`), `fixes` (`i`, `kind`, `text`, `cli`, `warnings`), `evidence`, `checks` (только не `Ok`), `not_checked`, `missing` (коды источников: `neko_log`, `neko_routes`, `discord_log`), `coverage`, `context`, `changes`, `warnings` (не относящиеся к исправлению), `rollback_error`, `next_steps`. Нет текста стратегий, строк по путям, представителей потоков. `fixes[].cli` — точная команда `zapret-hub-cli diag apply <id> --fix <i> --yes`, `null` для `manual` и `turn_off`; порядок и `i` те же, что в отчёте. `next_steps` — команды и строки `ask_user: …` по порядку: применить исправление и проверить повторным `diag run --wait --timeout 590`; спросить пользователя и повторить; `settings set nekobox_dir <path>`; `checks fix <действие>` для непройденных системных проверок.
 - В начале диагностика читает системные проверки (те же, что `checks`, только чтение): отчёт несёт их в
   `system_checks`, а каждая не `Ok` — ещё и строка в `explanations`. Без папки zapret список пуст.
 
