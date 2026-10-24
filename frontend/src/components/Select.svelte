@@ -5,6 +5,7 @@
     label: string;
   }
 
+  import { moveActive } from "$lib/select";
   import { S } from "$lib/strings";
 
   let {
@@ -21,17 +22,56 @@
     ariaLabel?: string;
   } = $props();
 
+  // Focus stays on the trigger while the menu is open: the highlighted option is its active descendant.
+  const id = $props.id();
   let root: HTMLDivElement | undefined = $state();
+  let trigger: HTMLButtonElement | undefined = $state();
   let open = $state(false);
+  /** The highlighted option, which Enter or Space picks. */
+  let active = $state(0);
 
   const isOption = <X,>(item: Option<X> | X): item is Option<X> =>
     typeof item === "object" && item !== null && "label" in item;
   const items = $derived(options.map((item) => (isOption(item) ? item : { value: item, label: String(item) })));
-  const current = $derived(items.find((item) => Object.is(item.value, value)) ?? null);
+  const selected = $derived(items.findIndex((item) => Object.is(item.value, value)));
+  const current = $derived(items[selected] ?? null);
+
+  function show(): void {
+    active = Math.max(selected, 0);
+    open = true;
+  }
 
   function pick(item: Option<T>): void {
     value = item.value;
     open = false;
+    trigger?.focus();
+  }
+
+  function onKey(event: KeyboardEvent): void {
+    if (!open) {
+      if (["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key)) {
+        event.preventDefault();
+        show();
+      }
+      return;
+    }
+    const item = items[active];
+    if (event.key === "Escape") {
+      event.preventDefault();
+      open = false;
+    } else if (event.key === "Tab") {
+      open = false;
+    } else if ((event.key === "Enter" || event.key === " ") && item) {
+      event.preventDefault();
+      pick(item);
+    } else {
+      const next = moveActive(event.key, active, items.map((option) => option.label));
+      if (next !== null) {
+        event.preventDefault();
+        active = next;
+        document.getElementById(`${id}-${next}`)?.scrollIntoView({ block: "nearest" });
+      }
+    }
   }
 
   $effect(() => {
@@ -45,16 +85,27 @@
   });
 </script>
 
-<div class="select" bind:this={root}>
+<div
+  class="select"
+  bind:this={root}
+  onfocusout={(event) => {
+    // Focus gone elsewhere (Tab, a click outside): the menu goes with it.
+    if (!root?.contains(event.relatedTarget as Node | null)) open = false;
+  }}
+>
   <button
+    bind:this={trigger}
     type="button"
     class="trigger"
+    role="combobox"
     {disabled}
     aria-haspopup="listbox"
     aria-expanded={open}
+    aria-controls={open ? `${id}-menu` : undefined}
+    aria-activedescendant={open ? `${id}-${active}` : undefined}
     aria-label={ariaLabel || undefined}
-    onclick={() => (open = !open)}
-    onkeydown={(event) => event.key === "Escape" && (open = false)}
+    onclick={() => (open ? (open = false) : show())}
+    onkeydown={onKey}
   >
     <span class="text" class:placeholder={!current}>{current?.label ?? placeholder}</span>
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -62,16 +113,22 @@
     </svg>
   </button>
   {#if open}
-    <ul class="menu" role="listbox" aria-label={ariaLabel || undefined}>
+    <ul class="menu" id="{id}-menu" role="listbox" aria-label={ariaLabel || undefined}>
       {#each items as item, i (i)}
+        <!-- Options take no focus (it stays on the trigger); a press does not move it either. -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
         <li
+          id="{id}-{i}"
           role="option"
-          aria-selected={Object.is(item.value, value)}
-          class:active={Object.is(item.value, value)}
-          tabindex="0"
+          aria-selected={i === selected}
+          class:active={i === selected}
+          class:highlight={i === active}
+          onpointerdown={(event) => event.preventDefault()}
+          onpointerenter={() => (active = i)}
           onclick={() => pick(item)}
-          onkeydown={(event) => (event.key === "Enter" || event.key === " ") && pick(item)}>{item.label}</li
         >
+          {item.label}
+        </li>
       {/each}
     </ul>
   {/if}
@@ -134,7 +191,7 @@
     white-space: nowrap;
   }
 
-  .menu li:hover {
+  .menu li.highlight {
     background: var(--hover);
   }
 

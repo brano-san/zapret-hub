@@ -199,7 +199,8 @@ pre {
   margin: 6px 0;
 }
 
-label.inline {
+label.inline,
+span.inline {
   display: inline-flex;
   align-items: center;
   gap: 6px;

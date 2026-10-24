@@ -7,7 +7,7 @@
   let { value = $bindable(1), disabled = false }: { value?: number; disabled?: boolean } = $props();
 </script>
 
-<label class="inline" title={S.tests.repeatsHint}>
+<span class="inline" title={S.tests.repeatsHint}>
   {S.tests.repeats}
   <Select bind:value options={[...REPEATS]} {disabled} ariaLabel={S.tests.repeats} />
-</label>
+</span>
