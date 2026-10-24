@@ -79,7 +79,12 @@ pub fn run(
     let zapret2_version = zapret2_version(engine2, request)?;
     anyhow::ensure!(
         probe::curl::available(),
-        "curl.exe was not found: the tests need Windows 10 1803 or newer"
+        "{}",
+        if cfg!(windows) {
+            "curl.exe was not found: the tests need Windows 10 1803 or newer"
+        } else {
+            "curl was not found: install it with the package manager"
+        }
     );
     let id = exec::LocalTime::now().stamp();
     // A Cancel or Exit while the DPI suite downloads: zapret is not touched at all.
@@ -371,20 +376,46 @@ pub fn lua_failure(exited: Option<ExitStatus>, output: &str) -> Option<String> {
         .then(|| format!("winws2 printed LUA ERROR:\n{output}"))
 }
 
+/// The checks a target gets, and whether it is pinged. The DbD game server drops ICMP (a sure 1 s
+/// timeout) and does not speak TLS 1.3 (a sure UNSUP): it gets HTTP and TLS 1.2 only.
+pub fn checks_for(target: &Target) -> (&'static [CheckKind], bool) {
+    let dbd = target.url.as_deref().is_some_and(|url| {
+        zapret::targets::url_host(url).eq_ignore_ascii_case(crate::rank::DBD[0])
+    });
+    if dbd {
+        (&[CheckKind::Http, CheckKind::Tls12], false)
+    } else {
+        (&CheckKind::ALL, true)
+    }
+}
+
+/// The curl checks and the ping are network waits: run together they take the longest one, not
+/// their sum.
 fn check_target(target: &Target, extra: bool, cancel: &AtomicBool) -> TargetResult {
-    let checks = match &target.url {
-        Some(url) => CheckKind::ALL
-            .iter()
-            .map(|kind| probe::curl::check(url, *kind, Some(cancel)))
-            .collect(),
-        None => Vec::new(),
-    };
+    let (kinds, ping) = checks_for(target);
+    let (checks, ping_ms) = std::thread::scope(|scope| {
+        let checks: Vec<_> = match &target.url {
+            Some(url) => kinds
+                .iter()
+                .map(|kind| scope.spawn(move || probe::curl::check(url, *kind, Some(cancel))))
+                .collect(),
+            None => Vec::new(),
+        };
+        let ping_ms = ping
+            .then(|| probe::ping::ping(&target.ping, 1000))
+            .flatten();
+        let checks = checks
+            .into_iter()
+            .map(|check| check.join().expect("a curl check does not panic"))
+            .collect();
+        (checks, ping_ms)
+    });
     TargetResult {
         name: target.name.clone(),
         url: target.url.clone(),
         extra,
         checks,
-        ping_ms: probe::ping::ping(&target.ping, 1000),
+        ping_ms,
     }
 }
 
@@ -402,12 +433,13 @@ fn check_dpi(target: &DpiTarget, payload: &Path, cancel: &AtomicBool) -> DpiTarg
     }
 }
 
-/// `min(16, max(8, cores × 2))` targets at a time (spec 7.1).
+/// `min(32, max(16, cores × 2))` targets at a time (spec 7.1): the workers only wait on the
+/// network, so more of them than cores still cut the wall time.
 pub fn parallelism() -> usize {
     std::thread::available_parallelism()
         .map_or(4, |n| n.get())
         .saturating_mul(2)
-        .clamp(8, 16)
+        .clamp(16, 32)
 }
 
 /// `f` over `items` on `workers` threads; the results keep the input order.

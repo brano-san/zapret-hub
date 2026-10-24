@@ -1,10 +1,15 @@
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt as _;
+#[cfg(windows)]
 use std::os::windows::process::ExitStatusExt as _;
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use probe::curl::CheckKind;
 use tester::model::Suite;
-use tester::run::{Progress, Request, lua_failure, par_map, parallelism};
+use tester::run::{Progress, Request, checks_for, lua_failure, par_map, parallelism};
+use zapret::targets::Target;
 
 #[test]
 fn par_map_keeps_the_order() {
@@ -18,8 +23,27 @@ fn par_map_keeps_the_order() {
 }
 
 #[test]
-fn parallelism_is_between_8_and_16() {
-    assert!((8..=16).contains(&parallelism()));
+fn parallelism_is_between_16_and_32() {
+    assert!((16..=32).contains(&parallelism()));
+}
+
+fn target(host: &str) -> Target {
+    Target {
+        name: host.into(),
+        url: Some(format!("https://{host}")),
+        ping: host.into(),
+    }
+}
+
+#[test]
+fn the_dbd_server_gets_http_and_tls12_only_and_no_ping() {
+    let all = (&CheckKind::ALL[..], true);
+    assert_eq!(checks_for(&target("discord.com")), all);
+    assert_eq!(checks_for(&target("store.steampowered.com")), all);
+    assert_eq!(
+        checks_for(&target("Steam.Live.BHVRdbd.com")),
+        (&[CheckKind::Http, CheckKind::Tls12][..], false)
+    );
 }
 
 #[test]
@@ -40,12 +64,20 @@ fn the_dpi_suite_falls_back_to_its_cache() {
     );
 }
 
+/// A status with exit code `code`.
+fn exit(code: i32) -> ExitStatus {
+    #[cfg(windows)]
+    return ExitStatus::from_raw(code as u32);
+    #[cfg(unix)]
+    return ExitStatus::from_raw(code << 8);
+}
+
 #[test]
 fn winws2_that_died_or_printed_a_lua_error_did_not_run_the_strategy() {
     let ready = "windivert initialized. capture is started.\n";
     assert_eq!(lua_failure(None, ready), None);
     let died = lua_failure(
-        Some(ExitStatus::from_raw(87)),
+        Some(exit(87)),
         "LUA ERROR: desync function 'fakee' does not exist\n",
     )
     .unwrap();
@@ -63,7 +95,7 @@ fn winws2_that_died_or_printed_a_lua_error_did_not_run_the_strategy() {
 fn zapret2_strategies_need_a_working_engine_before_the_run_starts() {
     let engine_dir = tempfile::tempdir().unwrap();
     for file in [
-        "winws2.exe",
+        zapret2::EXE,
         "cygwin1.dll",
         "WinDivert.dll",
         "WinDivert64.sys",
@@ -94,9 +126,11 @@ fn zapret2_strategies_need_a_working_engine_before_the_run_starts() {
         "{}",
         refusal(None)
     );
-    // An empty winws2.exe cannot tell its version.
+    // An empty engine file cannot tell its version: not a program (Windows), not executable
+    // (Linux).
+    let cannot_run = if cfg!(windows) { "os error 193" } else { "os error 13" };
     assert!(
-        refusal(Some(&engine)).contains("os error 193"),
+        refusal(Some(&engine)).contains(cannot_run),
         "{}",
         refusal(Some(&engine))
     );
