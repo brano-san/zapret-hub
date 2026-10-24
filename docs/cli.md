@@ -130,7 +130,7 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `tg-ws config [--port <n>] [--secret <32 hex>] [--args <флаги>]` | меняет порт, секрет или дополнительные флаги, остальное оставляет; работающий прокси перезапускается | `tg_ws_status`, `save_tg_ws_config` |
 | `router on\|off` | включает или выключает маршрутизацию; пишет `router_enabled` | `set_router_enabled` |
 | `router status` | идёт ли маршрутизация, состояние прокси, счётчики | `router_status` |
-| `routes list` | правила, их состояние, ошибка файла `routes.toml` и `system_doh` — включено ли шифрование DNS в Windows (тогда правила по доменам не срабатывают) | `list_routes` |
+| `routes list` | правила, их состояние, ошибка файла `routes.toml` и `system_doh` — включено ли шифрование DNS (Windows: DNS по HTTPS; Linux: DNS over TLS в systemd-resolved; тогда правила по доменам не срабатывают) | `list_routes` |
 | `routes show <name>` | одно правило | `get_route` |
 | `routes add <name> --file <file\|->` | добавляет правило из файла с таблицей `[rule]` | `save_route` |
 | `routes edit <name> --file <file\|->` | заменяет правило из файла с таблицей `[rule]` | `save_route` |
