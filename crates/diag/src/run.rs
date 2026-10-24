@@ -24,6 +24,8 @@ pub trait Env {
     fn observe(&mut self, secs: u32) -> Vec<FlowCounters>;
     fn rollback(&mut self) -> anyhow::Result<()>;
     fn cancelled(&self) -> bool;
+    /// «Остановить»: no more paths, but the measured ones make the report (unlike a cancel).
+    fn stopped(&self) -> bool;
     fn elapsed(&self) -> Duration;
     fn progress(&mut self, step: Progress);
     /// The finished paths of the group being tried, after each one; empty when a group starts.
@@ -42,6 +44,8 @@ pub enum DiagStep {
     },
     Path {
         group: u32,
+        /// The group's key, for progress lines.
+        key: String,
         index: u32,
         total: u32,
         label: String,
@@ -80,6 +84,8 @@ pub struct GroupResult {
 pub struct Outcome {
     pub per_group: Vec<GroupResult>,
     pub canceled: bool,
+    /// Stopped by the user: the paths measured so far are the result.
+    pub stopped: bool,
     pub budget_hit: bool,
     pub rollback_error: Option<String>,
 }
@@ -143,7 +149,7 @@ fn live(env: &mut dyn Env, group: &Group) -> Score {
     s
 }
 
-/// The path's score, or `None` when canceled during it.
+/// The path's score, or `None` when canceled or stopped during it.
 fn evaluate(env: &mut dyn Env, ctx: &Ctx, group: &Group) -> Option<Score> {
     let mut s = Score::default();
     let mut medians = vec![];
@@ -165,7 +171,7 @@ fn evaluate(env: &mut dyn Env, ctx: &Ctx, group: &Group) -> Option<Score> {
             lost += p.total - p.ok;
             sent += p.total;
         }
-        if env.cancelled() {
+        if env.cancelled() || env.stopped() {
             return None;
         }
     }
@@ -178,6 +184,7 @@ pub fn run(env: &mut dyn Env, ctx: &Ctx, groups: &[Group], settings: &Settings) 
     let mut out = Outcome {
         per_group: vec![],
         canceled: false,
+        stopped: false,
         budget_hit: false,
         rollback_error: None,
     };
@@ -201,6 +208,10 @@ pub fn run(env: &mut dyn Env, ctx: &Ctx, groups: &[Group], settings: &Settings) 
                 out.canceled = true;
                 stopped = true;
             }
+            if !stopped && env.stopped() {
+                out.stopped = true;
+                stopped = true;
+            }
             if !stopped && env.elapsed() >= settings.budget {
                 out.budget_hit = true;
                 stopped = true;
@@ -220,6 +231,7 @@ pub fn run(env: &mut dyn Env, ctx: &Ctx, groups: &[Group], settings: &Settings) 
             }
             env.progress(Progress::Path {
                 group: gi as u32,
+                key: group.key.clone(),
                 index: i as u32,
                 total: paths.len() as u32,
                 label: label.clone(),
@@ -233,9 +245,15 @@ pub fn run(env: &mut dyn Env, ctx: &Ctx, groups: &[Group], settings: &Settings) 
                 continue;
             }
             let Some(mut s) = evaluate(env, ctx, group) else {
-                out.canceled = true;
+                let why = if env.cancelled() {
+                    out.canceled = true;
+                    "прервано"
+                } else {
+                    out.stopped = true;
+                    "перебор остановлен"
+                };
                 stopped = true;
-                gr.not_checked.push(format!("{label}: прервано"));
+                gr.not_checked.push(format!("{label}: {why}"));
                 continue;
             };
             if settings.mode == Mode::Ask {

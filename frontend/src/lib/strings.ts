@@ -640,6 +640,8 @@ export const S = {
     reportTitle: (date: string, profile: string) => `Диагностика ${date} · ${profile}`,
     canceled: "отменена",
     budgetHit: "время вышло: итог из проверенного",
+    stopped: "остановлена: итог из проверенного",
+    stop: "Остановить",
     sourcesMissing: (list: string[]) => `Не прочитано: ${list.join(", ")}`,
     patterns: "Найденные картины",
     fixes: "Что сделать",

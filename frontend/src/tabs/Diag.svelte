@@ -172,6 +172,10 @@
       <PathTable results={live.results} />
     {/if}
     <div class="buttons">
+      <!-- Stop keeps what was found: observation goes on to the culprits, the search to the report. -->
+      {#if step?.step === "Observing" || step?.step === "Path"}
+        <button onclick={() => commands.stopDiag()}>{S.diag.stop}</button>
+      {/if}
       <button class="danger" disabled={step?.step === "RollingBack"} onclick={() => commands.cancelDiag()}>{S.common.cancel}</button>
     </div>
   </section>
@@ -223,8 +227,10 @@
     {@const report = shown}
     <section class="card">
       <h2>{S.diag.reportTitle(runDate(report.id), report.profile)}</h2>
-      {#if report.canceled || report.budget_hit}
-        <p class="muted">{[report.canceled && S.diag.canceled, report.budget_hit && S.diag.budgetHit].filter(Boolean).join(" · ")}</p>
+      {#if report.canceled || report.stopped || report.budget_hit}
+        <p class="muted">
+          {[report.canceled && S.diag.canceled, report.stopped && S.diag.stopped, report.budget_hit && S.diag.budgetHit].filter(Boolean).join(" · ")}
+        </p>
       {/if}
       <p><strong>{report.verdict_text}</strong></p>
       {#if report.rollback_error}<pre class="bad">{report.rollback_error}</pre>{/if}

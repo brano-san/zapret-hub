@@ -135,6 +135,8 @@ export const commands = {
 	/**  The culprit groups left ticked, by key. */
 	diagChoose: (keys: string[]) => typedError<null, string>(__TAURI_INVOKE("diag_choose", { keys })),
 	cancelDiag: () => __TAURI_INVOKE<void>("cancel_diag"),
+	/**  «Остановить»: unlike a cancel, the report keeps what was measured. */
+	stopDiag: () => __TAURI_INVOKE<void>("stop_diag"),
 	/**  `(id, profile)`, newest first. */
 	diagReports: () => typedError<([string, string])[], string>(__TAURI_INVOKE("diag_reports")),
 	diagReport: (id: string) => typedError<Summary, string>(__TAURI_INVOKE("diag_report", { id })),
@@ -318,7 +320,9 @@ export type DiagScore = {
 	answer: Answer | null,
 };
 
-export type DiagStep = { step: "Observing"; secs_left: number; flows: FlowCounters[] } | { step: "Culprits"; groups: Group[] } | { step: "Path"; group: number; index: number; total: number; label: string } | { step: "Question"; label: string; hint: string } | { step: "Rechecking" } | { step: "RollingBack" };
+export type DiagStep = { step: "Observing"; secs_left: number; flows: FlowCounters[] } | { step: "Culprits"; groups: Group[] } | { step: "Path"; group: number; 
+/**  The group's key, for progress lines. */
+key: string; index: number; total: number; label: string } | { step: "Question"; label: string; hint: string } | { step: "Rechecking" } | { step: "RollingBack" };
 
 export type DirectReason = { kind: "ProxyDown" } | { kind: "AuthRequired" } | { kind: "NoUdp" } | { kind: "Timeout" } | { kind: "Failed"; error: string } | { kind: "Loop" } | 
 /**  The address is sent direct for a while after the proxy refused a connection to it. */
@@ -882,6 +886,8 @@ export type Summary = {
 	fixes: Fix[],
 	warnings: string[],
 	canceled: boolean,
+	/**  «Остановить»: the paths not measured yet were left out; the rest is the result. */
+	stopped: boolean,
 	budget_hit: boolean,
 	rollback_error: string | null,
 	sources_missing: string[],

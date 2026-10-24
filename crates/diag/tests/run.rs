@@ -77,6 +77,8 @@ struct Fake {
     clock: Duration,
     /// How many finished paths each `results` call carried.
     results: Vec<usize>,
+    /// «Остановить» once this many paths were set.
+    stop_at: Option<usize>,
     /// Scores by probe kind, instead of the works/does not work above.
     by_kind: Vec<(ProbeKind, Score)>,
 }
@@ -119,6 +121,9 @@ impl Env for Fake {
     }
     fn cancelled(&self) -> bool {
         self.cancel_at.is_some_and(|n| self.sets.len() >= n)
+    }
+    fn stopped(&self) -> bool {
+        self.stop_at.is_some_and(|n| self.sets.len() >= n)
     }
     fn elapsed(&self) -> Duration {
         self.clock
@@ -651,4 +656,47 @@ fn zapret_paths_on_a_routed_group_say_the_router_was_paused() {
     );
     c.rules = vec![rule(true, &["104.29.0.0/16"])];
     assert!(!plan(&g, &c).1.contains(&note));
+}
+
+#[test]
+fn a_stop_keeps_the_measured_paths_and_a_cancel_does_not_stop() {
+    use diag::culprits::Verdict;
+    use diag::summary::{STOPPED, summarize};
+    let mut env = Fake {
+        works: HashSet::from(["Напрямую мимо всего".to_owned()]),
+        // Stopped while the third path is measured.
+        stop_at: Some(3),
+        ..Fake::default()
+    };
+    let out = go(&mut env, Mode::Auto, 600);
+    assert!(out.stopped && !out.canceled);
+    assert_eq!(env.rolled_back, 1);
+    let g = &out.per_group[0];
+    assert_eq!(g.results.len(), 2, "Как сейчас and Напрямую");
+    assert!(
+        g.not_checked
+            .iter()
+            .any(|s| s.ends_with("перебор остановлен"))
+    );
+    let verdict = Verdict::Culprits(vec![g.group.clone()]);
+    let s = summarize(
+        &verdict,
+        &out,
+        &[],
+        &ctx(true),
+        "2026-10-24_12-00-00".into(),
+        30,
+    );
+    assert!(s.stopped);
+    assert!(s.verdict_text.starts_with(STOPPED), "{}", s.verdict_text);
+    assert_eq!(s.groups[0].best, Some(0));
+    assert_eq!(s.groups[0].results[0].0, PathKind::Direct);
+    assert!(!s.fixes.is_empty(), "the best path's fix");
+
+    let mut env = Fake {
+        cancel_at: Some(3),
+        ..Fake::default()
+    };
+    let out = go(&mut env, Mode::Auto, 600);
+    assert!(out.canceled && !out.stopped);
 }

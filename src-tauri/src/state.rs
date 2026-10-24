@@ -82,6 +82,8 @@ pub struct AppState {
     /// Diagnostics (diag spec 9): like a test run, they hold the turn and block changes.
     diagnosing: AtomicBool,
     diag_cancel: AtomicBool,
+    /// «Остановить»: ends the observation (taken) or the path search (kept), see `stop_diag`.
+    diag_stop: AtomicBool,
     diag_live: Mutex<Option<diag::run::Live>>,
     /// Why the newest diagnostics failed: `diag_failed` for the CLI, which has no notices.
     diag_failed: Mutex<Option<String>>,
@@ -117,6 +119,7 @@ impl AppState {
             starting: Mutex::new(()),
             diagnosing: AtomicBool::new(false),
             diag_cancel: AtomicBool::new(false),
+            diag_stop: AtomicBool::new(false),
             diag_live: Mutex::new(None),
             diag_failed: Mutex::new(None),
             diag_reply: Mutex::new(None),
@@ -235,6 +238,7 @@ impl AppState {
         anyhow::ensure!(!self.testing(), TESTING);
         anyhow::ensure!(!self.diagnosing(), "diagnostics are already running");
         self.diag_cancel.store(false, Ordering::SeqCst);
+        self.diag_stop.store(false, Ordering::SeqCst);
         *lock(&self.diag_reply) = None;
         *lock(&self.diag_live) = Some(live);
         *lock(&self.diag_failed) = None;
@@ -283,6 +287,23 @@ impl AppState {
         self.diag_cancel.load(Ordering::SeqCst)
     }
 
+    /// «Остановить»: the observation ends early and goes on to the search; during the search, no
+    /// more paths and the measured ones make the report. Also wakes a wait for an answer.
+    pub fn stop_diag(&self) {
+        self.diag_stop.store(true, Ordering::SeqCst);
+        self.diag_wake.notify_all();
+    }
+
+    /// The search stops (the flag stays).
+    pub fn diag_stopped(&self) -> bool {
+        self.diag_stop.load(Ordering::SeqCst)
+    }
+
+    /// The observation stops: the flag is cleared, so the search still runs.
+    pub fn take_diag_stop(&self) -> bool {
+        self.diag_stop.swap(false, Ordering::SeqCst)
+    }
+
     pub fn diag_live(&self) -> Option<diag::run::Live> {
         lock(&self.diag_live).clone()
     }
@@ -310,7 +331,7 @@ impl AppState {
         let deadline = std::time::Instant::now() + timeout;
         let mut reply = lock(&self.diag_reply);
         loop {
-            if self.diag_canceled() {
+            if self.diag_canceled() || self.diag_stopped() {
                 return None;
             }
             if let Some(got) = reply.take().and_then(|r| take(&r)) {

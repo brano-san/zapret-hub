@@ -789,6 +789,13 @@ pub fn cancel_diag(state: State<'_, AppState>) {
     state.cancel_diag();
 }
 
+/// «Остановить»: unlike a cancel, the report keeps what was measured.
+#[tauri::command]
+#[specta::specta]
+pub fn stop_diag(state: State<'_, AppState>) {
+    state.stop_diag();
+}
+
 /// `(id, profile)`, newest first.
 #[tauri::command]
 #[specta::specta]

@@ -49,6 +49,7 @@ pub enum Reply {
 const NO_DNS: &str =
     "наблюдение шло без ответов DNS (WinDivert их не отдал): адреса без SNI сгруппированы по /24";
 const RECHECK_CUT: &str = "перепроверка других профилей прервана: время диагностики вышло";
+const RECHECK_STOPPED: &str = "перепроверка других профилей пропущена: перебор остановлен";
 /// The page gets this long to untick culprits; then all are checked.
 const CHOOSE_WAIT: Duration = Duration::from_secs(120);
 /// "Works?" waits for the user or a cancel.
@@ -184,7 +185,7 @@ fn finish(app: &AppHandle, outcome: anyhow::Result<Summary>, ends: DiagEnds<'_>)
     actions::changed(app);
 }
 
-/// The programs' flows over `secs`; `show` reports them each second. The ones the router proxies
+/// The programs' flows over `secs`; `show` reports them each second and ends early on «Остановить». The ones the router proxies
 /// get their replies from its flow table, read each second: a flow it closes stays there only
 /// `KEEP_CLOSED`, and the sniffer never sees what the router injects.
 fn watch(
@@ -206,7 +207,7 @@ fn watch(
     };
     for left in (0..secs).rev() {
         std::thread::sleep(Duration::from_secs(1));
-        if state.diag_canceled() {
+        if state.diag_canceled() || (show && state.take_diag_stop()) {
             break;
         }
         read_router(&mut routed);
@@ -306,6 +307,7 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
         Outcome {
             per_group: Vec::new(),
             canceled: state.diag_canceled(),
+            stopped: false,
             budget_hit: false,
             rollback_error: None,
         }
@@ -346,8 +348,13 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
     if !dns {
         summary.warnings.push(NO_DNS.into());
     }
+    // Stopped: the user wants the result now; the recheck would take minutes more.
+    if outcome.stopped {
+        summary.warnings.push(RECHECK_STOPPED.into());
+    }
     if let Some(env) = env.as_mut()
         && !outcome.canceled
+        && !outcome.stopped
         && outcome.rollback_error.is_none()
     {
         let rechecked = recheck(env, &state, &ctx, &summary.fixes, run_settings.budget);
@@ -641,6 +648,10 @@ impl Env for AppEnv {
 
     fn cancelled(&self) -> bool {
         self.state().diag_canceled()
+    }
+
+    fn stopped(&self) -> bool {
+        self.state().diag_stopped()
     }
 
     fn elapsed(&self) -> Duration {
@@ -1113,6 +1124,7 @@ mod tests {
         let outcome = |per_group| Outcome {
             per_group,
             canceled: false,
+            stopped: false,
             budget_hit: false,
             rollback_error: None,
         };

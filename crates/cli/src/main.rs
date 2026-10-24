@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use cli::{Live, Outcome, PROTOCOL, Request, Response, TestsStatus};
-use diag::evaluate::Answer;
+use diag::evaluate::{Answer, Score, rank, works};
+use diag::paths::PathKind;
 use diag::run::{DiagStep, Live as DiagLive, Mode, Request as DiagRequest};
 use probe::curl::{CheckStatus, DpiStatus};
 use router::rules::{Preset, parse_rule_file};
@@ -293,6 +294,8 @@ enum DiagCommand {
     },
     /// Cancel the diagnostics; the changes are rolled back.
     Cancel,
+    /// Stop: observation ends early, or the path search ends and the report keeps what was measured.
+    Stop,
     /// The saved reports, newest first.
     List,
     /// A report; none: the newest.
@@ -925,6 +928,7 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
         },
         Command::Diag(DiagCommand::Choose { keys }) => Request::DiagChoose { keys },
         Command::Diag(DiagCommand::Cancel) => Request::CancelDiag,
+        Command::Diag(DiagCommand::Stop) => Request::StopDiag,
         Command::Diag(DiagCommand::List) => Request::DiagReports,
     };
     // Only `flowseal check-update` has a `null` that means something (no update).
@@ -1101,7 +1105,16 @@ fn diag_step(step: &DiagStep) -> Option<String> {
             "culprits: {}",
             groups
                 .iter()
-                .map(|group| group.key.as_str())
+                .map(|group| {
+                    let ports: Vec<String> = group.ports.iter().map(u16::to_string).collect();
+                    let protocol = serde_json::to_value(group.protocol).unwrap_or_default();
+                    format!(
+                        "{} ({} {})",
+                        group.key,
+                        protocol.as_str().unwrap_or_default(),
+                        ports.join(",")
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -1110,11 +1123,101 @@ fn diag_step(step: &DiagStep) -> Option<String> {
             index,
             total,
             label,
+            ..
         } => format!("culprit {}: path {}/{total} {label}", group + 1, index + 1),
         DiagStep::Question { .. } => return None,
         DiagStep::Rechecking => "rechecking the other profiles".to_owned(),
         DiagStep::RollingBack => "rolling back".to_owned(),
     })
+}
+
+/// `работает, 3/3, 26 ms`
+fn score_text(s: &Score) -> String {
+    let verdict = if works(s) {
+        "работает"
+    } else {
+        "не работает"
+    };
+    let ms = s
+        .median_ms
+        .map(|ms| format!(", {ms} ms"))
+        .unwrap_or_default();
+    format!("{verdict}, {}/{}{ms}", s.ok, s.total)
+}
+
+/// What `diag run --wait` printed of the path search: a line per finished path (from
+/// `Live::results`, new rows only) and one per finished group with its best path.
+// ponytail: rows a group finishes within one poll before the next group starts are not printed;
+// the report has them. Upgrade: per-group results in `Live`.
+#[derive(Default)]
+struct Search {
+    /// (index, key) of the group being tried.
+    group: Option<(u32, String)>,
+    /// (label, index, total) of its paths seen starting.
+    started: Vec<(String, u32, u32)>,
+    rows: Vec<(PathKind, Score)>,
+}
+
+impl Search {
+    fn lines(&mut self, live: &DiagLive) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(DiagStep::Path {
+            group,
+            key,
+            index,
+            total,
+            label,
+        }) = &live.progress
+        {
+            if self.group.as_ref().map(|g| g.0) != Some(*group) {
+                out.extend(self.end());
+                self.group = Some((*group, key.clone()));
+            }
+            self.started.push((label.clone(), *index, *total));
+        }
+        if let Some((group, key)) = &self.group
+            && live.results.len() >= self.rows.len()
+        {
+            for (path, score) in &live.results[self.rows.len()..] {
+                let label = path.label();
+                let at = self
+                    .started
+                    .iter()
+                    .find(|s| s.0 == label)
+                    .map(|(_, i, t)| format!(" · path {}/{t}", i + 1))
+                    .unwrap_or_else(|| " ·".into());
+                out.push(format!(
+                    "culprit {} {key}{at} {label}: {}",
+                    group + 1,
+                    score_text(score)
+                ));
+            }
+            self.rows = live.results.clone();
+        }
+        if matches!(
+            live.progress,
+            Some(DiagStep::Rechecking | DiagStep::RollingBack)
+        ) {
+            out.extend(self.end());
+        }
+        out
+    }
+
+    /// The group's line: its best path, if one works.
+    fn end(&mut self) -> Option<String> {
+        let (group, key) = self.group.take()?;
+        let mut rows = std::mem::take(&mut self.rows);
+        self.started.clear();
+        rank(&mut rows);
+        let what = match rows.first() {
+            Some((path, s)) if works(s) => {
+                format!("лучший путь — {} ({})", path.label(), score_text(s))
+            }
+            Some(_) => "ни один проверенный путь не работает".to_owned(),
+            None => "пути не проверены".to_owned(),
+        };
+        Some(format!("culprit {} {key}: {what}", group + 1))
+    }
 }
 
 /// Asks `diag_status` every 2 s until the run is over, then prints its report. The progress and the
@@ -1130,9 +1233,17 @@ fn wait_for_diag(
     // As in `wait_for_run`: a deadline the clock cannot reach is no deadline.
     let deadline = timeout.and_then(|secs| Instant::now().checked_add(Duration::from_secs(secs)));
     let mut last = (None, None, false);
+    let mut search = Search::default();
     loop {
         let live: Option<DiagLive> = read(call(Request::DiagStatus)?)?;
-        let Some(live) = live else { break };
+        let Some(live) = live else {
+            search.end().inspect(|line| note(line));
+            break;
+        };
+        // What finished since the last poll, then what runs now.
+        for line in search.lines(&live) {
+            note(&line);
+        }
         let step = live.progress.as_ref().and_then(diag_step);
         if step.is_some() && step != last.0 {
             note(step.as_deref().unwrap_or_default());
@@ -2165,6 +2276,7 @@ mod tests {
     fn diag_run_wait_prints_progress_and_summary() {
         let step = |index| DiagStep::Path {
             group: 0,
+            key: "1.2.3.0/24".into(),
             index,
             total: 4,
             label: "zapret".into(),
@@ -2188,7 +2300,11 @@ mod tests {
         assert_eq!(outcome, Ok(Done::Json(summary)));
         assert_eq!(
             notes,
-            ["culprit 1: path 1/4 zapret", "culprit 1: path 2/4 zapret"]
+            [
+                "culprit 1: path 1/4 zapret",
+                "culprit 1: path 2/4 zapret",
+                "culprit 1 1.2.3.0/24: пути не проверены"
+            ]
         );
         assert_eq!(asked.len(), 7);
         assert_eq!(
@@ -2197,6 +2313,61 @@ mod tests {
                 id: "2026-10-22_10-00-00".into()
             }
         );
+    }
+
+    #[test]
+    fn diag_run_wait_prints_each_finished_path_and_each_group_once() {
+        let step = |index, label: &str| DiagStep::Path {
+            group: 0,
+            key: "35.217.19.0/24".into(),
+            index,
+            total: 36,
+            label: label.into(),
+        };
+        let score = |ok, median_ms| diag::evaluate::Score {
+            ok,
+            total: 3,
+            median_ms,
+            loss_pct: None,
+            answer: None,
+        };
+        let with = |step, results: Vec<(PathKind, diag::evaluate::Score)>| {
+            let mut live = diag_live(step, None, false);
+            live["results"] = serde_json::to_value(results).unwrap();
+            live
+        };
+        let current = (PathKind::Current, score(3, Some(26)));
+        let direct = (PathKind::Direct, score(0, None));
+        let (_, _, notes) = drive_noted(
+            &["diag", "run", "--profile", "discord", "--wait"],
+            vec![
+                Ok(json!([])),
+                Ok(Value::Null),
+                Ok(with(step(0, "Как сейчас"), vec![])),
+                Ok(with(step(1, "Напрямую мимо всего"), vec![current.clone()])),
+                // Read again: nothing new.
+                Ok(with(step(1, "Напрямую мимо всего"), vec![current.clone()])),
+                Ok(with(DiagStep::RollingBack, vec![current, direct])),
+                Ok(Value::Null),
+            ],
+        );
+        assert_eq!(
+            notes,
+            [
+                "culprit 1: path 1/36 Как сейчас",
+                "culprit 1 35.217.19.0/24 · path 1/36 Как сейчас: работает, 3/3, 26 ms",
+                "culprit 1: path 2/36 Напрямую мимо всего",
+                "culprit 1 35.217.19.0/24 · path 2/36 Напрямую мимо всего: не работает, 0/3",
+                "culprit 1 35.217.19.0/24: лучший путь — Как сейчас (работает, 3/3, 26 ms)",
+                "rolling back",
+            ]
+        );
+    }
+
+    #[test]
+    fn diag_stop_sends_its_request() {
+        let (_, asked) = drive(&["diag", "stop"], Vec::new());
+        assert_eq!(asked, [Request::StopDiag]);
     }
 
     #[test]

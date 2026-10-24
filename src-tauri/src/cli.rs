@@ -180,6 +180,10 @@ fn dispatch(app: &AppHandle, request: Request) -> Result<Value, String> {
             commands::cancel_diag(state);
             Ok(Value::Null)
         }
+        Request::StopDiag => {
+            commands::stop_diag(state);
+            Ok(Value::Null)
+        }
         Request::DiagReports => json(block_on(commands::diag_reports(handle))?),
         Request::DiagReport { id } => json(block_on(commands::diag_report(handle, id))?),
         Request::DiagApply { id, fix } => json(block_on(commands::diag_apply(handle, id, fix))?),

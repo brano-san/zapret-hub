@@ -114,6 +114,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::diag_answer,
             commands::diag_choose,
             commands::cancel_diag,
+            commands::stop_diag,
             commands::diag_reports,
             commands::diag_report,
             commands::diag_apply

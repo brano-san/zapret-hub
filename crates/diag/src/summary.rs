@@ -19,6 +19,7 @@ const ONLY_PROXY: &str = "провайдер блокирует адрес; zapr
 const NOTHING: &str = "адрес недоступен ни одним путём, включая прокси: вероятно, проблема на стороне сервиса или прокси";
 const NOTHING_NO_PROXY: &str =
     "адрес недоступен ни одним проверенным путём; путь через прокси не проверен";
+pub const STOPPED: &str = "перебор остановлен: результаты по проверенным путям";
 const LIVE_ONLY: &str = "не проверяется автоматически: нужен режим „со мной“";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, specta::Type)]
@@ -68,6 +69,8 @@ pub struct Summary {
     pub fixes: Vec<Fix>,
     pub warnings: Vec<String>,
     pub canceled: bool,
+    /// «Остановить»: the paths not measured yet were left out; the rest is the result.
+    pub stopped: bool,
     pub budget_hit: bool,
     pub rollback_error: Option<String>,
     pub sources_missing: Vec<String>,
@@ -476,6 +479,11 @@ pub fn summarize(
                 .join(", ")
         ),
     };
+    let verdict_text = if outcome.stopped {
+        format!("{STOPPED}. {verdict_text}")
+    } else {
+        verdict_text
+    };
     Summary {
         id,
         profile: ctx.profile.name.clone(),
@@ -486,6 +494,7 @@ pub fn summarize(
         fixes,
         warnings: vec![],
         canceled: outcome.canceled,
+        stopped: outcome.stopped,
         budget_hit: outcome.budget_hit,
         rollback_error: outcome.rollback_error.clone(),
         sources_missing: vec![],

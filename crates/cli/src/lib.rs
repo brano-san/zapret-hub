@@ -167,6 +167,8 @@ pub enum Request {
         keys: Vec<String>,
     },
     CancelDiag,
+    /// «Остановить»: the search ends and the report keeps the measured paths.
+    StopDiag,
     DiagReports,
     DiagReport {
         id: String,
@@ -461,6 +463,7 @@ mod tests {
                 keys: vec!["discord.com".into()],
             },
             Request::CancelDiag,
+            Request::StopDiag,
             Request::DiagReports,
             Request::DiagReport {
                 id: "2026-10-22_10-00-00".into(),

@@ -115,6 +115,7 @@ fn outcome(group: Group, results: Vec<(PathKind, Score)>) -> Outcome {
             not_checked: vec![],
         }],
         canceled: false,
+        stopped: false,
         budget_hit: false,
         rollback_error: None,
     }
@@ -162,6 +163,7 @@ fn empty() -> Outcome {
     Outcome {
         per_group: vec![],
         canceled: false,
+        stopped: false,
         budget_hit: false,
         rollback_error: None,
     }
