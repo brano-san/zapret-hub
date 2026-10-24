@@ -699,7 +699,7 @@ control_route: string | null;
 /**  The control channel went direct (not through the VPN). */
 direct: boolean };
 
-export type Preset = "discord-voice" | "discord" | "dbd";
+export type Preset = "discord-voice" | "discord" | "cloudflare" | "telegram" | "twitch" | "dbd";
 
 export type ProbeKind = "https" | "discord-ip-discovery" | "stun" | "ping" | "live" | 
 /**  TLS and a WebSocket upgrade to the voice server of the Discord log, else the gateway. */

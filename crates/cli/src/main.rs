@@ -397,6 +397,9 @@ enum RoutesCommand {
 enum PresetArg {
     DiscordVoice,
     Discord,
+    Cloudflare,
+    Telegram,
+    Twitch,
     Dbd,
 }
 
@@ -405,6 +408,9 @@ impl From<PresetArg> for Preset {
         match preset {
             PresetArg::DiscordVoice => Preset::DiscordVoice,
             PresetArg::Discord => Preset::Discord,
+            PresetArg::Cloudflare => Preset::Cloudflare,
+            PresetArg::Telegram => Preset::Telegram,
+            PresetArg::Twitch => Preset::Twitch,
             PresetArg::Dbd => Preset::Dbd,
         }
     }
@@ -1429,6 +1435,12 @@ mod tests {
                 &["routes", "preset", "discord"],
                 Request::AddRoutePreset {
                     preset: Preset::Discord,
+                },
+            ),
+            (
+                &["routes", "preset", "telegram"],
+                Request::AddRoutePreset {
+                    preset: Preset::Telegram,
                 },
             ),
             (
