@@ -24,9 +24,8 @@ pub struct Webrtc {
     pings: BTreeMap<String, Pings>,
     /// Failed UDP reconnection attempts by media server.
     reconnects: BTreeMap<String, u32>,
-    /// `packets sent`, `received` of `Transport stats` by connection (`default`, `stream`):
-    /// the first and the last.
-    transport: BTreeMap<String, ((u64, u64), (u64, u64), u32)>,
+    /// `packets sent`, `received` of `Transport stats` by connection (`default`, `stream`).
+    transport: BTreeMap<String, Vec<(u64, u64)>>,
     /// `Decrypt failed, no valid cryptor` lines.
     no_cryptor: u32,
     /// `Failed audio` of `Decrypted audio` lines: the first and the last.
@@ -90,14 +89,10 @@ pub fn parse(lines: &[String]) -> Webrtc {
             };
             let sent = num_after(counters, "").unwrap_or(0);
             let received = num_after(counters, "received: ").unwrap_or(0);
-            let now = (sent, received);
             w.transport
                 .entry(tag.to_owned())
-                .and_modify(|(_, last, n)| {
-                    *last = now;
-                    *n += 1;
-                })
-                .or_insert((now, now, 1));
+                .or_default()
+                .push((sent, received));
         } else if msg.starts_with("Decrypt failed, no valid cryptor") {
             w.no_cryptor += 1;
         } else if msg.starts_with("Decrypted audio: ") {
@@ -147,10 +142,14 @@ impl Webrtc {
 
     /// The connection sent packets and got none back. One sample counts from zero.
     pub fn one_way(&self, tag: &str) -> bool {
-        self.transport.get(tag).is_some_and(|(first, last, n)| {
-            let from = if *n > 1 { *first } else { (0, 0) };
-            last.0 > from.0 && last.1 == from.1
-        })
+        let Some(samples) = self.transport.get(tag) else {
+            return false;
+        };
+        let (Some(first), Some(last)) = (samples.first(), samples.last()) else {
+            return false;
+        };
+        let from = if samples.len() > 1 { *first } else { (0, 0) };
+        last.0 > from.0 && last.1 == from.1
     }
 
     /// The counters of a connection whose stage the renderer log gave; `tag` is `default` or
