@@ -7,7 +7,12 @@
   import { S } from "$lib/strings";
 
   /** `ondone` gets the new folder: the caller puts it into its field and checks it. */
-  let { engine, ondone }: { engine: Engine; ondone: (dir: string) => void | Promise<void> } = $props();
+  let {
+    engine,
+    ondone,
+    /** `false`: the caller's own button opens the form through `show()`. */
+    showTrigger = true,
+  }: { engine: Engine; ondone: (dir: string) => void | Promise<void>; showTrigger?: boolean } = $props();
 
   let open = $state(false);
   let parent = $state("");
@@ -26,7 +31,7 @@
 
   const mb = (bytes: number) => (bytes / 1048576).toFixed(1);
 
-  async function show(): Promise<void> {
+  export async function show(): Promise<void> {
     open = true;
     if (!parent) parent = (await commands.defaultDownloadParent()) ?? "";
   }
@@ -71,7 +76,7 @@
     <button class="primary" disabled={!parent.trim()} onclick={start}>{S.download.start}</button>
     <button onclick={() => (open = false)}>{S.common.cancel}</button>
   </div>
-{:else}
+{:else if showTrigger}
   <button class="link" onclick={show}>{S.download.button}</button>
 {/if}
 {#if done}<p class="muted sha">{done}</p>{/if}
