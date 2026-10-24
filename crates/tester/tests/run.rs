@@ -128,7 +128,11 @@ fn zapret2_strategies_need_a_working_engine_before_the_run_starts() {
     );
     // An empty engine file cannot tell its version: not a program (Windows), not executable
     // (Linux).
-    let cannot_run = if cfg!(windows) { "os error 193" } else { "os error 13" };
+    let cannot_run = if cfg!(windows) {
+        "os error 193"
+    } else {
+        "os error 13"
+    };
     assert!(
         refusal(Some(&engine)).contains(cannot_run),
         "{}",
