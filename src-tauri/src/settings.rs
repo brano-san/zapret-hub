@@ -36,8 +36,6 @@ pub struct Settings {
     pub diag_observe_secs: u32,
     /// The time diagnostics have for the paths, 1–60 min (diag spec 6).
     pub diag_budget_min: u32,
-    /// NekoBox's folder, for its logs (diag spec 5); `None`: the running NekoBox's.
-    pub nekobox_dir: Option<String>,
     /// The game filter: the built-in strategies' `%GameFilter*%` ports open the unprivileged range
     /// (`zapret2::Engine::with_game_filter`).
     pub game_filter: bool,
@@ -68,7 +66,6 @@ impl Default for Settings {
             router_enabled: false,
             diag_observe_secs: 30,
             diag_budget_min: 10,
-            nekobox_dir: None,
             game_filter: true,
             excluded_ports: Vec::new(),
             tg_ws_enabled: false,
@@ -145,12 +142,11 @@ pub fn validate_socks(text: &str) -> anyhow::Result<Option<String>> {
     Ok(Some(addr.to_string()))
 }
 
-/// A setting diagnostics read changed: the folder, the game filter, the proxy, routing, NekoBox, their own.
+/// A setting diagnostics read changed: the folder, the game filter, the proxy, routing, their own.
 pub fn diag_reads_changed(old: &Settings, new: &Settings) -> bool {
     old.zapret2_dir != new.zapret2_dir
         || old.socks5 != new.socks5
         || old.router_enabled != new.router_enabled
-        || old.nekobox_dir != new.nekobox_dir
         || old.diag_observe_secs != new.diag_observe_secs
         || old.diag_budget_min != new.diag_budget_min
         || old.game_filter != new.game_filter
@@ -246,10 +242,6 @@ mod tests {
                 diag_budget_min: old.diag_budget_min + 1,
                 ..old.clone()
             },
-            Settings {
-                nekobox_dir: Some(r"E:\nekoray".into()),
-                ..old.clone()
-            },
         ] {
             assert!(diag_reads_changed(&old, &read), "{read:?}");
         }
@@ -270,7 +262,6 @@ mod tests {
             router_enabled: true,
             diag_observe_secs: 45,
             diag_budget_min: 7,
-            nekobox_dir: Some(r"E:\nekoray".into()),
             game_filter: false,
             excluded_ports: vec!["51413".into(), "6881-6889".into()],
             tg_ws_enabled: true,
@@ -418,6 +409,17 @@ diag_budget_min = 10
         assert_eq!(flowseal_dir(&path), None, "the migration runs once");
         assert_eq!(load(&path).unwrap(), settings);
         assert_eq!(flowseal_dir(&dir.path().join("none.toml")), None);
+    }
+
+    #[test]
+    fn a_key_this_version_no_longer_has_is_ignored() {
+        // 0.9.0 kept the proxy client's folder for diagnostics; 0.9.1 dropped that setting.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("zapret-hub.toml");
+        let text = format!("{SETTINGS_0_8_0}client_dir = 'E:\\proxy'\n");
+        std::fs::write(&path, text).unwrap();
+        let settings = load(&path).unwrap();
+        assert_eq!(settings.socks5.as_deref(), Some("127.0.0.1:18082"));
     }
 
     #[test]

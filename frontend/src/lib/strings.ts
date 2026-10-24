@@ -210,8 +210,6 @@ export const S = {
     diag: "Диагностика",
     diagObserve: "Наблюдение, с (10–120)",
     diagBudget: "Время на перебор путей, мин (1–60)",
-    nekobox: "Папка NekoBox",
-    nekoboxHint: "Для журналов NekoBox. Пусто — папка запущенного NekoBox.",
   },
   download: {
     button: "Скачать последний релиз…",

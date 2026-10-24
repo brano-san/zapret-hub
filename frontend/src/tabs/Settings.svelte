@@ -58,7 +58,6 @@
       ...draft,
       zapret2_dir: draft.zapret2_dir?.trim() || null,
       socks5: draft.socks5?.trim() || null,
-      nekobox_dir: draft.nekobox_dir?.trim() || null,
       // A cleared number field binds `null`: left out, the setting keeps its default.
       diag_observe_secs: draft.diag_observe_secs ?? undefined,
       diag_budget_min: draft.diag_budget_min ?? undefined,
@@ -202,11 +201,6 @@
         <label for="diag-budget">{S.settings.diagBudget}</label>
         <input id="diag-budget" type="number" min="1" max="60" bind:value={draft.diag_budget_min} />
       </div>
-      <div class="row">
-        <label for="nekobox">{S.settings.nekobox}</label>
-        <input id="nekobox" class="grow" bind:value={draft.nekobox_dir} />
-      </div>
-      <p class="muted">{S.settings.nekoboxHint}</p>
     </section>
 
     <!-- One button for the cards above: they are saved together. -->

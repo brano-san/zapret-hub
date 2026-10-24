@@ -500,7 +500,6 @@ enum Key {
     CliEnabled,
     DiagObserveSecs,
     DiagBudgetMin,
-    NekoboxDir,
     GameFilter,
 }
 
@@ -1023,8 +1022,6 @@ fn setting(key: Key, value: &str) -> Result<Value, Fail> {
         Key::DiagBudgetMin => in_range(value, 1..=60)
             .map(Value::from)
             .ok_or_else(|| bad("1 to 60")),
-        Key::NekoboxDir if value.trim().is_empty() => Ok(Value::Null),
-        Key::NekoboxDir => Ok(value.into()),
     }
 }
 
@@ -2055,8 +2052,6 @@ mod tests {
             ("diag_observe_secs", "120", json!(120)),
             ("diag_budget_min", "1", json!(1)),
             ("diag_budget_min", "60", json!(60)),
-            ("nekobox_dir", r"E:\nekoray", json!("E:\\nekoray")),
-            ("nekobox_dir", " ", Value::Null),
             ("game_filter", "false", json!(false)),
         ] {
             let (outcome, asked) = drive(&["settings", "set", key, value], vec![Ok(settings())]);

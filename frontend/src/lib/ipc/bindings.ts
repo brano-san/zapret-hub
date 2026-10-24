@@ -917,8 +917,6 @@ export type Settings = {
 	diag_observe_secs?: number,
 	/**  The time diagnostics have for the paths, 1–60 min (diag spec 6). */
 	diag_budget_min?: number,
-	/**  NekoBox's folder, for its logs (diag spec 5); `None`: the running NekoBox's. */
-	nekobox_dir?: string | null,
 	/**
 	 *  The game filter: the built-in strategies' `%GameFilter*%` ports open the unprivileged range
 	 *  (`zapret2::Engine::with_game_filter`).
