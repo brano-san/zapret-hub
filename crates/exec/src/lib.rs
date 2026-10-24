@@ -223,6 +223,51 @@ pub fn run(
     Ok(output)
 }
 
+/// A long-lived program the caller owns: started like [`run`] starts one (no window, a process
+/// tree of its own), it runs until the `Owned` is dropped, which ends it and everything it
+/// started. On Windows the job object also ends them when Zapret Hub itself dies.
+pub struct Owned {
+    child: std::process::Child,
+    tree: Option<Tree>,
+    command: String,
+}
+
+impl Owned {
+    /// `cmd` with its stdin, stdout and stderr as the caller set them.
+    pub fn spawn(cmd: &mut Command) -> std::io::Result<Self> {
+        let command = command_line(cmd);
+        tree::prepare(cmd);
+        let child = cmd.spawn().inspect_err(|err| {
+            log::error!(target: "exec", "{command} -> failed to start: {err}");
+        })?;
+        let tree = Tree::holding(&child)
+            .inspect_err(|err| log::warn!(target: "exec", "{command} -> no process tree: {err}"))
+            .ok();
+        log::info!(target: "exec", "started {command} (pid {})", child.id());
+        Ok(Self {
+            child,
+            tree,
+            command,
+        })
+    }
+
+    /// It has not exited by itself.
+    pub fn running(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+}
+
+impl Drop for Owned {
+    fn drop(&mut self) {
+        if let Some(tree) = &self.tree {
+            tree.terminate();
+        }
+        let _ = self.child.kill();
+        let status = self.child.wait();
+        log::info!(target: "exec", "stopped {} -> {status:?}", self.command);
+    }
+}
+
 fn command_line(cmd: &Command) -> String {
     let mut line = cmd.get_program().to_string_lossy().into_owned();
     for arg in cmd.get_args() {

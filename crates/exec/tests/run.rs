@@ -146,3 +146,19 @@ fn stamp_has_the_shape_of_test_zapret_ps1_results() {
     assert_eq!(&stamp[10..11], "_");
     assert_eq!(&stamp[13..14], "-");
 }
+
+#[test]
+fn an_owned_program_runs_until_dropped() {
+    let mut owned = exec::Owned::spawn(waits(30).stdout(std::process::Stdio::null())).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(owned.running());
+    let started = Instant::now();
+    drop(owned);
+    assert!(started.elapsed() < Duration::from_secs(5), "ended at once");
+    let mut quick = exec::Owned::spawn(&mut shell("exit 0", "exit 0")).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while quick.running() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!quick.running(), "one that exited is not running");
+}
