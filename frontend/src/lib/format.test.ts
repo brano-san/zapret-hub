@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Fix, Rule, StrategyResult } from "./ipc/bindings";
-import { copyStem, hostGroup, optionalHost, faultText, fixApplies, fixText, fixWarnings, pathLabel, patternTitle, scoreWorks, defaultTestable, blockSummary, bytes, programName, proxyLabel, routeDraft, routeSummary, viaLabel, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
+import { copyStem, routeFieldText, hostGroup, optionalHost, faultText, fixApplies, fixText, fixWarnings, pathLabel, patternTitle, scoreWorks, defaultTestable, blockSummary, bytes, programName, proxyLabel, routeDraft, routeSummary, viaLabel, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
 import { S } from "./strings";
 
 describe("blockSummary", () => {
@@ -287,5 +287,17 @@ describe("hostGroup", () => {
     expect(optionalHost("https://api.epicgames.dev")).toBe(true);
     expect(optionalHost("https://steam.live.bhvrdbd.com")).toBe(true);
     expect(optionalHost("https://store.steampowered.com")).toBe(false);
+  });
+});
+
+describe("route editor fields", () => {
+  const form = { name: "Telegram", enabled: true, protocol: "both", ports: "", ips: "", domains: "", apps: "" } as const;
+  it("reads the ports field: a comma, a line or both", () => {
+    expect(routeDraft({ ...form, ports: "443, 80\n5222-5230" })).toMatchObject({ ports: ["443", "80", "5222-5230"] });
+  });
+  it("says the name and targets checks in Russian, the rest as written", () => {
+    expect(routeFieldText({ field: "name", message: "1-40 characters: Latin or Cyrillic letters, digits, space, - _ .; starts with a letter or digit" })).toBe(S.routes.errors.name);
+    expect(routeFieldText({ field: "ips", message: "a rule needs at least one target: ips, domains or apps" })).toBe(S.routes.errors.targets);
+    expect(routeFieldText({ field: "ports", message: "\"x\" is not a port" })).toBe("\"x\" is not a port");
   });
 });
