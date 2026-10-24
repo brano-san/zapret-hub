@@ -88,7 +88,7 @@ pub fn load(dir: &Path, id: &str) -> anyhow::Result<Summary> {
 
 /// The fields a report from another version lacks, from `Default`. Not `#[serde(default)]`:
 /// specta would make every field optional in the page's types.
-fn fill_defaults(report: &mut Value) -> anyhow::Result<()> {
+pub fn fill_defaults(report: &mut Value) -> anyhow::Result<()> {
     fn fill(value: &mut Value, defaults: Value) {
         if let (Value::Object(map), Value::Object(defaults)) = (value, defaults) {
             for (key, default) in defaults {

@@ -2,6 +2,7 @@
 //! per connection. `cmd` and `args` are the window's IPC commands, so the app runs the same code
 //! for both.
 
+pub mod compact;
 pub mod pipe;
 
 use diag::evaluate::Answer;

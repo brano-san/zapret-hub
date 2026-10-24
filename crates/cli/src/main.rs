@@ -282,6 +282,9 @@ enum DiagCommand {
         /// Stop waiting after this many seconds (exit code 4); the diagnostics go on.
         #[arg(long, requires = "wait")]
         timeout: Option<u64>,
+        /// Print the whole report instead of the compact one.
+        #[arg(long, requires = "wait")]
+        full: bool,
     },
     /// The step, the progress and the question, if it waits for an answer.
     Status,
@@ -299,7 +302,12 @@ enum DiagCommand {
     /// The saved reports, newest first.
     List,
     /// A report; none: the newest.
-    Show { id: Option<String> },
+    Show {
+        id: Option<String>,
+        /// Print the whole report instead of the compact one.
+        #[arg(long)]
+        full: bool,
+    },
     /// Apply a fix of a report (needs --yes); none: the newest report, fix 0.
     Apply {
         id: Option<String>,
@@ -802,6 +810,7 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
             budget,
             wait,
             timeout,
+            full,
         }) => {
             let request = DiagRequest {
                 profile,
@@ -818,7 +827,7 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
                 request: request.clone(),
             })?;
             if wait {
-                return wait_for_diag(call, before, request.mode, timeout, note);
+                return wait_for_diag(call, before, request.mode, timeout, full, note);
             }
             return Ok(Done::Json(json!({ "started": true, "request": request })));
         }
@@ -828,9 +837,9 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
                 "failed": call(Request::DiagFailed)?,
             })));
         }
-        Command::Diag(DiagCommand::Show { id }) => {
+        Command::Diag(DiagCommand::Show { id, full }) => {
             let id = report_id(call, id)?;
-            return Ok(Done::Json(call(Request::DiagReport { id })?));
+            return diag_report(call, id, full);
         }
         Command::Diag(DiagCommand::Apply { id, fix }) => Request::DiagApply {
             id: report_id(call, id)?,
@@ -1220,6 +1229,16 @@ impl Search {
     }
 }
 
+/// A saved report: the compact one an agent reads, or with `--full` the whole `Summary`.
+fn diag_report(call: Call, id: String, full: bool) -> Result<Done, Fail> {
+    let report = call(Request::DiagReport { id })?;
+    if full {
+        return Ok(Done::Json(report));
+    }
+    let summary: diag::summary::Summary = read(report)?;
+    Ok(Done::Json(cli::compact::compact(&summary)))
+}
+
 /// Asks `diag_status` every 2 s until the run is over, then prints its report. The progress and the
 /// question go to stderr, each once. In `auto` the app takes every culprit itself; in `ask` the
 /// culprits wait for `diag choose` (else all after 120 s).
@@ -1228,6 +1247,7 @@ fn wait_for_diag(
     before: Option<String>,
     mode: Mode,
     timeout: Option<u64>,
+    full: bool,
     note: Note,
 ) -> Result<Done, Fail> {
     // As in `wait_for_run`: a deadline the clock cannot reach is no deadline.
@@ -1275,9 +1295,7 @@ fn wait_for_diag(
         std::thread::sleep(left.map_or(DIAG_POLL, |left| left.min(DIAG_POLL)));
     }
     match newest_report(call)? {
-        Some(id) if Some(&id) != before.as_ref() => {
-            Ok(Done::Json(call(Request::DiagReport { id })?))
-        }
+        Some(id) if Some(&id) != before.as_ref() => diag_report(call, id, full),
         _ => {
             let failed: Option<String> = read(call(Request::DiagFailed)?)?;
             Err(Fail::new(
@@ -2283,7 +2301,7 @@ mod tests {
         };
         let summary = json!({ "id": "2026-10-22_10-00-00", "verdict_text": "готово" });
         let (outcome, asked, notes) = drive_noted(
-            &["diag", "run", "--profile", "discord", "--wait"],
+            &["diag", "run", "--profile", "discord", "--wait", "--full"],
             vec![
                 Ok(json!([["2026-10-21_10-00-00", "discord"]])),
                 Ok(Value::Null),

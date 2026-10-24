@@ -1,0 +1,725 @@
+{
+  "budget_hit": false,
+  "canceled": false,
+  "explanations": [
+    "голос Discord (203.0.113.0/24) идёт через VPN: медиасервер видит адрес прокси",
+    "вы один в канале, а Discord не создал группу шифрования: сбой на нашей стороне"
+  ],
+  "fixes": [
+    {
+      "kind": "Manual",
+      "text": "проверьте служебный канал голоса (*.discord.media) напрямую и через VPN"
+    }
+  ],
+  "groups": [
+    {
+      "best": null,
+      "explanation": "адрес недоступен ни одним путём, включая прокси: вероятно, проблема на стороне сервиса или прокси. Проверено: Приём zapret2: zapret2:general (ALT2), профиль 2, Приём zapret2: zapret2:general (ALT11), профиль 2, Приём zapret2: zapret2:general (FAKE TLS AUTO ALT2), профиль 9, Прокси точечно, Приём zapret2: zapret2:general (ALT), профиль 2, Приём zapret2: zapret2:general (ALT), профиль 9, Приём zapret2: zapret2:general (ALT3), профиль 9, Приём zapret2: zapret2:general (ALT10), профиль 9, Приём zapret2: zapret2:general (ALT11), профиль 9, Приём zapret2: zapret2:general (ALT12), профиль 2, Приём zapret2: zapret2:general (EXP), профиль 9, Приём zapret2: zapret2:general (FAKE TLS AUTO ALT), профиль 9, Приём zapret2: zapret2:general (FAKE TLS AUTO ALT2), профиль 2, Приём zapret2: zapret2:general (Flowseal), профиль 2, Приём zapret2: zapret2:ALT11, профиль 2, Приём zapret2: zapret2:ALT11, профиль 9, Приём zapret2: zapret2:general (ALT2), профиль 9, Приём zapret2: zapret2:general (ALT3), профиль 2, Приём zapret2: zapret2:general (ALT4), профиль 9, Приём zapret2: zapret2:general (ALT5), профиль 2, Приём zapret2: zapret2:general (ALT8), профиль 9, Приём zapret2: zapret2:general (ALT9), профиль 9, Приём zapret2: zapret2:general (ALT10), профиль 2, Приём zapret2: zapret2:general (ALT13), профиль 2, Приём zapret2: zapret2:general (ALT13), профиль 9, Приём zapret2: zapret2:general (EXP), профиль 2, Приём zapret2: zapret2:general (FAKE TLS AUTO ALT3), профиль 9, Приём zapret2: zapret2:general (Flowseal), профиль 9, Приём zapret2: zapret2:general (SIMPLE FAKE ALT), профиль 9, Приём zapret2: zapret2:general, профиль 6, Приём zapret2: zapret2:general (ALT12), профиль 9, Приём zapret2: zapret2:general (SIMPLE FAKE ALT2), профиль 9, Как сейчас, Напрямую мимо всего, Прокси без zapret",
+      "group": {
+        "fault": {
+          "down": 0,
+          "kind": "UdpNoReply",
+          "up": 285
+        },
+        "key": "203.0.113.0/24",
+        "members": [
+          {
+            "data_retrans": 0,
+            "domain": null,
+            "down_bytes": 0.0,
+            "down_packets": 0,
+            "dst": "203.0.113.82:50004",
+            "ipv6": false,
+            "local_port": 57384,
+            "protocol": "udp",
+            "redirect_early": false,
+            "rst_early": false,
+            "rtt_ms": [],
+            "sni": null,
+            "syn_ack_ms": null,
+            "syn_answered": false,
+            "syns": 0,
+            "udp_first_reply_ms": null,
+            "udp_silent_windows": 19,
+            "udp_windows": 19,
+            "up_bytes": 21193.0,
+            "up_packets": 285,
+            "via_system_proxy": false
+          }
+        ],
+        "ports": [
+          50004
+        ],
+        "protocol": "udp",
+        "representatives": [
+          {
+            "data_retrans": 0,
+            "domain": null,
+            "down_bytes": 0.0,
+            "down_packets": 0,
+            "dst": "203.0.113.82:50004",
+            "ipv6": false,
+            "local_port": 57384,
+            "protocol": "udp",
+            "redirect_early": false,
+            "rst_early": false,
+            "rtt_ms": [],
+            "sni": null,
+            "syn_ack_ms": null,
+            "syn_answered": false,
+            "syns": 0,
+            "udp_first_reply_ms": null,
+            "udp_silent_windows": 19,
+            "udp_windows": 19,
+            "up_bytes": 21193.0,
+            "up_packets": 285,
+            "via_system_proxy": false
+          }
+        ]
+      },
+      "results": [
+        [
+          {
+            "candidate": {
+              "profile": 1,
+              "source": "zapret2:general (ALT2)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --ipset-ip=203.0.113.0/24 --payload=discord_ip_discovery,stun --lua-desync=fake:blob=discord_udp:repeats=6"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 25,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 1,
+              "source": "zapret2:general (ALT11)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=stun2:@\"%BIN%stun2.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --ipset-ip=203.0.113.0/24 --payload=discord_ip_discovery,stun --lua-desync=fake:blob=discord_udp:repeats=6"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 25,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:general (FAKE TLS AUTO ALT2)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n1 --lua-desync=fake:blob=game_udp:repeats=10:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 25,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "kind": "ProxyPoint",
+            "rule": {
+              "apps": [],
+              "domains": [],
+              "enabled": true,
+              "ips": [
+                "203.0.113.0/24"
+              ],
+              "name": "diag-discord",
+              "ports": [
+                "50000-50100"
+              ],
+              "protocol": "udp"
+            }
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 26,
+            "ok": 2,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 1,
+              "source": "zapret2:general (ALT)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=stun:@\"%BIN%stun.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --ipset-ip=203.0.113.0/24 --payload=discord_ip_discovery,stun --lua-desync=fake:blob=discord_udp:repeats=6"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 26,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:general (ALT)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=stun:@\"%BIN%stun.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n2 --lua-desync=fake:blob=game_udp:repeats=12:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 26,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:general (ALT3)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n3 --lua-desync=fake:blob=game_udp:repeats=10:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 26,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:general (ALT10)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=tls_4pda:@\"%BIN%tls_clienthello_4pda_to.bin\" --blob=stun:@\"%BIN%stun.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n1 --lua-desync=fake:blob=game_udp:repeats=12:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 26,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:general (ALT11)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=stun2:@\"%BIN%stun2.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n3 --lua-desync=fake:blob=game_udp:repeats=10:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 26,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 1,
+              "source": "zapret2:general (ALT12)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=stun:@\"%BIN%stun.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --ipset-ip=203.0.113.0/24 --payload=discord_ip_discovery --lua-desync=fake:blob=stun:repeats=3 --payload=discord_ip_discovery,stun --lua-desync=fake:blob=discord_udp:repeats=3"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 26,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:general (EXP)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --lua-init=\"zero_256 = string.rep(string.char(0), 256)\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=quic_4pda:@\"%BIN%quic_initial_4pda_to.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=stun2:@\"%BIN%stun2.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n3 --lua-desync=fake:blob=quic_4pda:repeats=5:payload=all --lua-desync=fake:blob=game_udp:repeats=5:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 26,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:general (FAKE TLS AUTO ALT)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n1 --lua-desync=fake:blob=game_udp:repeats=10:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 26,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 1,
+              "source": "zapret2:general (FAKE TLS AUTO ALT2)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --ipset-ip=203.0.113.0/24 --payload=discord_ip_discovery,stun --lua-desync=fake:blob=discord_udp:repeats=6"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 26,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 1,
+              "source": "zapret2:general (Flowseal)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_4pda:@\"%BIN%tls_clienthello_4pda_to.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --ipset-ip=203.0.113.0/24 --payload=discord_ip_discovery,stun --lua-desync=fake:blob=discord_udp:repeats=6"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 26,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 1,
+              "source": "zapret2:ALT11",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=%GameFilterUDP% --wf-raw-part=@\"init.d\\windivert.filter.examples\\windivert_part.quic_initial_ietf.txt\" --wf-raw-part=@\"init.d\\windivert.filter.examples\\windivert_part.discord_media.txt\" --wf-raw-part=@\"init.d\\windivert.filter.examples\\windivert_part.stun.txt\" --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=stun2:@\"%BIN%stun2.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --ipset-ip=203.0.113.0/24 --payload=discord_ip_discovery,stun --lua-desync=fake:blob=discord_udp:repeats=6"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 26,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:ALT11",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=%GameFilterUDP% --wf-raw-part=@\"init.d\\windivert.filter.examples\\windivert_part.quic_initial_ietf.txt\" --wf-raw-part=@\"init.d\\windivert.filter.examples\\windivert_part.discord_media.txt\" --wf-raw-part=@\"init.d\\windivert.filter.examples\\windivert_part.stun.txt\" --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=stun2:@\"%BIN%stun2.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n3 --lua-desync=fake:blob=game_udp:repeats=10:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 26,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:general (ALT2)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n1 --lua-desync=fake:blob=game_udp:repeats=12:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 27,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 1,
+              "source": "zapret2:general (ALT3)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --ipset-ip=203.0.113.0/24 --payload=discord_ip_discovery,stun --lua-desync=fake:blob=discord_udp:repeats=6"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 27,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:general (ALT4)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=stun:@\"%BIN%stun.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n1 --lua-desync=fake:blob=game_udp:repeats=10:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 27,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 1,
+              "source": "zapret2:general (ALT5)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --ipset-ip=203.0.113.0/24 --payload=discord_ip_discovery,stun --lua-desync=fake:blob=discord_udp:repeats=6"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 27,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:general (ALT8)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n1 --lua-desync=fake:blob=game_udp:repeats=12:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 27,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:general (ALT9)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n1 --lua-desync=fake:blob=game_udp:repeats=12:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 27,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 1,
+              "source": "zapret2:general (ALT10)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=tls_4pda:@\"%BIN%tls_clienthello_4pda_to.bin\" --blob=stun:@\"%BIN%stun.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --ipset-ip=203.0.113.0/24 --payload=discord_ip_discovery,stun --lua-desync=fake:blob=discord_udp:repeats=6"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 27,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 1,
+              "source": "zapret2:general (ALT13)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_sochi:@\"%BIN%tls_clienthello_sochi_park.bin\" --blob=stun2:@\"%BIN%stun2.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --ipset-ip=203.0.113.0/24 --payload=discord_ip_discovery,stun --lua-desync=fake:blob=discord_udp:repeats=5"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 27,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:general (ALT13)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_sochi:@\"%BIN%tls_clienthello_sochi_park.bin\" --blob=stun2:@\"%BIN%stun2.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n3 --lua-desync=fake:blob=game_udp:repeats=10:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 27,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 1,
+              "source": "zapret2:general (EXP)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --lua-init=\"zero_256 = string.rep(string.char(0), 256)\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=quic_4pda:@\"%BIN%quic_initial_4pda_to.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=stun2:@\"%BIN%stun2.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun,unknown --ipset-ip=203.0.113.0/24 --out-range=-n3 --payload=discord_ip_discovery --lua-desync=fake:blob=quic_google:repeats=4 --lua-desync=fake:blob=discord_udp:repeats=4 --payload=stun --lua-desync=fake:blob=discord_udp:repeats=4 --payload=unknown --lua-desync=fake:blob=quic_google:repeats=4:payload=all --lua-desync=fake:blob=discord_udp:repeats=4:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 27,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:general (FAKE TLS AUTO ALT3)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n2 --lua-desync=fake:blob=game_udp:repeats=10:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 27,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:general (Flowseal)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_4pda:@\"%BIN%tls_clienthello_4pda_to.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n1 --lua-desync=fake:blob=game_udp:repeats=12:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 27,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:general (SIMPLE FAKE ALT)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=stun2:@\"%BIN%stun2.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n1 --lua-desync=fake:blob=game_udp:repeats=10:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 27,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 5,
+              "source": "zapret2:general",
+              "text": "--wf-tcp-out=80,443 --wf-udp-out=443,19294-19344,50000-50100 --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --lua-init=\"fake_default_tls = tls_mod(fake_default_tls,'rnd,rndsni')\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --filter-udp=19294-19344,50000-50100 --filter-l7=wireguard,stun,discord --ipset-ip=203.0.113.0/24 --payload=wireguard_initiation,wireguard_cookie,stun,discord_ip_discovery --lua-desync=fake:blob=0x00000000000000000000000000000000:repeats=2"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 28,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:general (ALT12)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=stun:@\"%BIN%stun.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n3 --lua-desync=fake:blob=game_udp:repeats=10:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 28,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 8,
+              "source": "zapret2:general (SIMPLE FAKE ALT2)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=tls_google:@\"%BIN%tls_clienthello_www_google_com.bin\" --blob=tls_max:@\"%BIN%tls_clienthello_max_ru.bin\" --blob=stun2:@\"%BIN%stun2.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n2 --lua-desync=fake:blob=game_udp:repeats=12:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 28,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "kind": "Current"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": 27,
+            "ok": 3,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "candidate": {
+              "profile": 5,
+              "source": "zapret2:general (ALT5)",
+              "text": "--wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP% --lua-init=@\"%LUA%zapret-lib.lua\" --lua-init=@\"%LUA%zapret-antidpi.lua\" --blob=quic_google:@\"%BIN%quic_initial_www_google_com.bin\" --blob=discord_udp:@\"%BIN%ACTIVE_DISCORD_UDP.bin\" --blob=game_udp:@\"%BIN%ACTIVE_GAME_UDP.bin\" --filter-udp=%GameFilterUDP% --ipset-ip=203.0.113.0/24 --out-range=-n2 --lua-desync=fake:blob=game_udp:repeats=14:payload=all"
+            },
+            "kind": "Trick"
+          },
+          {
+            "answer": null,
+            "loss_pct": null,
+            "median_ms": null,
+            "ok": 0,
+            "total": 0
+          }
+        ],
+        [
+          {
+            "kind": "Direct"
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": null,
+            "ok": 0,
+            "total": 6
+          }
+        ],
+        [
+          {
+            "kind": "ProxyNoZapret",
+            "rule": {
+              "apps": [],
+              "domains": [],
+              "enabled": true,
+              "ips": [
+                "203.0.113.0/24"
+              ],
+              "name": "diag-discord",
+              "ports": [
+                "50000-50100"
+              ],
+              "protocol": "udp"
+            }
+          },
+          {
+            "answer": null,
+            "loss_pct": 100,
+            "median_ms": null,
+            "ok": 0,
+            "total": 6
+          }
+        ]
+      ],
+      "seen": "UDP уходит, ответов нет (285 туда, 0 обратно)"
+    }
+  ],
+  "id": "2026-10-24_15-29-04",
+  "patterns": [
+    {
+      "id": "R2VoiceUdp",
+      "server": "203.0.113.0/24",
+      "via_vpn": true
+    },
+    {
+      "alone": true,
+      "control_route": null,
+      "direct": false,
+      "id": "R6DaveStalled"
+    }
+  ],
+  "profile": "Discord",
+  "rollback_error": null,
+  "sources_missing": [
+    "журнал NekoBox",
+    "маршруты NekoBox"
+  ],
+  "verdict_text": "проблемные адреса: 203.0.113.0/24",
+  "warnings": []
+}

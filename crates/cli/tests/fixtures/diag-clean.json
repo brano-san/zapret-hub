@@ -1,0 +1,118 @@
+{
+  "budget_hit": false,
+  "canceled": false,
+  "explanations": [
+    "системная проверка, внимание: включён системный прокси (127.0.0.1:18082)"
+  ],
+  "fixes": [],
+  "groups": [],
+  "id": "2026-10-24_18-38-46",
+  "patterns": [],
+  "profile": "Discord",
+  "rollback_error": null,
+  "sources_missing": [
+    "журнал NekoBox",
+    "маршруты NekoBox"
+  ],
+  "stopped": false,
+  "system_checks": [
+    {
+      "action": null,
+      "detail": "",
+      "id": "Bfe",
+      "level": "Ok"
+    },
+    {
+      "action": null,
+      "detail": "127.0.0.1:18082",
+      "id": "Proxy",
+      "level": "Warn"
+    },
+    {
+      "action": null,
+      "detail": "",
+      "id": "TcpTimestamps",
+      "level": "Ok"
+    },
+    {
+      "action": null,
+      "detail": "",
+      "id": "Adguard",
+      "level": "Ok"
+    },
+    {
+      "action": null,
+      "detail": "",
+      "id": "Killer",
+      "level": "Ok"
+    },
+    {
+      "action": null,
+      "detail": "",
+      "id": "IntelConnectivity",
+      "level": "Ok"
+    },
+    {
+      "action": null,
+      "detail": "",
+      "id": "CheckPoint",
+      "level": "Ok"
+    },
+    {
+      "action": null,
+      "detail": "",
+      "id": "SmartByte",
+      "level": "Ok"
+    },
+    {
+      "action": null,
+      "detail": "",
+      "id": "CyrillicPath",
+      "level": "Ok"
+    },
+    {
+      "action": null,
+      "detail": "",
+      "id": "OneDrive",
+      "level": "Ok"
+    },
+    {
+      "action": null,
+      "detail": "",
+      "id": "WinDivertSys",
+      "level": "Ok"
+    },
+    {
+      "action": null,
+      "detail": "",
+      "id": "Vpn",
+      "level": "Ok"
+    },
+    {
+      "action": null,
+      "detail": "",
+      "id": "SecureDns",
+      "level": "Ok"
+    },
+    {
+      "action": null,
+      "detail": "",
+      "id": "HostsYoutube",
+      "level": "Ok"
+    },
+    {
+      "action": null,
+      "detail": "",
+      "id": "WinDivertOrphan",
+      "level": "Ok"
+    },
+    {
+      "action": null,
+      "detail": "",
+      "id": "Conflicts",
+      "level": "Ok"
+    }
+  ],
+  "verdict_text": "соединения программы проходят; если проблема есть, она не в сети",
+  "warnings": []
+}
