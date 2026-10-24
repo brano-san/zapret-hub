@@ -423,6 +423,15 @@ export const S = {
       HostsYoutube: "YouTube в hosts",
       WinDivertOrphan: "WinDivert без winws",
       Conflicts: "Другие обходы блокировок",
+      ServiceState: "Служба zapret2",
+      Nfqws2Binary: "Файл nfqws2",
+      Nfqws2Caps: "Права nfqws2",
+      FakeBins: "Фейки .bin",
+      Lists: "Списки доменов",
+      NfQueue: "Очередь NFQUEUE 200",
+      NftTable: "Таблица nftables",
+      ForeignEngines: "Посторонние nfqws",
+      ForeignTables: "Чужие таблицы nftables",
     } satisfies Record<CheckId, string>,
     hints: {
       Bfe: "Служба не запущена, а без неё zapret не работает.",
@@ -441,6 +450,15 @@ export const S = {
       HostsYoutube: "В hosts есть записи youtube.com или youtu.be: они могут мешать YouTube.",
       WinDivertOrphan: "winws не запущен, а служба WinDivert работает: её держит другой обход или остаток прошлого запуска.",
       Conflicts: "Найдены службы других обходов: они делят WinDivert с zapret2. Служба zapret — это Flowseal, приложение с ним больше не работает. «Удалить службы» удалит их.",
+      ServiceState: "Служба zapret2 установлена, но не работает: посмотрите её журнал (journalctl -u zapret2) и примените стратегию снова.",
+      Nfqws2Binary: "В папке zapret2 нет nfqws2: скачайте релиз zapret2 для Linux заново.",
+      Nfqws2Caps: "nfqws2 не исполняемый или без cap_net_admin и cap_net_raw: тесты не смогут его запустить. «Выдать права» сделает chmod и setcap.",
+      FakeBins: "Пустой фейк стратегия отправит пустым пакетом: удалите эти файлы, хаб запишет их заново.",
+      Lists: "Без доменов в list-general.txt и list-google.txt стратегии ничего не обходят по имени.",
+      NfQueue: "Служба работает, но nfqws2 не открыл очередь 200: посмотрите журнал службы.",
+      NftTable: "Без таблицы inet zapret_hub пакеты не попадают в nfqws2: перезапустите службу, она применяет таблицу при старте.",
+      ForeignEngines: "Посторонний nfqws или tpws забирает пакеты вместе с zapret2: остановите его или его службу.",
+      ForeignTables: "Таблица nftables другого обхода фильтрует трафик вместе с хабом: удалите её или остановите программу, которая её создала.",
     } satisfies Record<CheckId, string>,
     /** The issues `service.bat` links to. */
     links: {
@@ -452,6 +470,7 @@ export const S = {
       EnableTcpTimestamps: "Включить",
       RemoveWinDivert: "Удалить WinDivert",
       RemoveConflicts: "Удалить службы",
+      GrantCapabilities: "Выдать права",
     } satisfies Record<CheckAction, string>,
     confirm: (action: CheckAction, detail: string) =>
       action === "RemoveConflicts"

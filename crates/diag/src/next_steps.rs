@@ -28,6 +28,7 @@ fn check_cli(action: CheckAction) -> String {
         CheckAction::EnableTcpTimestamps => ("enable-tcp-timestamps", ""),
         CheckAction::RemoveWinDivert => ("remove-windivert", " --yes"),
         CheckAction::RemoveConflicts => ("remove-conflicts", " --yes"),
+        CheckAction::GrantCapabilities => ("grant-capabilities", ""),
     };
     format!("zapret-hub-cli checks fix {name}{yes}")
 }

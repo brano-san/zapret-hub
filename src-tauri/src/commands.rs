@@ -408,7 +408,9 @@ pub fn checks_now(state: &AppState) -> anyhow::Result<Vec<SystemCheck>> {
 #[specta::specta]
 pub async fn fix_check(handle: AppHandle, action: CheckAction) -> Answer<()> {
     blocking(move || {
-        let fix = || app(&handle).in_turn(|| zapret::checks::fix(action));
+        let dir = app(&handle).settings().zapret2_dir;
+        let fix =
+            || app(&handle).in_turn(|| zapret::checks::fix(action, dir.as_deref().map(Path::new)));
         let done = if action == CheckAction::RemoveWinDivert {
             routing::paused(&handle, fix)
         } else {

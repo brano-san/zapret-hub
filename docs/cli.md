@@ -114,7 +114,7 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `hosts plan` | что изменит запись блока в `hosts`; ничего не пишет | `hosts_plan` |
 | `hosts apply --yes` | пишет блок zapret-hub в `hosts` | `apply_hosts` |
 | `checks` | диагностика `service.bat` Flowseal: конфликты, WinDivert, TCP timestamps и т. п. | `system_checks` |
-| `checks fix <action>` | исправление: `enable-tcp-timestamps`; `remove-windivert` и `remove-conflicts` — с `--yes` | `fix_check` |
+| `checks fix <action>` | исправление: `enable-tcp-timestamps`, `grant-capabilities` (Linux: chmod и setcap для nfqws2); `remove-windivert` и `remove-conflicts` — с `--yes` | `fix_check` |
 | `discord clear-cache --yes` | закрывает Discord и чистит его кэш | `clear_discord_cache` |
 | `service remove --yes` | удаляет службу zapret2 (и службу zapret Flowseal, если осталась) и WinDivert | `remove_service` |
 | `router on\|off` | включает или выключает маршрутизацию; пишет `router_enabled` | `set_router_enabled` |

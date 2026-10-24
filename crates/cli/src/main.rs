@@ -444,6 +444,8 @@ enum Fix {
     EnableTcpTimestamps,
     RemoveWindivert,
     RemoveConflicts,
+    /// Linux: nfqws2 executable, with its network capabilities.
+    GrantCapabilities,
 }
 
 impl From<Fix> for CheckAction {
@@ -452,6 +454,7 @@ impl From<Fix> for CheckAction {
             Fix::EnableTcpTimestamps => Self::EnableTcpTimestamps,
             Fix::RemoveWindivert => Self::RemoveWinDivert,
             Fix::RemoveConflicts => Self::RemoveConflicts,
+            Fix::GrantCapabilities => Self::GrantCapabilities,
         }
     }
 }

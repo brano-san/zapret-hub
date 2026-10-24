@@ -200,9 +200,36 @@ export type Candidates = {
 	proxies: string[],
 };
 
-export type CheckAction = "EnableTcpTimestamps" | "RemoveWinDivert" | "RemoveConflicts";
+export type CheckAction = "EnableTcpTimestamps" | "RemoveWinDivert" | "RemoveConflicts" | 
+/**  Linux: `nfqws2` made executable and given its network capabilities (`setcap`, as root). */
+"GrantCapabilities";
 
-export type CheckId = "Bfe" | "Proxy" | "TcpTimestamps" | "Adguard" | "Killer" | "IntelConnectivity" | "CheckPoint" | "SmartByte" | "CyrillicPath" | "OneDrive" | "WinDivertSys" | "Vpn" | "SecureDns" | "HostsYoutube" | "WinDivertOrphan" | "Conflicts";
+/**
+ *  One list for both systems, so a report names a check the same way everywhere; each system runs
+ *  its own part of it.
+ */
+export type CheckId = "Bfe" | "Proxy" | "Adguard" | "Killer" | "IntelConnectivity" | "CheckPoint" | "SmartByte" | "CyrillicPath" | "OneDrive" | "WinDivertSys" | "SecureDns" | "WinDivertOrphan" | "TcpTimestamps" | "Vpn" | "HostsYoutube" | "Conflicts" | 
+/**  The `zapret2` unit is installed but not running. */
+"ServiceState" | 
+/**  No `nfqws2` in the zapret2 folder. */
+"Nfqws2Binary" | 
+/**
+ *  `nfqws2` is not executable or lacks `cap_net_admin`/`cap_net_raw` (the tests run it as the
+ *  user; the service gets them from its unit).
+ */
+"Nfqws2Caps" | 
+/**  A fake `.bin` of the `bin` folder is empty: a strategy would send an empty packet. */
+"FakeBins" | 
+/**  A general list is missing or empty: the strategies would match nothing by name. */
+"Lists" | 
+/**  The service runs, but nothing holds queue 200. */
+"NfQueue" | 
+/**  The service runs, but the `inet zapret_hub` table or its guards are missing. */
+"NftTable" | 
+/**  An engine process the service does not own takes packets too. */
+"ForeignEngines" | 
+/**  Another tool's zapret nftables table filters traffic too. */
+"ForeignTables";
 
 export type CheckKind = "Http" | "Tls12" | "Tls13";
 

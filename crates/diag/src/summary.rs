@@ -512,6 +512,15 @@ fn check_text(id: CheckId) -> &'static str {
         CheckId::HostsYoutube => "в hosts есть записи YouTube",
         CheckId::WinDivertOrphan => "служба WinDivert работает без winws",
         CheckId::Conflicts => "установлены службы других обходов",
+        CheckId::ServiceState => "служба zapret2 установлена, но не работает",
+        CheckId::Nfqws2Binary => "в папке zapret2 нет nfqws2",
+        CheckId::Nfqws2Caps => "у nfqws2 нет права запуска или сетевых capabilities",
+        CheckId::FakeBins => "в папке bin есть пустые фейки .bin",
+        CheckId::Lists => "общие списки доменов пусты или отсутствуют",
+        CheckId::NfQueue => "служба работает, но очередь 200 никто не держит",
+        CheckId::NftTable => "таблица nftables inet zapret_hub не применена или неполна",
+        CheckId::ForeignEngines => "запущен посторонний nfqws, он забирает пакеты",
+        CheckId::ForeignTables => "чужая таблица nftables zapret фильтрует трафик",
     }
 }
 

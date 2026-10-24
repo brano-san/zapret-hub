@@ -27,6 +27,7 @@ fn a_service_matches_when_one_line_has_every_word() {
     assert!(matching_services(&services, &["vpn"]).is_empty());
 }
 
+#[cfg(windows)]
 #[test]
 fn flowseals_service_is_a_conflict_and_zapret2_never_is() {
     let installed = |names: &'static [&'static str]| move |name: &str| names.contains(&name);
@@ -37,6 +38,14 @@ fn flowseals_service_is_a_conflict_and_zapret2_never_is() {
         conflicts(installed(&["zapret2", "winws2", "zapret", "GoodbyeDPI"])),
         ["GoodbyeDPI", "winws2", "zapret"]
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn zaprets_own_unit_is_a_conflict_and_zapret2_never_is() {
+    let installed = |names: &'static [&'static str]| move |name: &str| names.contains(&name);
+    assert!(conflicts(installed(&["zapret2"])).is_empty());
+    assert_eq!(conflicts(installed(&["zapret", "zapret2"])), ["zapret"]);
 }
 
 #[test]
@@ -88,7 +97,7 @@ fn discord_cache_is_cleared_for_installed_builds_only() {
         asked.push(image.to_owned());
         false
     });
-    assert_eq!(asked, ["Discord.exe"]);
+    assert_eq!(asked, [zapret::discord_cache::INSTALLS[0].0]);
     assert_eq!(reports.len(), 1);
     assert_eq!(reports[0].install, "Discord");
     let outcomes: Vec<CacheOutcome> = reports[0].dirs.iter().map(|d| d.outcome).collect();
@@ -103,6 +112,7 @@ fn discord_cache_is_cleared_for_installed_builds_only() {
     assert!(!discord.join("Cache").exists());
 }
 
+#[cfg(windows)]
 #[test]
 #[ignore = "reads this machine's services and registry"]
 fn live_checks_of_this_machine() {
