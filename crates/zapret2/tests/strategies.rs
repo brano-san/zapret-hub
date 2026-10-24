@@ -517,3 +517,21 @@ fn a_flowseal_strategy_maps_to_its_built_in_copy_or_general() {
         "zapret2:general"
     );
 }
+
+/// Discord voice: its media ports past 50100 and its STUN range, in every built-in strategy.
+#[test]
+fn every_built_in_strategy_takes_discord_voice_ports() {
+    let data = tempfile::tempdir().unwrap();
+    for strategy in strategies::list(data.path()).unwrap() {
+        if !strategy.builtin {
+            continue;
+        }
+        let args = args(&strategy.text);
+        assert!(!args.contains("50000-50100"), "{}", strategy.name);
+        assert!(
+            args.contains("19294-19344,50000-65535"),
+            "{}: {args}",
+            strategy.name
+        );
+    }
+}

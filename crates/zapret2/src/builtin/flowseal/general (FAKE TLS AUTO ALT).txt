@@ -16,7 +16,7 @@
 # The ipset-all TCP profile has no --filter-l7, as in the .bat: other traffic to those addresses stays
 # in it with no action instead of falling through to the games profile (nfqws1 profile semantics).
 --wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP%
---wf-udp-out=443,19294-19344,50000-50100,%GameFilterUDP%
+--wf-udp-out=443,19294-19344,50000-65535,%GameFilterUDP%
 --lua-init=@"%LUA%zapret-lib.lua" --lua-init=@"%LUA%zapret-antidpi.lua"
 --blob=quic_google:@"%BIN%quic_initial_www_google_com.bin"
 --blob=tls_max:@"%BIN%tls_clienthello_max_ru.bin"
@@ -32,7 +32,7 @@
 --new
 
 # Discord voice
---filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun
+--filter-udp=19294-19344,50000-65535 --filter-l7=discord,stun
 --payload=discord_ip_discovery,stun --lua-desync=fake:blob=discord_udp:repeats=6
 --new
 

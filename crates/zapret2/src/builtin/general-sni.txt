@@ -4,7 +4,7 @@
 # From the Windows example in zapret2's docs/readme.md (https://github.com/bol-van/zapret2,
 # MIT License, Copyright (c) 2016-2026 bol-van), on Flowseal's lists and fakes.
 --wf-tcp-out=80,443
---wf-udp-out=443,19294-19344,50000-50100
+--wf-udp-out=443,19294-19344,50000-65535
 --lua-init=@"%LUA%zapret-lib.lua"
 --lua-init=@"%LUA%zapret-antidpi.lua"
 --lua-init="fake_default_tls = tls_mod(fake_default_tls,'rnd,rndsni')"
@@ -50,7 +50,7 @@
 --new
 
 # Discord voice
---filter-udp=19294-19344,50000-50100 --filter-l7=wireguard,stun,discord
+--filter-udp=19294-19344,50000-65535 --filter-l7=wireguard,stun,discord
 --payload=wireguard_initiation,wireguard_cookie,stun,discord_ip_discovery
 --lua-desync=fake:blob=0x00000000000000000000000000000000:repeats=2
 --new
