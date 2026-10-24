@@ -1,0 +1,6 @@
+[2026-10-23 10:24:10] [Connecting, 4, 7] [U:1:111] Connect() starting connection (eNetQOSLevelHigh, cmp1-sto1.steamserver.net:27018, WebSocket)
+[2026-10-23 10:24:16] [Connecting, 4, 0] [U:1:111] ConnectFailed('Connection Failed':0) (0.0.0.0:0, WebSocket)
+[2026-10-24 10:24:15] CCMInterface::FailDueToNoHearbeatResponse -- Disconnecting connection and attempting reconnect
+[2026-10-24 10:24:16] GetCMListForConnect -- web API call failed (status = 0)
+[2026-10-24 10:24:16] [Connecting, 4, 0] [U:1:111] ConnectFailed('Connection Failed':0) (0.0.0.0:0, WebSocket)
+[2026-10-24 10:24:31] [Logged On, 4, 15] [U:1:111] RecvMsgClientLogOnResponse() : processing complete

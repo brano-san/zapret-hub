@@ -33,6 +33,7 @@ use crate::state::{AppState, DiagEnds};
 use crate::{notify, routing, texts, window};
 
 mod apply;
+mod client;
 mod context;
 mod evidence;
 
@@ -355,6 +356,7 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
         exec::LocalTime::now().stamp(),
         observe_secs,
     );
+    client::fill(&mut summary, &ctx, &marks, &verdict);
     context::fill(
         &state,
         &ctx,

@@ -1,0 +1,3 @@
+[2026-10-20 18:20:00.000000 +03:00] INFO [updater_client::install]: Update to latest complete.
+[2026-10-20 18:28:55.818393 +03:00] ERROR [updater_client]: Failed 0: Other(Reqwest(reqwest::Error { kind: Request, url: Url { scheme: "https", cannot_be_a_base: false, username: "", password: None, host: Some(Domain("updates.discord.com")), port: None, path: "/distributions/app/manifests/latest" }, source: hyper_util::client::legacy::Error(Connect, Os { code: 10054 }) }))
+[2026-10-20 18:28:56.000000 +03:00] INFO [updater_client::install]: Retrying.

@@ -179,6 +179,8 @@ export type AgentView = {
 	changes: Fact[],
 	/**  Exact CLI commands or `ask_user: …` lines, in order. */
 	next_steps: string[],
+	/**  Culprit groups by the client connection they belong to; Discord only. */
+	culprit_kinds: CulpritKind[],
 };
 
 /**  A strategy's profiles and what is wrong with its circular ones. */
@@ -327,6 +329,14 @@ export type Coverage = {
 	game_filter_covers: boolean | null,
 	/**  Age of the list that should cover it, in days. */
 	list_age_days: number | null,
+};
+
+/**  Which of the client's connections a culprit group carries (proposal 3, Go Live). */
+export type CulpritKind = {
+	/**  The culprit group's key. */
+	key: string,
+	/**  `voice`, `stream`, `other`. */
+	kind: string,
 };
 
 export type CustomStrategy = {

@@ -1,0 +1,4 @@
+[23976:24020:1023/154132.223:ERROR:ssl_client_socket_impl.cc(878)] handshake failed; returned -1, SSL error code 1, net_error -101
+[23976:24020:1024/154132.223:ERROR:ssl_client_socket_impl.cc(878)] handshake failed; returned -1, SSL error code 1, net_error -101
+[1024/154133.100:ERROR:ssl_client_socket_impl.cc(878)] handshake failed; returned -1, SSL error code 1, net_error -100
+[32064:32504:1024/154143.324:ERROR:ffmpeg_common.cc(959)] Unsupported pixel format: -1

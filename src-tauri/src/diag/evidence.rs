@@ -26,6 +26,8 @@ pub(super) struct Marks {
     neko: Option<PathBuf>,
     neko_at: u64,
     discord: Vec<(PathBuf, u64)>,
+    /// `discord-webrtc_0` and `_1` of each Discord; a file not there yet is marked at 0.
+    pub(super) webrtc: Vec<(PathBuf, u64)>,
 }
 
 impl Marks {
@@ -42,6 +44,7 @@ impl Marks {
                     (p, at)
                 })
                 .collect(),
+            webrtc: super::client::webrtc_marks(),
         }
     }
 }
@@ -89,7 +92,7 @@ fn neko_routes(dir: &Path) -> PathBuf {
 }
 
 /// Seconds since local midnight, as Discord stamps its log.
-fn wall_secs() -> f64 {
+pub(super) fn wall_secs() -> f64 {
     let t = exec::LocalTime::now();
     f64::from(t.hour) * 3600.0 + f64::from(t.minute) * 60.0 + f64::from(t.second)
 }

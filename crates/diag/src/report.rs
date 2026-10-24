@@ -97,6 +97,12 @@ pub fn fill_defaults(report: &mut Value) -> anyhow::Result<()> {
         }
     }
     fill(report, serde_json::to_value(Summary::default())?);
+    if let Some(agent) = report.get_mut("agent") {
+        fill(
+            agent,
+            serde_json::to_value(crate::agent::AgentView::default())?,
+        );
+    }
     let summary = serde_json::to_value(GroupSummary::default())?;
     let group = serde_json::to_value(Group::default())?;
     let flow = serde_json::to_value(FlowCounters::default())?;
