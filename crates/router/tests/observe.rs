@@ -184,9 +184,53 @@ fn udp_silent_windows() {
     }
     let row = only(&t);
     assert_eq!(row.protocol, Protocol::Udp);
-    assert_eq!((row.udp_windows, row.udp_silent_windows), (5, 3), "{row:?}");
+    // Never longer than 6 s without a reply: no window counts as silent.
+    assert_eq!((row.udp_windows, row.udp_silent_windows), (5, 0), "{row:?}");
     assert_eq!(row.udp_first_reply_ms, Some(3030));
     assert_eq!((row.up_packets, row.down_packets), (20, 2));
+}
+
+/// 1 s windows of 4 packets out; a reply in the windows `reply` picks.
+fn udp_run(windows: u64, reply: impl Fn(u64) -> bool) -> FlowCounters {
+    let start = Instant::now();
+    let server = SocketAddrV4::new(Ipv4Addr::new(35, 217, 1, 1), 50001);
+    let mut t = Tally::new(None);
+    for w in 0..windows {
+        let now = start + Duration::from_secs(w);
+        for i in 0..4 {
+            t.outbound(&build_udp(ME, server, b"ping", i), now);
+        }
+        if reply(w) {
+            t.inbound(
+                &build_udp(server, ME, b"pong", 0),
+                now + Duration::from_millis(30),
+            );
+        }
+        t.tick(now + Duration::from_millis(1000));
+    }
+    only(&t)
+}
+
+#[test]
+fn a_quiet_one_sided_flow_is_not_lossy() {
+    // Discord voice alone: audio goes out, only the 5 s ping replies come back.
+    let row = udp_run(20, |w| w % 5 == 0);
+    assert_eq!(
+        (row.udp_windows, row.udp_silent_windows),
+        (20, 0),
+        "{row:?}"
+    );
+}
+
+#[test]
+fn replies_that_stop_make_silent_windows() {
+    // Replies until 4.03 s; windows starting 6 s after that are silent: 11..=14.
+    let row = udp_run(15, |w| w < 5);
+    assert_eq!(
+        (row.udp_windows, row.udp_silent_windows),
+        (15, 4),
+        "{row:?}"
+    );
 }
 
 /// A TLS 1.2-style ClientHello carrying `name` in its server_name extension.
@@ -372,7 +416,8 @@ fn finishing_closes_the_open_udp_window() {
     assert_eq!(only(&t).udp_windows, 0);
     t.finish(now + Duration::from_millis(300));
     let row = only(&t);
-    assert_eq!((row.udp_windows, row.udp_silent_windows), (1, 1));
+    // Too short to count as silent.
+    assert_eq!((row.udp_windows, row.udp_silent_windows), (1, 0));
 }
 
 #[test]

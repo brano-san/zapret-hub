@@ -41,6 +41,7 @@ fn ctx(proxy_ok: bool) -> Ctx {
     Ctx {
         proxy_set: true,
         proxy_ok,
+        proxy_udp: None,
         ranking: vec!["A".into(), "B".into(), "C".into()],
         strategies: vec![
             ("A".into(), "--filter-tcp=443 --dpi-desync=fake".into()),
@@ -198,6 +199,31 @@ fn proxy_paths_skipped_when_proxy_down() {
         PathKind::ProxyPoint { .. } | PathKind::ProxyNoZapret { .. }
     )));
     assert!(skipped.iter().any(|s| s.contains("прокси не отвечает")));
+}
+
+#[test]
+fn proxy_paths_skipped_for_udp_when_proxy_has_no_udp() {
+    let c = Ctx {
+        proxy_udp: Some(false),
+        ..ctx(true)
+    };
+    let proxied = |paths: &[PathKind]| {
+        paths.iter().any(|p| {
+            matches!(
+                p,
+                PathKind::ProxyPoint { .. } | PathKind::ProxyNoZapret { .. }
+            )
+        })
+    };
+    let (paths, skipped) = plan(&group(Protocol::Udp, 50001), &c);
+    assert!(!proxied(&paths));
+    assert!(
+        skipped
+            .iter()
+            .any(|s| s.ends_with("прокси не пропускает UDP"))
+    );
+    // TCP still goes through it.
+    assert!(proxied(&plan(&group(Protocol::Tcp, 443), &c).0));
 }
 
 #[test]

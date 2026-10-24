@@ -53,7 +53,9 @@ pub struct FlowCounters {
     pub udp_first_reply_ms: Option<u32>,
     /// Closed 1 s windows with packets.
     pub udp_windows: u32,
-    /// Windows with packets out and none back.
+    /// Windows with packets out and nothing back for `UDP_REPLY_GAP` before them: the program's
+    /// periodic requests went unanswered. A quiet one-sided flow (Discord voice alone gets only
+    /// its 5 s ping replies back) has none.
     pub udp_silent_windows: u32,
     pub rtt_ms: Vec<u32>,
 }
@@ -61,6 +63,8 @@ pub struct FlowCounters {
 const RESPONSE_WINDOW: u64 = 4096;
 const RETRANS_WINDOW: u32 = 32_768;
 const UDP_WINDOW: Duration = Duration::from_secs(1);
+/// Discord pings its voice server every 5 s: longer than this with no reply is loss.
+const UDP_REPLY_GAP: Duration = Duration::from_secs(6);
 /// A ClientHello longer than this (or not one) gives no SNI.
 const HELLO_MAX: usize = 16_384;
 const MAX_RTT_SAMPLES: usize = 256;
@@ -84,6 +88,7 @@ struct Flow {
     hello: Vec<u8>,
     named: bool,
     first_up: Option<Instant>,
+    last_down: Option<Instant>,
     /// (start, packets out, packets back) of the open UDP window.
     window: Option<(Instant, u32, u32)>,
 }
@@ -281,7 +286,8 @@ impl Flow {
         {
             let c = &mut self.c;
             c.udp_windows += 1;
-            if up > 0 && down == 0 {
+            let since = self.last_down.or(self.first_up).unwrap_or(start);
+            if up > 0 && down == 0 && start.duration_since(since) >= UDP_REPLY_GAP {
                 c.udp_silent_windows += 1;
             }
             self.window = None;
@@ -296,6 +302,7 @@ impl Flow {
             self.first_up.get_or_insert(now);
         } else {
             w.2 += 1;
+            self.last_down = Some(now);
             let c = &mut self.c;
             if c.udp_first_reply_ms.is_none()
                 && let Some(at) = self.first_up

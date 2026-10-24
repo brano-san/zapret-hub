@@ -30,7 +30,7 @@ pub(super) struct Marks {
 
 impl Marks {
     pub(super) fn now(settings: &crate::settings::Settings) -> Self {
-        let neko = nekobox_dir(settings.nekobox_dir.as_deref());
+        let neko = nekobox_dir(settings.nekobox_dir.as_deref(), settings.socks5.as_deref());
         let log = neko.as_deref().map(neko_log);
         Marks {
             neko_at: log.as_deref().and_then(logs::size).unwrap_or(0),
@@ -46,8 +46,9 @@ impl Marks {
     }
 }
 
-/// The setting, else the folder of a running `nekobox.exe` or `nekobox_core.exe`.
-fn nekobox_dir(setting: Option<&str>) -> Option<PathBuf> {
+/// The setting, else the folder of a running `nekobox.exe` or `nekobox_core.exe`, else NekoBox's
+/// folder of whatever listens on the proxy's port (Throne, nekoray, other builds).
+fn nekobox_dir(setting: Option<&str>, socks5: Option<&str>) -> Option<PathBuf> {
     if let Some(dir) = setting {
         return Some(PathBuf::from(dir));
     }
@@ -55,6 +56,20 @@ fn nekobox_dir(setting: Option<&str>) -> Option<PathBuf> {
         .into_iter()
         .flat_map(zapret::procs::find)
         .find_map(|p| p.exe?.parent().map(Path::to_path_buf))
+        .or_else(|| {
+            let port = router::parse_proxy(socks5).ok()?.port();
+            let pid = router::owner::listener_pid(port)?;
+            neko_root(Path::new(&router::owner::image_path(pid)?))
+        })
+}
+
+/// The folder of `exe` or its parent, whichever has NekoBox's `config` (a core may sit one deeper).
+fn neko_root(exe: &Path) -> Option<PathBuf> {
+    exe.ancestors()
+        .skip(1)
+        .take(2)
+        .find(|dir| dir.join("config").join("groups").is_dir())
+        .map(Path::to_path_buf)
 }
 
 fn neko_log(dir: &Path) -> PathBuf {
@@ -233,4 +248,20 @@ pub(super) fn evidence(
         },
         missing,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::neko_root;
+
+    #[test]
+    fn nekobox_folder_from_the_listener_image() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("config").join("groups")).unwrap();
+        let root = dir.path().to_path_buf();
+        assert_eq!(neko_root(&root.join("Throne.exe")), Some(root.clone()));
+        assert_eq!(neko_root(&root.join("core").join("Core.exe")), Some(root));
+        let other = tempfile::tempdir().unwrap();
+        assert_eq!(neko_root(&other.path().join("app.exe")), None);
+    }
 }

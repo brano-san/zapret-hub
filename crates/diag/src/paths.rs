@@ -14,6 +14,7 @@ const PROXY_POINT: &str = "Прокси точечно";
 const PROXY_NO_ZAPRET: &str = "Прокси без zapret";
 pub(crate) const PROXY_SILENT: &str = "прокси не отвечает";
 pub(crate) const PROXY_UNSET: &str = "прокси не задан в настройках";
+pub(crate) const PROXY_NO_UDP: &str = "прокси не пропускает UDP";
 
 pub const NO_TRICKS_FOR_SYN: &str = "приёмы zapret2 не проверяются: сервер не отвечает на SYN";
 
@@ -71,6 +72,8 @@ pub struct Ctx {
     pub proxy_set: bool,
     /// ... and answers.
     pub proxy_ok: bool,
+    /// ... and carries UDP (`probe::socks::relays_udp`); `None`: not checked.
+    pub proxy_udp: Option<bool>,
     /// Strategy full names, by the last test ranking.
     pub ranking: Vec<String>,
     /// (full name, args for `strategy_covers`).
@@ -172,12 +175,15 @@ pub fn routed_note(rule: &str) -> String {
 pub fn plan(group: &Group, ctx: &Ctx) -> (Vec<PathKind>, Vec<String>) {
     let mut paths = vec![PathKind::Current, PathKind::Direct];
     let mut skipped = vec![];
-    if ctx.proxy_ok {
+    let no_udp = group.protocol == Protocol::Udp && ctx.proxy_udp == Some(false);
+    if ctx.proxy_ok && !no_udp {
         let rule = point_rule(group, ctx);
         paths.push(PathKind::ProxyPoint { rule: rule.clone() });
         paths.push(PathKind::ProxyNoZapret { rule });
     } else {
-        let why = if ctx.proxy_set {
+        let why = if no_udp {
+            PROXY_NO_UDP
+        } else if ctx.proxy_set {
             PROXY_SILENT
         } else {
             PROXY_UNSET

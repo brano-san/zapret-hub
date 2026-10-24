@@ -50,3 +50,61 @@ fn reads_the_nekobox_port() {
         None
     );
 }
+
+/// A SOCKS5 proxy that answers `UDP ASSOCIATE` with `code`; its relay answers DNS when `answer`.
+fn udp_proxy(code: u8, answer: bool) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let relay = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = relay.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut hello = [0u8; 3];
+        stream.read_exact(&mut hello).unwrap();
+        stream.write_all(&[5, 0]).unwrap();
+        let mut request = [0u8; 10];
+        stream.read_exact(&mut request).unwrap();
+        assert_eq!(request[1], 3, "UDP ASSOCIATE");
+        let [hi, lo] = port.to_be_bytes();
+        // Bound to 0.0.0.0: the client uses the proxy's own address.
+        stream
+            .write_all(&[5, code, 0, 1, 0, 0, 0, 0, hi, lo])
+            .unwrap();
+        let mut buf = [0u8; 1500];
+        relay
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        if let Ok((n, from)) = relay.recv_from(&mut buf)
+            && answer
+        {
+            assert_eq!(buf[..10], [0, 0, 0, 1, 1, 1, 1, 1, 0, 53]);
+            buf[12] |= 0x80;
+            relay.send_to(&buf[..n], from).unwrap();
+        }
+        // Keep the association until the client is done.
+        let _ = stream.read(&mut [0u8; 1]);
+    });
+    addr
+}
+
+#[test]
+fn a_proxy_that_relays_udp() {
+    let t = Duration::from_millis(500);
+    assert_eq!(probe::socks::relays_udp(&udp_proxy(0, true), t), Some(true));
+}
+
+#[test]
+fn a_proxy_without_udp() {
+    let t = Duration::from_millis(300);
+    // Refused: 07, command not supported.
+    assert_eq!(
+        probe::socks::relays_udp(&udp_proxy(7, false), t),
+        Some(false)
+    );
+    // Accepted, but nothing comes back through the relay.
+    assert_eq!(
+        probe::socks::relays_udp(&udp_proxy(0, false), t),
+        Some(false)
+    );
+    assert_eq!(probe::socks::relays_udp("127.0.0.1:1", t), None);
+}

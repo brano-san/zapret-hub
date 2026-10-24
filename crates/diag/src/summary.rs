@@ -8,12 +8,12 @@ use zapret::custom::quoted_tokens;
 use crate::circular_store::{Trick, is_filter};
 use crate::culprits::{Fault, Group, Verdict};
 use crate::evaluate::{Score, works};
-use crate::paths::{Ctx, PROXY_SILENT, PROXY_UNSET, PathKind, protocol_text};
+use crate::paths::{Ctx, PROXY_NO_UDP, PROXY_SILENT, PROXY_UNSET, PathKind, protocol_text};
 use crate::patterns::{Pattern, unique};
 use crate::profiles::ProbeKind;
 use crate::run::{GroupResult, Outcome};
 
-const WHITELIST: &str =
+pub(crate) const WHITELIST: &str =
     "провайдер пускает только в разрешённые сети; ни zapret, ни прокси это не обходят";
 const ONLY_PROXY: &str = "провайдер блокирует адрес; zapret не помогает; через прокси работает";
 const NOTHING: &str = "адрес недоступен ни одним путём, включая прокси: вероятно, проблема на стороне сервиса или прокси";
@@ -122,7 +122,7 @@ fn explain(gr: &GroupResult, best: Option<&PathKind>) -> String {
         let proxy_measured = gr.results.iter().any(|(p, s)| is_proxy(p) && measured(s));
         // Why the proxy paths were left out, if they were.
         let why = gr.skipped.iter().find_map(|s| {
-            [PROXY_SILENT, PROXY_UNSET]
+            [PROXY_SILENT, PROXY_UNSET, PROXY_NO_UDP]
                 .into_iter()
                 .find(|w| s.ends_with(w))
         });
@@ -282,7 +282,11 @@ fn fixes_for(gr: &GroupResult, best: &PathKind, ctx: &Ctx, id: &str, out: &mut V
 }
 
 /// Explanations and advice of the patterns other than R1 (its group explains it) and R5.
-fn pattern_texts(patterns: &[Pattern], explanations: &mut Vec<String>, fixes: &mut Vec<Fix>) {
+pub(crate) fn pattern_texts(
+    patterns: &[Pattern],
+    explanations: &mut Vec<String>,
+    fixes: &mut Vec<Fix>,
+) {
     let mut spoofed = vec![];
     for p in patterns {
         match p {
@@ -341,34 +345,18 @@ fn pattern_texts(patterns: &[Pattern], explanations: &mut Vec<String>, fixes: &m
             }
             Pattern::R4DnsSpoofed { domain } => spoofed.push(domain.as_str()),
             Pattern::R5Whitelist => {}
-            Pattern::R6DaveStalled {
-                alone,
-                direct,
-                ..
-            } => {
-                if *alone {
-                    explanations.push(
-                        "вы один в канале, а Discord не создал группу шифрования: сбой на нашей стороне"
-                            .into(),
-                    );
-                    push(
-                        fixes,
-                        Fix::Manual {
-                            text: "проверьте служебный канал голоса (*.discord.media) напрямую и через VPN".into(),
-                        },
-                    );
-                } else {
-                    explanations.push(
-                        "сеть в порядке: соединение с голосовым сервером есть, но собеседник не прислал ключи шифрования"
-                            .into(),
-                    );
-                    push(
-                        fixes,
-                        Fix::Manual {
-                            text: "пусть собеседник перезайдёт или перезапустит Discord; проверить себя — зайти в канал одному".into(),
-                        },
-                    );
-                }
+            // `alone` is never set now: alone, DAVE waits for a peer (`judge`).
+            Pattern::R6DaveStalled { direct, .. } => {
+                explanations.push(
+                    "сеть в порядке: соединение с голосовым сервером есть, но собеседник не прислал ключи шифрования"
+                        .into(),
+                );
+                push(
+                    fixes,
+                    Fix::Manual {
+                        text: "пусть собеседник перезайдёт или перезапустит Discord; проверить себя — зайти в канал одному".into(),
+                    },
+                );
                 if *direct {
                     push(
                         fixes,

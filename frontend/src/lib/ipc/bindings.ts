@@ -500,7 +500,11 @@ export type FlowCounters = {
 	udp_first_reply_ms: number | null,
 	/**  Closed 1 s windows with packets. */
 	udp_windows: number,
-	/**  Windows with packets out and none back. */
+	/**
+	 *  Windows with packets out and nothing back for `UDP_REPLY_GAP` before them: the program's
+	 *  periodic requests went unanswered. A quiet one-sided flow (Discord voice alone gets only
+	 *  its 5 s ping replies back) has none.
+	 */
 	udp_silent_windows: number,
 	rtt_ms: number[],
 };
@@ -1096,6 +1100,8 @@ export type VerdictCode =
 "culprits_partial" | 
 /**  Culprits, none fixed. */
 "culprits_unfixed" | 
+/**  Direct flows pass; what goes through the system proxy fails the way NekoBox sends it (Р1). */
+"proxy_broken" | 
 /**  The problem is on the other side (a peer, the service). */
 "peer_side" | 
 /**  A whitelist network (Р5). */

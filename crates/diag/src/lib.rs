@@ -6,6 +6,7 @@ pub mod cover;
 pub mod coverage;
 pub mod culprits;
 pub mod evaluate;
+pub mod judge;
 pub mod logs;
 pub mod next_steps;
 pub mod paths;

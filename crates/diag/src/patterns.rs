@@ -189,15 +189,17 @@ pub fn detect(evidence: &Evidence, outcome: &Outcome, ctx: &Ctx) -> Vec<Pattern>
     if evidence.ru_ok == Some(true) && evidence.foreign_syn_dead == Some(true) {
         out.push(Pattern::R5Whitelist);
     }
+    // Alone, DAVE waits for a second participant: normal, not a pattern (`judge` notes it).
     if let Some(v) = &evidence.voice
         && discord::stalled(v)
+        && !v.peers.is_empty()
     {
         let route = evidence
             .neko
             .as_ref()
             .and_then(|c| neko::route_of(c, "discord.media"));
         out.push(Pattern::R6DaveStalled {
-            alone: v.peers.is_empty(),
+            alone: false,
             direct: route == Some(Route::Direct),
             control_route: route.map(|r| route_text(&r)),
         });
