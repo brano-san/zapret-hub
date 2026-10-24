@@ -411,3 +411,58 @@ fn rule_less_flows_show_only_in_all_with_their_program() {
         "rule-less rows are capped"
     );
 }
+
+#[test]
+fn a_new_flow_takes_its_rule_and_the_proxy_decision() {
+    use router::rules::{Rule, Table};
+    let rule = |name: &str, ips: &[&str], apps: &[&str]| Rule {
+        name: name.into(),
+        enabled: true,
+        protocol: Protocol::Tcp,
+        ports: vec!["443".into()],
+        ips: ips.iter().map(|s| (*s).to_owned()).collect(),
+        domains: vec![],
+        apps: apps.iter().map(|s| (*s).to_owned()).collect(),
+    };
+    let table = Table::new(&[
+        rule("net", &["1.1.1.0/24"], &[]),
+        rule("app", &[], &["bash"]),
+    ]);
+    let to = |s: &str| s.parse().unwrap();
+    let down = Some(DirectReason::ProxyDown);
+    assert_eq!(
+        flows::route(&table, Protocol::Tcp, to("1.1.1.1:443"), None, None),
+        ("net", None)
+    );
+    assert_eq!(
+        flows::route(&table, Protocol::Tcp, to("1.1.1.1:443"), None, down.clone()),
+        ("net", down.clone())
+    );
+    assert_eq!(
+        flows::route(
+            &table,
+            Protocol::Tcp,
+            to("8.8.8.8:443"),
+            Some("/usr/bin/bash"),
+            None
+        ),
+        ("app", None)
+    );
+    // Caught for a program rule, another program: direct whatever the proxy does.
+    for decided in [None, down] {
+        assert_eq!(
+            flows::route(
+                &table,
+                Protocol::Tcp,
+                to("8.8.8.8:443"),
+                Some("/usr/bin/curl"),
+                decided
+            ),
+            ("", Some(DirectReason::NoRule))
+        );
+    }
+    assert_eq!(
+        flows::route(&table, Protocol::Udp, to("1.1.1.1:443"), None, None),
+        ("", Some(DirectReason::NoRule))
+    );
+}

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::divert::Address;
-use crate::rules::Protocol;
+use crate::rules::{Protocol, Table};
 use crate::socks::SocksError;
 
 pub const QUEUE: usize = 64;
@@ -135,6 +135,22 @@ pub fn decide(
         ProxyState::Down { .. } => Some(DirectReason::ProxyDown),
         ProxyState::AuthRequired => Some(DirectReason::AuthRequired),
         ProxyState::Unknown | ProxyState::Ok { .. } | ProxyState::NoUdp => None,
+    }
+}
+
+/// The rule a new flow falls under (`""`: none) and why it goes direct (`None`: through the
+/// proxy). A flow caught only for a program rule whose program it is not goes direct; else
+/// `decided` (from `decide`) says.
+pub fn route<'a>(
+    table: &'a Table,
+    protocol: Protocol,
+    dst: SocketAddrV4,
+    exe: Option<&str>,
+    decided: Option<DirectReason>,
+) -> (&'a str, Option<DirectReason>) {
+    match table.matches_flow(protocol, dst, exe) {
+        Some(rule) => (rule, decided),
+        None => ("", Some(DirectReason::NoRule)),
     }
 }
 
