@@ -1065,12 +1065,12 @@ fn read_rule(name: &str, file: &Path) -> Result<router::rules::Rule, Fail> {
 }
 
 /// `tests run` without names: every strategy that passes its check, in the list's order (spec 7.1),
-/// but not the built-in copies of Flowseal's: those run when named.
+/// the built-in copies of Flowseal's too: since Flowseal left they are the main set.
 fn runnable(rows: Value) -> Result<Vec<String>, Fail> {
     let rows: Vec<StrategyRow> = read(rows)?;
     Ok(rows
         .into_iter()
-        .filter(|row| row.error.is_none() && !row.flowseal_copy)
+        .filter(|row| row.error.is_none())
         .map(|row| row.name)
         .collect())
 }
@@ -2153,12 +2153,12 @@ mod tests {
     }
 
     #[test]
-    fn tests_run_without_names_takes_every_strategy_that_passes_except_flowseal_copies() {
+    fn tests_run_without_names_takes_every_strategy_that_passes() {
         let (outcome, asked) = drive(&["tests", "run"], vec![Ok(rows())]);
         assert_eq!(
             outcome,
             Ok(Done::Json(
-                json!({ "started": true, "suite": "standard", "strategies": 2, "repeats": 1 })
+                json!({ "started": true, "suite": "standard", "strategies": 3, "repeats": 1 })
             ))
         );
         assert_eq!(
@@ -2168,7 +2168,11 @@ mod tests {
                 Request::StartTests {
                     request: TestRequest {
                         suite: Suite::Standard,
-                        strategies: vec!["zapret2:general".into(), "zapret2:mine".into()],
+                        strategies: vec![
+                            "zapret2:general".into(),
+                            "zapret2:mine".into(),
+                            "zapret2:general (ALT11)".into(),
+                        ],
                         repeats: 1,
                     }
                 }

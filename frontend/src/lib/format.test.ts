@@ -36,9 +36,9 @@ describe("copyStem", () => {
 });
 
 describe("defaultTestable", () => {
-  it("leaves out broken strategies and the Flowseal copies", () => {
+  it("leaves out broken strategies, keeps the Flowseal copies", () => {
     const row = (name: string, error: string | null, flowseal_copy: boolean) => ({ name, error, flowseal_copy });
-    expect(defaultTestable([row("general", null, false), row("zapret2:general (ALT5)", null, true), row("bad", "oops", false), row("zapret2:mine", null, false)])).toEqual(["general", "zapret2:mine"]);
+    expect(defaultTestable([row("general", null, false), row("zapret2:general (ALT5)", null, true), row("bad", "oops", false), row("zapret2:mine", null, false)])).toEqual(["general", "zapret2:general (ALT5)", "zapret2:mine"]);
   });
 });
 

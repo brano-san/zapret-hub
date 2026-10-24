@@ -31,9 +31,9 @@ export function copyStem(name: string): string {
   return /\((.+)\)$/.exec(own)?.[1] ?? own;
 }
 
-/** What a test run takes without names: strategies that parse, without the built-in Flowseal copies (sub-project 8 spec 1). */
-export function defaultTestable(rows: { name: string; error: string | null; flowseal_copy: boolean }[]): string[] {
-  return rows.filter((row) => row.error === null && !row.flowseal_copy).map((row) => row.name);
+/** What a test run takes without names: strategies that parse. The built-in Flowseal copies count: since Flowseal left they are the main set. */
+export function defaultTestable(rows: { name: string; error: string | null }[]): string[] {
+  return rows.filter((row) => row.error === null).map((row) => row.name);
 }
 
 /** `"%LISTS%list-general.txt"` → `list-general.txt`. */
