@@ -139,9 +139,13 @@ fn dispatch(app: &AppHandle, request: Request) -> Result<Value, String> {
         Request::SetTgWsEnabled { enabled } => {
             json(block_on(commands::set_tg_ws_enabled(handle, enabled))?)
         }
-        Request::SaveTgWsConfig { port, secret, args } => json(block_on(
-            commands::save_tg_ws_config(handle, port, secret, args),
-        )?),
+        Request::SaveTgWsConfig { port, secret, args } => {
+            crate::tgws::check_pipe_args(&state.settings().tg_ws_args, &args)
+                .map_err(|err| err.to_string())?;
+            json(block_on(commands::save_tg_ws_config(
+                handle, port, secret, args,
+            ))?)
+        }
         Request::QuickCheck => json(block_on(commands::quick_check(handle))?),
         Request::SetRouterEnabled { enabled } => {
             json(block_on(commands::set_router_enabled(handle, enabled))?)

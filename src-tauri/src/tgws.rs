@@ -103,10 +103,33 @@ fn argv(bin: &Path, settings: &Settings) -> Vec<String> {
     argv
 }
 
-/// The latest release's tag and this system's asset URL, `None` when the release has no build
-/// for it. The URL must be a download of the same repository; nothing the answer carries
-/// becomes a command.
-fn select(json: &str) -> anyhow::Result<(String, Option<String>)> {
+/// Where the asset's SHA-256 comes from: the release's `SHA256SUMS` (its URL), else the
+/// `digest` GitHub computed for the asset.
+#[derive(Debug, PartialEq)]
+enum Sum {
+    File(String),
+    Digest(String),
+}
+
+/// A `sha256:<64 hex>` digest as lowercase hex.
+fn digest_hex(digest: &str) -> Option<String> {
+    let hex = digest.strip_prefix("sha256:")?;
+    (hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| hex.to_ascii_lowercase())
+}
+
+/// The asset's hash as `SHA256SUMS` lists it.
+fn listed(sums: &str) -> Option<String> {
+    zapret::release::parse_sums(sums)
+        .into_iter()
+        .find(|(_, path)| path.rsplit('/').next() == Some(ASSET))
+        .map(|(hash, _)| hash)
+}
+
+/// The latest release's tag and this system's asset URL with its checksum source, `None` when
+/// the release has no build for it. A build with no checksum is refused. Each URL must be a
+/// download of the same repository; nothing the answer carries becomes a command.
+fn select(json: &str) -> anyhow::Result<(String, Option<(String, Sum)>)> {
     let value: serde_json::Value =
         serde_json::from_str(json).context("GitHub answered with something other than JSON")?;
     let tag = value["tag_name"]
@@ -120,21 +143,35 @@ fn select(json: &str) -> anyhow::Result<(String, Option<String>)> {
                 .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)),
         "unexpected release tag {tag:?}"
     );
-    let url = value["assets"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|asset| asset["name"].as_str() == Some(ASSET))
-        .map(|asset| {
-            let url = asset["browser_download_url"].as_str().unwrap_or_default();
-            anyhow::ensure!(
-                url.starts_with(DOWNLOAD_PREFIX),
-                "{ASSET} points outside tg-ws-proxy-rs: {url}"
-            );
-            Ok(url.to_owned())
-        })
-        .transpose()?;
-    Ok((tag.to_owned(), url))
+    let asset = |name: &str| {
+        value["assets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|asset| asset["name"].as_str() == Some(name))
+    };
+    let url = |asset: &serde_json::Value| {
+        let url = asset["browser_download_url"].as_str().unwrap_or_default();
+        anyhow::ensure!(
+            url.starts_with(DOWNLOAD_PREFIX),
+            "{} points outside tg-ws-proxy-rs: {url}",
+            asset["name"].as_str().unwrap_or_default()
+        );
+        Ok(url.to_owned())
+    };
+    let Some(build) = asset(ASSET) else {
+        return Ok((tag.to_owned(), None));
+    };
+    let sum = match asset("SHA256SUMS") {
+        Some(sums) => Sum::File(url(sums)?),
+        None => Sum::Digest(
+            build["digest"]
+                .as_str()
+                .and_then(digest_hex)
+                .with_context(|| format!("release {tag} has no SHA256SUMS or digest for {ASSET}: not installed unchecked"))?,
+        ),
+    };
+    Ok((tag.to_owned(), Some((url(build)?, sum))))
 }
 
 /// The one `tg-ws-proxy` file in the unpacked archive, wherever it keeps it.
@@ -142,9 +179,12 @@ fn find_binary(root: &Path) -> anyhow::Result<PathBuf> {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir)?.flatten() {
-            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
                 stack.push(entry.path());
-            } else if entry.file_name() == IMAGE {
+            } else if kind.is_file() && entry.file_name() == IMAGE {
                 return Ok(entry.path());
             }
         }
@@ -172,7 +212,7 @@ fn unpack_archive(archive: &Path, to: &Path, cancel: &AtomicBool) -> anyhow::Res
 /// out (executable), the tag into `version.txt`. On a failure the old files stay.
 fn download(dir: &Path, socks5: Option<&str>, cancel: &AtomicBool) -> anyhow::Result<()> {
     let (tag, url) = select(&probe::curl::fetch_text(API_URL, socks5)?)?;
-    let Some(url) = url else {
+    let Some((url, sum)) = url else {
         let why = format!("release {tag} of tg-ws-proxy-rs has no build for this system ({ASSET})");
         *lock(&UNAVAILABLE) = Some(why.clone());
         anyhow::bail!(why);
@@ -192,8 +232,17 @@ fn download(dir: &Path, socks5: Option<&str>, cancel: &AtomicBool) -> anyhow::Re
             Ok(())
         })?;
         anyhow::ensure!(!cancel.load(Ordering::Relaxed), "canceled");
+        let expected = match sum {
+            Sum::Digest(hash) => hash,
+            Sum::File(sums) => listed(&probe::curl::fetch_text(&sums, socks5)?)
+                .with_context(|| format!("SHA256SUMS of {tag} does not list {ASSET}"))?,
+        };
         let sha256 = zapret::sha256_hex(&std::fs::read(&archive)?);
-        log::info!("{ASSET} {tag} SHA-256 {sha256}");
+        anyhow::ensure!(
+            sha256 == expected,
+            "{ASSET} {tag} SHA-256 is {sha256}, the release lists {expected}: not installed"
+        );
+        log::info!("{ASSET} {tag} SHA-256 {sha256} checked");
         let raw = staging.join("x");
         unpack_archive(&archive, &raw, cancel)?;
         let to = dir.join(IMAGE);
@@ -447,6 +496,17 @@ pub fn save_config(
     Ok(status(app))
 }
 
+/// The CLI pipe changes no flags on Windows: there the proxy runs as a child of the elevated app
+/// and any local program can reach the pipe, the boundary `settings::to_save` keeps for the
+/// zapret2 folder. Linux runs it as the user's own unit, so the pipe may.
+pub fn check_pipe_args(current: &str, sent: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !cfg!(windows) || sent.split_whitespace().eq(current.split_whitespace()),
+        "the TG WS Proxy flags can be changed only in the Zapret Hub window on Windows"
+    );
+    Ok(())
+}
+
 /// The latest release over the installed one, one download at a time with the engine's; a proxy
 /// that is on starts again from it.
 pub fn install(app: &AppHandle) -> anyhow::Result<TgWsStatus> {
@@ -516,7 +576,36 @@ mod tests {
         } else {
             "tg-ws-proxy-x86_64-unknown-linux-musl.tar.gz"
         };
-        assert_eq!(picked, Some(url(expected)));
+        assert_eq!(picked, Some((url(expected), Sum::File(url("SHA256SUMS")))));
+    }
+
+    #[test]
+    fn without_sha256sums_the_asset_digest_checks_it_and_without_both_it_is_refused() {
+        let hash = "AB".repeat(32);
+        let json = serde_json::json!({"tag_name": "v1", "assets": [
+            {"name": ASSET, "browser_download_url": url(ASSET), "digest": format!("sha256:{hash}")}
+        ]});
+        let (_, picked) = select(&json.to_string()).unwrap();
+        assert_eq!(picked, Some((url(ASSET), Sum::Digest(hash.to_lowercase()))));
+        let bare = select(&release("v1", &[(ASSET, &url(ASSET))])).unwrap_err();
+        assert!(
+            bare.to_string().contains("no SHA256SUMS or digest"),
+            "{bare}"
+        );
+        let odd = serde_json::json!({"tag_name": "v1", "assets": [
+            {"name": ASSET, "browser_download_url": url(ASSET), "digest": "md5:abc"}
+        ]});
+        assert!(select(&odd.to_string()).is_err());
+    }
+
+    #[test]
+    fn sha256sums_lists_the_asset_by_its_file_name() {
+        let a = "a".repeat(64);
+        let b = "b".repeat(64);
+        let sums =
+            format!("{a}  tg-ws-proxy-x86_64-unknown-linux-musl-upx.tar.gz\n{b} *dist/{ASSET}\n");
+        assert_eq!(listed(&sums), Some(b));
+        assert_eq!(listed(&format!("{a}  other.zip\n")), None);
     }
 
     #[test]
@@ -530,9 +619,24 @@ mod tests {
     fn a_foreign_url_an_odd_tag_or_not_json_is_refused() {
         let foreign = format!("https://example.com/{ASSET}");
         assert!(select(&release("v1", &[(ASSET, &foreign)])).is_err());
+        let foreign_sums = "https://example.com/SHA256SUMS";
+        let with_foreign_sums = [(ASSET, url(ASSET)), ("SHA256SUMS", foreign_sums.into())];
+        let with_foreign_sums: Vec<(&str, &str)> = with_foreign_sums
+            .iter()
+            .map(|(n, u)| (*n, u.as_str()))
+            .collect();
+        assert!(select(&release("v1", &with_foreign_sums)).is_err());
         let odd = select(&release("../..", &[])).unwrap_err();
         assert!(odd.to_string().contains("unexpected release tag"), "{odd}");
         assert!(select("<html>").is_err());
+    }
+
+    #[test]
+    fn the_pipe_changes_the_flags_only_where_the_proxy_is_not_elevated() {
+        assert!(check_pipe_args("--dc-ip 2:1.2.3.4  -v", " --dc-ip 2:1.2.3.4 -v").is_ok());
+        assert!(check_pipe_args("", "").is_ok());
+        assert_eq!(check_pipe_args("-v", "-v --evil x").is_err(), cfg!(windows));
+        assert_eq!(check_pipe_args("-v", "").is_err(), cfg!(windows));
     }
 
     #[test]
