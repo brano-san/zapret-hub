@@ -56,6 +56,10 @@ impl Up {
     }
 }
 
+/// A UDP flow: its row's key and the program's address (two addresses may send from one port).
+// ponytail: such two flows share one row (`Stats` is keyed by `FlowKey`, as on Windows).
+pub(super) type UdpKey = (FlowKey, Ipv4Addr);
+
 pub(super) struct Flow {
     client: SocketAddrV4,
     /// Bound to the flow's destination: answers reach the program from where it sent.
@@ -92,10 +96,11 @@ impl Live {
             local_port: client.port(),
             dst,
         };
+        let id = (key, *client.ip());
         let now = Instant::now();
         let up = payload.len() as u64;
         let mut flows = self.flows.lock().unwrap();
-        if let Some(flow) = flows.get_mut(&key) {
+        if let Some(flow) = flows.get_mut(&id) {
             match &mut flow.up {
                 Up::Opening(pending) => {
                     if pending.len() == QUEUE {
@@ -120,7 +125,7 @@ impl Live {
         }
         drop(flows);
         // Only this thread adds flows: the key stays vacant until the insert below.
-        let pid = owner::table_pid(Protocol::Udp, client.port());
+        let pid = owner::table_pid_other(Protocol::Udp, client.port());
         let exe = pid.and_then(|p| self.images.get(p));
         let table = self.table.read().unwrap().clone();
         let (rule, direct) =
@@ -151,7 +156,7 @@ impl Live {
         };
         // In the table before its reader starts, which stops once the flow is gone.
         self.flows.lock().unwrap().insert(
-            key,
+            id,
             Flow {
                 client,
                 reply: reply.clone(),
@@ -163,15 +168,16 @@ impl Live {
             Some(socket) => {
                 let _ = socket.send(payload);
                 self.stats.lock().unwrap().add(key, up, 0, now);
-                spawn(move || l.relay_rx(key, client, &reply, &socket, None));
+                spawn(move || l.relay_rx(id, client, &reply, &socket, None));
             }
-            None => spawn(move || l.open_flow(key, domain)),
+            None => spawn(move || l.open_flow(id, domain)),
         }
     }
 
     // ponytail: a control TCP that drops after the flow opened is not watched; proxied flows close
     // when two 10 s checks in a row see the proxy fail (as on Windows).
-    fn open_flow(self: Arc<Self>, key: FlowKey, domain: Option<String>) {
+    fn open_flow(self: Arc<Self>, id: UdpKey, domain: Option<String>) {
+        let key = id.0;
         let started = Instant::now();
         let opened = socks::udp_associate(self.proxy, key.dst, OPEN_TIMEOUT).and_then(|assoc| {
             let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
@@ -186,7 +192,7 @@ impl Live {
         let latency_ms = started.elapsed().as_millis() as u32;
         let mut flows = self.flows.lock().unwrap();
         // Closed (idle or stopped) while opening: nothing to do.
-        let Some(flow) = flows.get_mut(&key) else {
+        let Some(flow) = flows.get_mut(&id) else {
             return;
         };
         let Up::Opening(pending) = &mut flow.up else {
@@ -204,7 +210,7 @@ impl Live {
                 flow.up = Up::Proxy(relay.clone());
                 drop(flows);
                 let l = self.clone();
-                spawn(move || l.relay_rx(key, client, &reply, &relay.socket, Some(relay.relay)));
+                spawn(move || l.relay_rx(id, client, &reply, &relay.socket, Some(relay.relay)));
                 self.update_proxy(|current| {
                     (*current == ProxyState::NoUdp).then_some(ProxyState::Ok { latency_ms })
                 });
@@ -220,10 +226,10 @@ impl Live {
                         flow.up = Up::Direct(socket.clone(), reason.clone());
                         drop(flows);
                         let l = self.clone();
-                        spawn(move || l.relay_rx(key, client, &reply, &socket, None));
+                        spawn(move || l.relay_rx(id, client, &reply, &socket, None));
                     }
                     Err(err) => {
-                        flows.remove(&key);
+                        flows.remove(&id);
                         drop(flows);
                         reason = DirectReason::Failed {
                             error: err.to_string(),
@@ -249,19 +255,20 @@ impl Live {
     // flow's destination (one reply socket per flow).
     fn relay_rx(
         &self,
-        key: FlowKey,
+        id: UdpKey,
         client: SocketAddrV4,
         reply: &UdpSocket,
         socket: &UdpSocket,
         relay: Option<SocketAddrV4>,
     ) {
+        let key = id.0;
         let mut buf = vec![0u8; MAX_DATAGRAM];
         loop {
             let current = self
                 .flows
                 .lock()
                 .unwrap()
-                .get(&key)
+                .get(&id)
                 .and_then(|f| f.up.socket())
                 .is_some_and(|s| std::ptr::eq(s, socket));
             if !current || self.is_stopped() {
@@ -306,13 +313,13 @@ impl Live {
                 Up::Direct(_, reason) => recovered && reason.proxy_failure(),
                 Up::Opening(_) => false,
             })
-            .map(|(k, _)| *k)
+            .map(|(k, _)| k.0)
             .collect()
     }
 
-    /// Drops the flow (its threads end within `RELAY_POLL`) and closes its row.
+    /// Drops the row's flows (their threads end within `RELAY_POLL`) and closes the row.
     pub(super) fn close_flow(&self, key: FlowKey, now: Instant) {
-        self.flows.lock().unwrap().remove(&key);
+        self.flows.lock().unwrap().retain(|k, _| k.0 != key);
         self.stats.lock().unwrap().close(key, now);
     }
 }

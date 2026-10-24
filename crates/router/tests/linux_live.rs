@@ -325,6 +325,18 @@ fn the_router_carries_tcp_udp_programs_and_domains_through_the_proxy() {
     .unwrap();
     assert_eq!(r.status().state, RouterState::Running);
     assert_eq!(fwmark_rules(), 1, "the stale rules went, one is in force");
+    // A second session (another hub process, the CLI) is refused and leaves this one alone.
+    let other_dir = tempfile::tempdir().unwrap();
+    let other = Router::new(other_dir.path().join("routes.toml"));
+    let refused = other.start(Setup {
+        dll: Default::default(),
+        proxy,
+    });
+    assert!(
+        refused.unwrap_err().to_string().contains("routing already"),
+        "a second session"
+    );
+    assert_eq!(fwmark_rules(), 1);
     until("the proxy check passes", || {
         matches!(r.status().proxy, ProxyState::Ok { .. })
     });

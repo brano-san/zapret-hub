@@ -8,7 +8,9 @@ mod udp;
 use std::collections::HashMap;
 use std::io::{ErrorKind, Write as _};
 use std::mem::discriminant;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream, UdpSocket};
+use std::os::linux::net::SocketAddrExt as _;
+use std::os::unix::net::{SocketAddr, UnixListener};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, Weak};
@@ -29,6 +31,9 @@ const TICK: Duration = Duration::from_millis(500);
 const RULES_CHECK_TICKS: u32 = 4;
 /// How long a blocking read waits before it looks whether the session stopped.
 const POLL: Duration = Duration::from_millis(500);
+/// A DNS flow (one query and its answer, a new port each) holds its sockets and thread no
+/// longer than this.
+const DNS_IDLE: Duration = Duration::from_secs(5);
 /// At most this many stale `ip rule`s go at a start (each crash may have left one).
 const MAX_STALE_RULES: usize = 64;
 
@@ -47,12 +52,14 @@ pub(crate) struct Live {
     applied: Mutex<String>,
     names: Arc<Mutex<Names>>,
     images: Arc<Images>,
-    flows: Mutex<HashMap<FlowKey, udp::Flow>>,
+    flows: Mutex<HashMap<udp::UdpKey, udp::Flow>>,
     /// Both sockets of each relayed TCP connection, shut down when the session ends.
     conns: Mutex<HashMap<FlowKey, (TcpStream, TcpStream)>>,
     stats: Mutex<Stats>,
     proxy_state: Mutex<ProxyState>,
     proxy_pid: Mutex<Option<u32>>,
+    /// `session_lock`, released once `shut` cleared the routing.
+    lock: Mutex<Option<UnixListener>>,
 }
 
 fn spawn(f: impl FnOnce() + Send + 'static) {
@@ -90,6 +97,18 @@ fn run(program: &str, args: &[&str], stdin: Option<&str>) -> Result<(), String> 
             String::from_utf8_lossy(&out.stderr).trim()
         ))
     }
+}
+
+/// One session per network namespace (the app and `zapret-hub-cli routes start` share one table):
+/// an abstract socket name, which the kernel frees when its process dies, so a crash never blocks.
+fn session_lock() -> Result<UnixListener> {
+    let name = SocketAddr::from_abstract_name(format!("{}.lock", nft::TABLE))?;
+    UnixListener::bind_addr(&name).map_err(|e| match e.kind() {
+        ErrorKind::AddrInUse => anyhow::anyhow!(
+            "another Zapret Hub process (the app or zapret-hub-cli) is routing already: stop it first"
+        ),
+        _ => anyhow::Error::new(e).context("cannot take the routing lock"),
+    })
 }
 
 fn nft(text: &str) -> Result<(), String> {
@@ -136,6 +155,8 @@ impl Live {
         if !caps::present() {
             bail!(caps::HINT);
         }
+        // Taken before `clear`: what it removes is a dead session's.
+        let lock = session_lock()?;
         clear();
         let acceptor = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .context("cannot open the local TCP acceptor")?;
@@ -167,6 +188,7 @@ impl Live {
             stats: Mutex::new(Stats::default()),
             proxy_state: Mutex::new(ProxyState::Unknown),
             proxy_pid: Mutex::new(None),
+            lock: Mutex::new(Some(lock)),
         });
         {
             let mut applied = live.applied.lock().unwrap();
@@ -212,7 +234,16 @@ impl Live {
     /// poisoned the locks; a second call does nothing new.
     pub(crate) fn shut(&self) {
         self.stopped.store(true, Ordering::SeqCst);
-        clear();
+        {
+            // An `apply` past its `stopped` check finishes first: its old chains can never land
+            // in the table of the next session.
+            let _applied = self.applied.lock().unwrap_or_else(PoisonError::into_inner);
+            clear();
+        }
+        self.lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         let conns: Vec<_> = self
             .conns
             .lock()
@@ -225,7 +256,7 @@ impl Live {
         }
         // Wakes the acceptor, which then sees `stopped`.
         let _ = TcpStream::connect_timeout(
-            &SocketAddr::from((Ipv4Addr::LOCALHOST, self.acceptor_port)),
+            &std::net::SocketAddr::from((Ipv4Addr::LOCALHOST, self.acceptor_port)),
             Duration::from_secs(1),
         );
         self.flows
@@ -416,7 +447,13 @@ impl Live {
         while self.sleep(TICK) {
             tick += 1;
             let now = Instant::now();
-            let idle = self.stats.lock().unwrap().idle(now);
+            let idle = self.stats.lock().unwrap().idle_after(now, |k| {
+                if k.dst.port() == 53 {
+                    DNS_IDLE
+                } else {
+                    flows::IDLE
+                }
+            });
             for key in idle {
                 self.close_flow(key, now);
             }
@@ -426,7 +463,7 @@ impl Live {
                 .lock()
                 .unwrap()
                 .keys()
-                .map(|k| *k.dst.ip())
+                .map(|k| *k.0.dst.ip())
                 .collect();
             live.extend(self.conns.lock().unwrap().keys().map(|k| *k.dst.ip()));
             self.names.lock().unwrap().expire(now, &live);
@@ -448,6 +485,15 @@ impl Live {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_session_holds_the_lock_until_it_lets_go() {
+        let held = session_lock().unwrap();
+        let err = session_lock().unwrap_err().to_string();
+        assert!(err.contains("routing already"), "{err}");
+        drop(held);
+        session_lock().unwrap();
+    }
 
     /// No capabilities (an ordinary test run): the router is unavailable with the hint.
     #[test]
