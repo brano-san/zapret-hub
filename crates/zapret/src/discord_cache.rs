@@ -52,8 +52,9 @@ pub struct CacheReport {
     pub dirs: Vec<CacheDir>,
 }
 
+/// `%APPDATA%`.
 #[cfg(windows)]
-fn config_dir() -> anyhow::Result<PathBuf> {
+pub fn config_dir() -> anyhow::Result<PathBuf> {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .ok_or_else(|| anyhow::anyhow!("APPDATA is not set"))
@@ -61,7 +62,7 @@ fn config_dir() -> anyhow::Result<PathBuf> {
 
 /// `$XDG_CONFIG_HOME` when set and absolute, else `~/.config`.
 #[cfg(target_os = "linux")]
-fn config_dir() -> anyhow::Result<PathBuf> {
+pub fn config_dir() -> anyhow::Result<PathBuf> {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|dir| dir.is_absolute())

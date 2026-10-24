@@ -62,29 +62,22 @@ pub fn tail_from(path: &Path, offset: u64, max_bytes: u64) -> std::io::Result<Op
 
 /// Existing `renderer_js.log` files of Discord, PTB and Canary.
 pub fn discord_log_paths() -> Vec<PathBuf> {
-    let Some(appdata) = std::env::var_os("APPDATA") else {
-        return Vec::new();
-    };
-    ["discord", "discordptb", "discordcanary"]
-        .iter()
-        .map(|d| {
-            Path::new(&appdata)
-                .join(d)
-                .join("logs")
-                .join("renderer_js.log")
-        })
+    discord_log_dirs()
+        .into_iter()
+        .map(|dir| dir.join("renderer_js.log"))
         .filter(|p| p.is_file())
         .collect()
 }
 
-/// The `logs` folders of Discord, PTB and Canary that exist.
+/// The `logs` folders of Discord, PTB and Canary that exist, under `%APPDATA%` (Windows) or
+/// the XDG config folder (Linux).
 pub fn discord_log_dirs() -> Vec<PathBuf> {
-    let Some(appdata) = std::env::var_os("APPDATA") else {
+    let Ok(config) = zapret::discord_cache::config_dir() else {
         return Vec::new();
     };
     ["discord", "discordptb", "discordcanary"]
         .iter()
-        .map(|d| Path::new(&appdata).join(d).join("logs"))
+        .map(|d| config.join(d).join("logs"))
         .filter(|p| p.is_dir())
         .collect()
 }
