@@ -4,6 +4,7 @@ pub mod circular_store;
 pub mod cover;
 pub mod culprits;
 pub mod evaluate;
+pub mod judge;
 pub mod logs;
 pub mod paths;
 pub mod patterns;

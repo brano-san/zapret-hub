@@ -13,7 +13,7 @@ use crate::patterns::{Pattern, unique};
 use crate::profiles::ProbeKind;
 use crate::run::{GroupResult, Outcome};
 
-const WHITELIST: &str =
+pub(crate) const WHITELIST: &str =
     "провайдер пускает только в разрешённые сети; ни zapret, ни прокси это не обходят";
 const ONLY_PROXY: &str = "провайдер блокирует адрес; zapret не помогает; через прокси работает";
 const NOTHING: &str = "адрес недоступен ни одним путём, включая прокси: вероятно, проблема на стороне сервиса или прокси";
@@ -282,7 +282,11 @@ fn fixes_for(gr: &GroupResult, best: &PathKind, ctx: &Ctx, id: &str, out: &mut V
 }
 
 /// Explanations and advice of the patterns other than R1 (its group explains it) and R5.
-fn pattern_texts(patterns: &[Pattern], explanations: &mut Vec<String>, fixes: &mut Vec<Fix>) {
+pub(crate) fn pattern_texts(
+    patterns: &[Pattern],
+    explanations: &mut Vec<String>,
+    fixes: &mut Vec<Fix>,
+) {
     let mut spoofed = vec![];
     for p in patterns {
         match p {

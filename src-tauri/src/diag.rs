@@ -343,6 +343,7 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
         observe_secs,
     );
     summary.sources_missing = missing;
+    diag::judge::fill(&mut summary, &flows, &evidence, &ctx, observe_secs);
     summary.explanations.extend(summary::check_lines(&checks));
     summary.system_checks = checks;
     if !dns {
