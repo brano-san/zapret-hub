@@ -63,7 +63,7 @@ fn inodes(protocol: Protocol, port: Option<u16>, listen_only: bool) -> Vec<u64> 
 
 /// Socket inode -> the lowest PID holding it. Other users' fds do not open without root: their
 /// sockets have no owner here.
-fn socket_pids() -> HashMap<u64, u32> {
+fn socket_pids(skip: Option<u32>) -> HashMap<u64, u32> {
     let mut map = HashMap::new();
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return map;
@@ -73,7 +73,7 @@ fn socket_pids() -> HashMap<u64, u32> {
         .filter_map(|entry| entry.file_name().to_str()?.parse().ok())
         .collect();
     pids.sort_unstable();
-    for pid in pids {
+    for pid in pids.into_iter().filter(|p| Some(*p) != skip) {
         let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
             continue;
         };
@@ -91,17 +91,17 @@ fn socket_pids() -> HashMap<u64, u32> {
 
 /// The first PID holding one of `inodes`.
 // ponytail: walks every process's fds per lookup; cache the map if lookups get hot
-fn owner_of(inodes: &[u64]) -> Option<u32> {
+fn owner_of(inodes: &[u64], skip: Option<u32>) -> Option<u32> {
     if inodes.is_empty() {
         return None;
     }
-    let pids = socket_pids();
+    let pids = socket_pids(skip);
     inodes.iter().find_map(|inode| pids.get(inode).copied())
 }
 
 /// PIDs owning UDP sockets now, IPv4 and IPv6 tables, sorted and without duplicates.
 pub fn udp_pids() -> Vec<u32> {
-    let pids = socket_pids();
+    let pids = socket_pids(None);
     let mut out: Vec<u32> = inodes(Protocol::Udp, None, false)
         .iter()
         .filter_map(|inode| pids.get(inode).copied())
@@ -113,12 +113,19 @@ pub fn udp_pids() -> Vec<u32> {
 
 /// PID of the process listening on the TCP `port`.
 pub fn listener_pid(port: u16) -> Option<u32> {
-    owner_of(&inodes(Protocol::Tcp, Some(port), true))
+    owner_of(&inodes(Protocol::Tcp, Some(port), true), None)
 }
 
 /// PID owning the local `local_port` per the socket tables, IPv4 then IPv6 (`Both` is TCP).
 pub fn table_pid(protocol: Protocol, local_port: u16) -> Option<u32> {
-    owner_of(&inodes(protocol, Some(local_port), false))
+    owner_of(&inodes(protocol, Some(local_port), false), None)
+}
+
+/// `table_pid`, another process first: this one's relay sockets may hold the same port number
+/// (a UDP answer socket is bound to the flow's destination port).
+pub fn table_pid_other(protocol: Protocol, local_port: u16) -> Option<u32> {
+    let inodes = inodes(protocol, Some(local_port), false);
+    owner_of(&inodes, Some(std::process::id())).or_else(|| owner_of(&inodes, None))
 }
 
 /// Start time (clock ticks since boot) of a running process; `None` if it is gone or a zombie.

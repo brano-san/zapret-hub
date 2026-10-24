@@ -49,7 +49,7 @@ impl Live {
             local_port: peer.port(),
             dst: orig,
         };
-        let pid = owner::table_pid(Protocol::Tcp, peer.port());
+        let pid = owner::table_pid_other(Protocol::Tcp, peer.port());
         let exe = pid.and_then(|p| self.images.get(p));
         let table = self.table.read().unwrap().clone();
         let (rule, direct) = flows::route(
