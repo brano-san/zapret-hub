@@ -426,27 +426,10 @@ fn expand(roots: &[PathBuf], deadline: std::time::Instant) -> Vec<PathBuf> {
     dirs
 }
 
-/// SOCKS5 ports that answer now: NekoBox's own port when it runs, then the default ports of known
-/// clients (spec 9.2).
+/// SOCKS5 ports that answer now, of the default ports of common clients (spec 9.2).
 pub fn candidates() -> Candidates {
-    let images = if cfg!(windows) {
-        ["nekobox.exe", "nekoray.exe"]
-    } else {
-        ["nekobox", "nekoray"]
-    };
-    let mut ports: Vec<u16> = images
-        .iter()
-        .flat_map(|image| zapret::procs::find(image))
-        .filter_map(|proc| {
-            proc.exe
-                .as_deref()
-                .and_then(Path::parent)
-                .and_then(probe::socks::nekobox_port)
-        })
-        .collect();
-    ports.extend(probe::socks::KNOWN_PORTS);
     Candidates {
-        proxies: probe::socks::listening(&ports),
+        proxies: probe::socks::listening(&probe::socks::KNOWN_PORTS),
     }
 }
 

@@ -2,7 +2,6 @@
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, UdpSocket};
-use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -63,16 +62,8 @@ pub fn check(addr: &str) -> ProxyStatus {
     }
 }
 
-/// Default SOCKS ports of known clients: NekoBox 2080, v2rayN 10808, Clash 7890.
+/// Default SOCKS ports of common proxy clients: 2080, 10808 (v2rayN), 7890 (Clash).
 pub const KNOWN_PORTS: [u16; 3] = [2080, 10808, 7890];
-
-/// `inbound_socks_port` from `config\groups\nekobox.json` next to NekoBox's exe.
-pub fn nekobox_port(exe_dir: &Path) -> Option<u16> {
-    let text =
-        std::fs::read_to_string(exe_dir.join("config").join("groups").join("nekobox.json")).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-    u16::try_from(json.get("inbound_socks_port")?.as_u64()?).ok()
-}
 
 /// `127.0.0.1:<port>` of every port that answers a SOCKS5 greeting, in the given order.
 pub fn listening(ports: &[u16]) -> Vec<String> {

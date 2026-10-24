@@ -34,23 +34,6 @@ fn a_closed_port_is_not_a_proxy() {
     ));
 }
 
-#[test]
-fn reads_the_nekobox_port() {
-    let dir = tempfile::tempdir().unwrap();
-    let groups = dir.path().join("config").join("groups");
-    std::fs::create_dir_all(&groups).unwrap();
-    std::fs::write(
-        groups.join("nekobox.json"),
-        r#"{"inbound_socks_port": 18082, "spmode2": ["system_proxy"]}"#,
-    )
-    .unwrap();
-    assert_eq!(probe::socks::nekobox_port(dir.path()), Some(18082));
-    assert_eq!(
-        probe::socks::nekobox_port(&dir.path().join("missing")),
-        None
-    );
-}
-
 /// A SOCKS5 proxy that answers `UDP ASSOCIATE` with `code`; its relay answers DNS when `answer`.
 fn udp_proxy(code: u8, answer: bool) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
