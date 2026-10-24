@@ -557,3 +557,50 @@ fn skipped_paths_as_codes() {
     );
     assert_eq!(s.agent.not_checked[0].args, ["203.0.113.0/24"]);
 }
+
+#[test]
+fn unobserved_on_linux_is_at_most_inconclusive_and_says_why() {
+    let mut s = Summary::default();
+    run(&mut s, &[], &Evidence::default(), &https());
+    assert_eq!(s.agent.verdict, VerdictCode::NoFlows);
+    diag::judge::unobserved_on_linux(&mut s);
+    assert_eq!(s.agent.verdict, VerdictCode::Inconclusive);
+    assert_eq!(s.agent.confidence.level, Level::Low);
+    assert!(
+        s.agent
+            .confidence
+            .why
+            .contains(&"platform:linux".to_string())
+    );
+    assert!(s.verdict_text.contains("Linux"), "{}", s.verdict_text);
+    let linux: Vec<&str> = s
+        .agent
+        .not_checked
+        .iter()
+        .filter(|f| f.code == "platform:linux")
+        .map(|f| f.args[0].as_str())
+        .collect();
+    assert_eq!(linux, ["flows", "dns", "paths"]);
+
+    // A verdict from the client's own log stays: it does not need the observation.
+    let mut s = with_stage(None);
+    fill(
+        &mut s,
+        &[],
+        &neko_seen(),
+        &ctx(&[ProbeKind::DiscordIpDiscovery]),
+        0,
+    );
+    assert_eq!(s.agent.verdict, VerdictCode::NotReproducible);
+    let text = s.verdict_text.clone();
+    diag::judge::unobserved_on_linux(&mut s);
+    assert_eq!(s.agent.verdict, VerdictCode::NotReproducible);
+    assert_eq!(s.verdict_text, text);
+    assert_eq!(
+        codes(&s.agent.not_checked)
+            .iter()
+            .filter(|c| **c == "platform:linux")
+            .count(),
+        3
+    );
+}

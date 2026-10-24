@@ -299,8 +299,13 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
         log::info!("diagnostics without system checks: {err:#}");
         Vec::new()
     });
+    // Linux observes no flows (no WinDivert): the run is the system checks, the probes and the
+    // client logs, and says what it could not see (`judge::unobserved_on_linux`). The «not
+    // running» shortcut stays Windows': Linux names the programs otherwise (no `.exe`, 15 chars).
+    let observed = cfg!(windows);
     // Nothing to watch: say so at once instead of after the whole observation.
-    if !ctx.profile.apps.is_empty()
+    if observed
+        && !ctx.profile.apps.is_empty()
         && !ctx
             .profile
             .apps
@@ -312,7 +317,11 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
         return Ok(summary);
     }
     // Watching changes nothing: no snapshot yet.
-    let (flows, dns) = watch(app, &ctx.profile.apps, observe_secs, true)?;
+    let (flows, dns) = if observed {
+        watch(app, &ctx.profile.apps, observe_secs, true)?
+    } else {
+        (Vec::new(), true)
+    };
     let verdict = culprits::verdict(&flows);
     let groups = match &verdict {
         Verdict::Culprits(all) if !state.diag_canceled() => choose(app, request.mode, all),
@@ -362,6 +371,9 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
     context::fill(&state, &ctx, engine2.as_ref(), &mut summary);
     summary.sources_missing = missing;
     diag::judge::fill(&mut summary, &flows, &evidence, &ctx, observe_secs);
+    if !observed {
+        diag::judge::unobserved_on_linux(&mut summary);
+    }
     summary.explanations.extend(summary::check_lines(&checks));
     summary.system_checks = checks;
     if !dns {

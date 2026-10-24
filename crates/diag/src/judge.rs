@@ -390,3 +390,42 @@ pub fn fill(
     agent.not_checked = not_checked;
     agent.context.proxy_udp = ctx.proxy_udp;
 }
+
+/// Linux has no flow observation (WinDivert): a run sees no flows, so no culprits and no paths.
+/// What it could not see goes to `not_checked` as `platform:linux`; a verdict that rests on the
+/// flows (`no_flows`, `clean`, `inconclusive`) is `inconclusive` with low confidence. One from the
+/// client's log stays.
+pub fn unobserved_on_linux(summary: &mut Summary) {
+    const CODE: &str = "platform:linux";
+    let facts = [
+        (
+            "flows",
+            "соединения программы не наблюдались: на Linux нет WinDivert",
+        ),
+        (
+            "dns",
+            "ответы DNS программы не наблюдались: на Linux нет WinDivert",
+        ),
+        (
+            "paths",
+            "пути обхода не проверялись: без наблюдения не найти виновников",
+        ),
+    ];
+    let agent = &mut summary.agent;
+    agent.not_checked.extend(facts.map(|(part, text)| Fact {
+        code: CODE.into(),
+        args: vec![part.into()],
+        text: text.into(),
+    }));
+    if matches!(
+        agent.verdict,
+        VerdictCode::NoFlows | VerdictCode::Clean | VerdictCode::Inconclusive
+    ) {
+        agent.verdict = VerdictCode::Inconclusive;
+        agent.confidence.level = Level::Low;
+        agent.confidence.why.push(CODE.into());
+        summary.verdict_text = "на Linux соединения программы не наблюдаются: смотрите системные \
+                                проверки, пробы и журналы клиента"
+            .into();
+    }
+}
