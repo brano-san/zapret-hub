@@ -18,6 +18,7 @@
 - No system changes while verifying: never run nft, systemctl, sc, netsh, reg add, schtasks, taskkill, never elevated, never `--ignored` tests. Do not run exes in `D:\zapret-hub\build`.
 - No `python` (Windows Store stub); use node or the edit tools.
 - Code, comments, commits, UI identifiers in English; user-facing UI text in Russian as today; docs in Russian.
+- Build memory (user, 2026-10-24): Windows cargo `CARGO_BUILD_JOBS=1`, WSL `CARGO_BUILD_JOBS=2`; never two cargo processes at once; iterate with `-p <crate>`, full workspace once at the end.
 - Windows verification: `cargo nextest run --workspace`, `cargo test -p zapret-hub --lib`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all --check`, `npm --prefix frontend run check`, `npx --prefix frontend vitest run`.
 - Linux verification (WSL Ubuntu, rust 1.99, webkit2gtk-4.1 present), run from Windows bash:
   `wsl.exe -e bash -lc 'cd /mnt/d/zapret-hub && CARGO_TARGET_DIR=$HOME/zh-target cargo clippy --workspace --all-targets -- -D warnings && CARGO_TARGET_DIR=$HOME/zh-target cargo test --workspace'`
