@@ -37,7 +37,13 @@ pub fn target(input: &str) -> anyhow::Result<(String, String)> {
         .find(|scheme| lower.starts_with(**scheme))
     {
         Some(scheme) => (&input[scheme.len()..], None),
-        None => (input, Some(format!("https://{input}"))),
+        None => {
+            anyhow::ensure!(
+                !input.contains("://"),
+                "only http:// and https:// URLs: {input:?}"
+            );
+            (input, Some(format!("https://{input}")))
+        }
     };
     let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
     let authority = authority.rsplit('@').next().unwrap_or_default();
@@ -217,6 +223,7 @@ mod tests {
         assert!(target("").is_err());
         assert!(target("https://").is_err());
         assert!(target("a b").is_err());
+        assert!(target("ftp://example.com").is_err());
     }
 
     #[test]
