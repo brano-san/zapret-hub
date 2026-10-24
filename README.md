@@ -18,7 +18,7 @@ Windows — `winws2.exe` и WinDivert, Linux — `nfqws2` и nftables (подр�
   `ipset-exclude-user.txt`; порты — на Linux в таблице nft).
 - **Диагностика:** наблюдает за программой или профилем и подбирает путь обхода (на Linux без наблюдения за
   потоками, см. `docs/linux.md`).
-- **Маршруты** (только Windows): выбранный трафик идёт через SOCKS5 по домену, подсети или программе; пресеты
+- **Маршруты:** выбранный трафик идёт через SOCKS5 по домену, подсети или программе; пресеты
   Discord, Dead by Daylight, Cloudflare, Telegram и Twitch.
 - **TG WS Proxy:** локальный MTProto-прокси [tg-ws-proxy-rs](https://github.com/valnesfjord/tg-ws-proxy-rs):
   скачивается и запускается из хаба (на Linux — пользовательский юнит systemd).
@@ -81,6 +81,9 @@ Windows — `winws2.exe` и WinDivert, Linux — `nfqws2` и nftables (подр�
 4. Root: хаб пробует `sudo -n`, затем `pkexec` (один запрос пароля на «Применить»). Чтобы запросов не было,
    добавьте правило `sudoers` или polkit для своего пользователя (пример и оговорки — в `docs/linux.md`); хаб
    таких правил сам не ставит.
+5. Маршрутизация через SOCKS5: кнопка «Разрешить маршрутизацию» на вкладке «Маршруты» (или
+   `zapret-hub-cli routes grant`) выдаёт файлу хаба `CAP_NET_ADMIN`/`CAP_NET_RAW` через `setcap`, затем
+   перезапустите хаб; после обновления — снова. Только IPv4 (раздел «Маршрутизация» в `docs/linux.md`).
 
 ## Где данные
 
@@ -215,6 +218,9 @@ Windows — `winws2.exe` и WinDivert, Linux — `nfqws2` и nftables (подр�
 UDP — через `UDP ASSOCIATE`, TCP — через `CONNECT`; цель правила — подсеть IPv4, домен или программа. Это замена
 `E:\Zapret\utils\discord-udp-proxy.ps1`: на время работы маршрутизации этот скрипт нужно закрыть.
 
+На Linux маршрутизация работает через nftables и TPROXY (`setcap` и ограничения — в `docs/linux.md`), правила
+лежат в `~/.local/share/zapret-hub/routes.toml`, программы пишутся без `.exe`.
+
 Как включить:
 
 1. «Настройки» → адрес SOCKS5, например `127.0.0.1:2080`. Прокси должен принимать UDP: в NekoBox это mixed
@@ -311,7 +317,7 @@ apps = ["Discord.exe"]                   # имя .exe или полный пу�
   Чтобы распаковать обновление zapret2 поверх папки, закройте хаб.
 - Трафик самого хаба и процесса, слушающего порт прокси, не перехватывается (защита от петли через VPN).
 
-Команды CLI: `router on|off|status`, `routes list|show|add|edit|enable|disable|remove|preset|flows`, см.
+Команды CLI: `router on|off|status`, `routes list|show|add|edit|enable|disable|remove|preset|flows|grant`, см.
 `docs/cli.md`.
 
 ## Командная строка для агентов

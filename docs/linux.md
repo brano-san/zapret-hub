@@ -7,7 +7,8 @@
 ## Установка
 
 Нужны: `webkit2gtk-4.1`, `gtk3`, `libayatana-appindicator3`, `nftables` (`nft`), `curl`, `iputils` (`ping`),
-systemd и polkit (`pkexec`).
+systemd и polkit (`pkexec`); для маршрутизации ещё `iproute2` (`ip`) и `setcap` (`libcap2-bin` в Debian/Ubuntu,
+`libcap` в Arch).
 
 ```
 # Debian/Ubuntu
@@ -72,7 +73,7 @@ USER ALL=(ALL) NOPASSWD: /usr/sbin/nft, /usr/bin/systemctl, /usr/bin/journalctl,
   (`enable`) включает «Применить».
 - **CLI.** `zapret-hub-cli` общается с приложением через Unix-сокет `$XDG_RUNTIME_DIR/zapret-hub.sock` (права
   `0600`); без `XDG_RUNTIME_DIR` — `/tmp/zapret-hub-<uid>/`. Протокол и команды те же, что на Windows, см.
-  `docs/cli.md`. Для Linux есть `service`, `nft`, `dns-flush`, `exclusions`, `probe`, `tg-ws`.
+  `docs/cli.md`. Для Linux есть `service`, `nft`, `dns-flush`, `exclusions`, `probe`, `tg-ws`, `routes grant`.
 - **Пути XDG.** Настройки: `$XDG_CONFIG_HOME/zapret-hub` (`~/.config/zapret-hub`); данные, журналы, свои
   стратегии и история тестов: `$XDG_DATA_HOME/zapret-hub` (`~/.local/share/zapret-hub`). Автозапуск хаба —
   файл `.desktop` в `~/.config/autostart`.
@@ -83,10 +84,59 @@ USER ALL=(ALL) NOPASSWD: /usr/sbin/nft, /usr/bin/systemctl, /usr/bin/journalctl,
 - **Системные проверки** на Linux: состояние службы, бинарник и права `nfqws2`, фейки `bin/*.bin`, списки, очередь
   netfilter, таблица nft и её защита от петли, чужие обходы и таблицы.
 
+## Маршрутизация
+
+Правила `routes.toml` (протокол, порты, подсети, домены, программы) работают как на Windows: совпавший TCP и UDP
+идёт через локальный SOCKS5-прокси, остальное — напрямую. Вкладка «Маршруты», команды `router` и `routes`,
+счётчики и потоки те же. Файл правил — `~/.local/share/zapret-hub/routes.toml`, программы в правилах — по имени
+(`discord`) или полному пути (`/usr/bin/discord`).
+
+**Права.** Хабу нужны `CAP_NET_ADMIN` и `CAP_NET_RAW`. Без них вкладка «Маршруты» показывает карточку с кнопкой
+«Разрешить маршрутизацию» (или `zapret-hub-cli routes grant`): один запрос пароля выполняет
+
+```
+setcap cap_net_admin,cap_net_raw+eip <путь к zapret-hub>
+```
+
+после чего хаб нужно перезапустить («Выход» в трее и запуск снова). Проверить: `getcap <путь к zapret-hub>`.
+Обновление хаба (новый файл) снимает права — нажмите кнопку снова. Права файла действуют для любого, кто его
+запускает: держите хаб в папке, куда не пишут другие пользователи. Права `setcap` не работают на AppImage
+(squashfs только для чтения) и на разделах с `nosuid`: распакуйте архив туда, где их нет.
+
+**Как это устроено.**
+
+- Таблица `inet zapret_hub_route`: TCP по правилам перенаправляется (`redirect`) на локальный приёмник хаба,
+  UDP получает метку `0x10000000` и через `ip rule fwmark 0x10000000 lookup 100` и маршрут `local 0.0.0.0/0 dev lo
+  table 100` попадает в сокет TPROXY хаба. Хаб узнаёт исходный адрес и программу (`/proc`), решает по правилам и
+  ведёт поток через SOCKS5 (`CONNECT`, `UDP ASSOCIATE`) или напрямую.
+- Свои соединения хаба помечены `0x20000000` и в таблицу не попадают. Мимо неё идут также `lo`, адрес самого
+  SOCKS5-прокси, многоадресный и широковещательный UDP и процессы группы `zapret-bypass` (если она есть; см. выше)
+  — например, сам SOCKS5-прокси, если он ходит на адреса из правил.
+- Домены: хаб читает ответы DNS сокетом `AF_PACKET` на всех интерфейсах (в том числе `lo`, где отвечает
+  `systemd-resolved`) и добавляет адреса совпавших имён в таблицу на время TTL.
+- Правила меняются одной транзакцией `nft -f`: открытые соединения не рвутся.
+- Маршрутизирует один процесс: хаб или `zapret-hub-cli` через хаб; вторая копия получает ошибку.
+
+**Очистка.** Выключение маршрутизации, «Выход», завершение сеанса и сигналы `SIGTERM`/`SIGINT`/`SIGHUP` удаляют
+таблицу, правила `ip rule` и маршрут таблицы 100. Если хаб упал, всё это удаляется при следующем запуске (даже
+с выключенной маршрутизацией, если права выданы). Вручную:
+
+```
+sudo nft delete table inet zapret_hub_route
+while sudo ip -4 rule del fwmark 0x10000000/0x10000000 lookup 100 2>/dev/null; do :; done
+sudo ip -4 route flush table 100
+```
+
+**Ограничения.**
+
+- Только IPv4, как на Windows: IPv6 идёт напрямую.
+- Правила по доменам видят только обычный DNS (UDP 53). DNS over TLS/HTTPS в `systemd-resolved` или в браузере
+  ответов не показывает — такие правила не сработают; вкладка предупреждает, если в `resolved.conf` включён DNS over TLS.
+- Только исходящий трафик этого компьютера, не других машин сети.
+- Соединения, открытые до включения правила, идут как шли.
+
 ## Чего нет на Linux
 
-- **Маршрутизация через SOCKS5** (роутер, WinDivert) — только на Windows; на вкладке «Маршруты» на Linux только
-  исключения. Пресеты `routes preset cloudflare|telegram|twitch` — для маршрутизации.
 - **Наблюдение за потоками в «Диагностике»:** программа не видит потоки и DNS программы, поэтому вердикт не выше
   «неясно» (`inconclusive`), причины, зависящие от потоков, не выносятся.
 - Реестр, Планировщик, Windows-уведомления, очистка кэша Discord Windows-путями. TCP timestamps на Linux

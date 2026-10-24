@@ -570,7 +570,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "cli"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -877,7 +877,7 @@ dependencies = [
 
 [[package]]
 name = "diag"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "log",
@@ -1115,7 +1115,7 @@ dependencies = [
 
 [[package]]
 name = "exec"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "libc",
@@ -2782,7 +2782,7 @@ checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
 
 [[package]]
 name = "probe"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "exec",
@@ -3020,7 +3020,7 @@ dependencies = [
 
 [[package]]
 name = "router"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "libc",
@@ -4008,7 +4008,7 @@ dependencies = [
 
 [[package]]
 name = "tester"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "exec",
@@ -5120,7 +5120,7 @@ dependencies = [
 
 [[package]]
 name = "zapret"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "exec",
@@ -5140,7 +5140,7 @@ dependencies = [
 
 [[package]]
 name = "zapret-hub"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "cli",
@@ -5171,7 +5171,7 @@ dependencies = [
 
 [[package]]
 name = "zapret2"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "exec",
