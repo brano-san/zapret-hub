@@ -8,7 +8,8 @@ const BITS: u64 = 1 << NET_ADMIN | 1 << NET_RAW;
 
 /// What `Live::open` says when the capabilities are missing.
 pub const HINT: &str = "routing needs the CAP_NET_ADMIN and CAP_NET_RAW capabilities: \
-     click Allow routing (or run zapret-hub-cli routes grant) and restart Zapret Hub; \
+     click «Разрешить маршрутизацию» on the Routes tab (or run zapret-hub-cli routes grant) and \
+     restart Zapret Hub; \
      an update of Zapret Hub removes them, grant them again then";
 
 /// The effective set from `/proc/<pid>/status` text (`CapEff:\t0000003000000000`).

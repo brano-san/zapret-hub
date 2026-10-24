@@ -104,6 +104,8 @@ pub struct RouterStatus {
     pub proxy: ProxyState,
     pub totals: Totals,
     pub rules_error: Option<String>,
+    /// Linux: this process lacks the capabilities routing needs; `grant` and a restart fix it.
+    pub needs_grant: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
@@ -315,6 +317,7 @@ impl Router {
             proxy: live.as_ref().map_or(ProxyState::Unknown, |l| l.proxy()),
             totals: live.map(|l| l.stats().totals()).unwrap_or_default(),
             rules_error: self.0.rules.lock().unwrap().error(),
+            needs_grant: needs_grant(),
         }
     }
 
@@ -433,6 +436,22 @@ impl Router {
         self.0.apply(table);
         Ok(out)
     }
+}
+
+fn needs_grant() -> bool {
+    #[cfg(target_os = "linux")]
+    return !linux::caps::present();
+    #[cfg(not(target_os = "linux"))]
+    false
+}
+
+/// Clears what a crashed session left (Linux: the nft table and the policy routing) unless a live
+/// session routes; a Windows session leaves nothing behind. True when it cleared.
+pub fn clear_stale() -> bool {
+    #[cfg(target_os = "linux")]
+    return live::clear_stale();
+    #[cfg(not(target_os = "linux"))]
+    false
 }
 
 fn halt(ctl: &mut Ctl) {

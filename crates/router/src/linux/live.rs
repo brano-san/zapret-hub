@@ -128,6 +128,19 @@ fn clear() {
     let _ = run("ip", &route, None);
 }
 
+/// Clears what a crashed session left (`clear`) unless a live session holds the lock; needs the
+/// capabilities. True when it cleared.
+pub(crate) fn clear_stale() -> bool {
+    let Ok(_lock) = session_lock() else {
+        return false;
+    };
+    if !caps::present() {
+        return false;
+    }
+    clear();
+    true
+}
+
 /// `nft::GROUP` exists (`nft` refuses an unknown group name).
 // ponytail: reads /etc/group only; a group from NSS (LDAP) is missed, then not skipped.
 fn bypass_group() -> bool {
@@ -491,6 +504,7 @@ mod tests {
         let held = session_lock().unwrap();
         let err = session_lock().unwrap_err().to_string();
         assert!(err.contains("routing already"), "{err}");
+        assert!(!clear_stale(), "a live session's routing stays");
         drop(held);
         session_lock().unwrap();
     }
@@ -515,5 +529,6 @@ mod tests {
                 reason: caps::HINT.into()
             }
         );
+        assert!(router.status().needs_grant);
     }
 }
