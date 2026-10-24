@@ -59,7 +59,12 @@ pub struct Score {
     pub likely_blocked: u32,
     pub discord: ProfileScore,
     pub youtube: ProfileScore,
+    /// The DbD game server (`rank::DBD`). Runs from before 0.9.0 counted Steam and Epic here too.
     pub dbd: ProfileScore,
+    #[serde(default)]
+    pub steam: ProfileScore,
+    #[serde(default)]
+    pub epic: ProfileScore,
 }
 
 impl Score {

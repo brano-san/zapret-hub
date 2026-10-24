@@ -871,7 +871,10 @@ export type Score = {
 	likely_blocked: number,
 	discord: ProfileScore,
 	youtube: ProfileScore,
+	/**  The DbD game server (`rank::DBD`). Runs from before 0.9.0 counted Steam and Epic here too. */
 	dbd: ProfileScore,
+	steam?: ProfileScore,
+	epic?: ProfileScore,
 };
 
 export type Settings = {

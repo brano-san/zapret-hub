@@ -18,11 +18,9 @@ pub const YOUTUBE: [&str; 3] = [
     "i.ytimg.com",
     "redirector.googlevideo.com",
 ];
-pub const DBD: [&str; 3] = [
-    "steam.live.bhvrdbd.com",
-    "api.epicgames.dev",
-    "store.steampowered.com",
-];
+pub const DBD: [&str; 1] = ["steam.live.bhvrdbd.com"];
+pub const EPIC: [&str; 1] = ["api.epicgames.dev"];
+pub const STEAM: [&str; 1] = ["store.steampowered.com"];
 
 /// Profile hosts `targets` does not check: they run on the side, outside the count.
 pub fn extra_targets(targets: &[Target]) -> Vec<Target> {
@@ -35,6 +33,8 @@ pub fn extra_targets(targets: &[Target]) -> Vec<Target> {
         .into_iter()
         .chain(YOUTUBE)
         .chain(DBD)
+        .chain(EPIC)
+        .chain(STEAM)
         .filter(|host| !covered.iter().any(|c| c == host))
         .map(|host| Target {
             name: host.to_owned(),
@@ -71,6 +71,8 @@ pub fn score_standard(targets: &[TargetResult]) -> Score {
     score.discord = profile(targets, &DISCORD);
     score.youtube = profile(targets, &YOUTUBE);
     score.dbd = profile(targets, &DBD);
+    score.steam = profile(targets, &STEAM);
+    score.epic = profile(targets, &EPIC);
     score
 }
 
@@ -167,6 +169,8 @@ pub fn aggregate(mut passes: Vec<StrategyResult>) -> StrategyResult {
         discord: profile(|s| &s.discord),
         youtube: profile(|s| &s.youtube),
         dbd: profile(|s| &s.dbd),
+        steam: profile(|s| &s.steam),
+        epic: profile(|s| &s.epic),
     };
     let launch_error = passes.iter().enumerate().find_map(|(i, p)| {
         p.launch_error

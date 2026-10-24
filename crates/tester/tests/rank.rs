@@ -152,6 +152,15 @@ fn extra_profile_targets_show_but_do_not_count() {
                 0,
             )
         },
+        TargetResult {
+            extra: true,
+            ..target(
+                "store.steampowered.com",
+                "https://store.steampowered.com",
+                [Pass, Pass, Error],
+                70,
+            )
+        },
     ];
     let score = score_standard(&targets);
     assert_eq!((score.ok, score.total), (3, 3));
@@ -164,6 +173,15 @@ fn extra_profile_targets_show_but_do_not_count() {
         }
     );
     assert_eq!((score.dbd.ok, score.dbd.total), (0, 3));
+    assert_eq!(
+        score.steam,
+        ProfileScore {
+            ok: 2,
+            total: 3,
+            median_ms: Some(70)
+        }
+    );
+    assert_eq!(score.epic.total, 0);
     assert_eq!(score.youtube.total, 0);
 }
 
