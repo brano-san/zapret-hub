@@ -8,7 +8,7 @@ use zapret::custom::quoted_tokens;
 use crate::circular_store::{Trick, is_filter};
 use crate::culprits::{Fault, Group, Verdict};
 use crate::evaluate::{Score, works};
-use crate::paths::{Ctx, PROXY_SILENT, PROXY_UNSET, PathKind, protocol_text};
+use crate::paths::{Ctx, PROXY_NO_UDP, PROXY_SILENT, PROXY_UNSET, PathKind, protocol_text};
 use crate::patterns::{Pattern, unique};
 use crate::profiles::ProbeKind;
 use crate::run::{GroupResult, Outcome};
@@ -122,7 +122,7 @@ fn explain(gr: &GroupResult, best: Option<&PathKind>) -> String {
         let proxy_measured = gr.results.iter().any(|(p, s)| is_proxy(p) && measured(s));
         // Why the proxy paths were left out, if they were.
         let why = gr.skipped.iter().find_map(|s| {
-            [PROXY_SILENT, PROXY_UNSET]
+            [PROXY_SILENT, PROXY_UNSET, PROXY_NO_UDP]
                 .into_iter()
                 .find(|w| s.ends_with(w))
         });

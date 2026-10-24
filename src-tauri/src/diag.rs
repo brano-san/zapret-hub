@@ -385,6 +385,10 @@ fn context(
     let proxy_ok = state.socks5().is_some_and(|addr| {
         router::parse_proxy(Some(&addr)).is_ok() && probe::socks::check(&addr).ok
     });
+    let proxy_udp = state
+        .socks5()
+        .filter(|_| proxy_ok)
+        .and_then(|addr| probe::socks::relays_udp(&addr, Duration::from_secs(2)));
     let ranking = state.best(usize::MAX);
     let strategies = ranking
         .iter()
@@ -407,6 +411,7 @@ fn context(
     Ctx {
         proxy_set,
         proxy_ok,
+        proxy_udp,
         ranking,
         strategies,
         zapret2,

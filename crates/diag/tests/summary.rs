@@ -90,6 +90,7 @@ fn ctx() -> Ctx {
     Ctx {
         proxy_set: true,
         proxy_ok: true,
+        proxy_udp: None,
         ranking: vec![],
         strategies: vec![],
         zapret2: vec![],

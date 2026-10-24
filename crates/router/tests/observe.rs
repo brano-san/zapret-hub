@@ -215,14 +215,22 @@ fn udp_run(windows: u64, reply: impl Fn(u64) -> bool) -> FlowCounters {
 fn a_quiet_one_sided_flow_is_not_lossy() {
     // Discord voice alone: audio goes out, only the 5 s ping replies come back.
     let row = udp_run(20, |w| w % 5 == 0);
-    assert_eq!((row.udp_windows, row.udp_silent_windows), (20, 0), "{row:?}");
+    assert_eq!(
+        (row.udp_windows, row.udp_silent_windows),
+        (20, 0),
+        "{row:?}"
+    );
 }
 
 #[test]
 fn replies_that_stop_make_silent_windows() {
     // Replies until 4.03 s; windows starting 6 s after that are silent: 11..=14.
     let row = udp_run(15, |w| w < 5);
-    assert_eq!((row.udp_windows, row.udp_silent_windows), (15, 4), "{row:?}");
+    assert_eq!(
+        (row.udp_windows, row.udp_silent_windows),
+        (15, 4),
+        "{row:?}"
+    );
 }
 
 /// A TLS 1.2-style ClientHello carrying `name` in its server_name extension.
