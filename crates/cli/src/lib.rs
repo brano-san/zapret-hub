@@ -98,6 +98,16 @@ pub enum Request {
     SaveExclusions {
         exclusions: Value,
     },
+    TgWsStatus,
+    InstallTgWs,
+    SetTgWsEnabled {
+        enabled: bool,
+    },
+    SaveTgWsConfig {
+        port: u16,
+        secret: String,
+        args: String,
+    },
     QuickCheck,
     SetRouterEnabled {
         enabled: bool,
@@ -355,6 +365,14 @@ mod tests {
             Request::SaveExclusions {
                 exclusions: json!({ "domains": [], "ips": [], "ports": ["51413"] }),
             },
+            Request::TgWsStatus,
+            Request::InstallTgWs,
+            Request::SetTgWsEnabled { enabled: true },
+            Request::SaveTgWsConfig {
+                port: 1443,
+                secret: "ab".repeat(16),
+                args: String::new(),
+            },
             Request::QuickCheck,
             Request::SetRouterEnabled { enabled: true },
             Request::RouterStatus,
@@ -410,7 +428,7 @@ mod tests {
     }
 
     /// Window commands the CLI leaves out (spec 6).
-    const WINDOW_ONLY: [&str; 17] = [
+    const WINDOW_ONLY: [&str; 18] = [
         "detect_folders",
         "check_folder",
         "check_zapret2_folder",
@@ -432,6 +450,8 @@ mod tests {
         "import_route_lines",
         // `diag_status` replaces it, as `tests_status` replaces `test_live`.
         "diag_live",
+        // Hands the link to Telegram on this desktop; `tg-ws status` prints it.
+        "open_tg_proxy",
     ];
 
     /// `("cmd", { a, b })` → the argument names in `bindings.ts`, sorted.

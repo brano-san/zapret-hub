@@ -124,6 +124,10 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `exclusions show` | исключения: домены, адреса и порты (раздел «Исключения») | `get_exclusions` |
 | `exclusions add|remove domains|ips|ports <value>` | добавляет или убирает одно исключение и ставит активную стратегию заново | `get_exclusions`, `save_exclusions` |
 | `exclusions reset --yes` | очищает все три списка | `save_exclusions` |
+| `tg-ws status` | TG WS Proxy: скачан ли, версия, включён ли, работает ли, порт, секрет, ссылка `tg://proxy`, последние строки журнала (раздел «TG WS Proxy») | `tg_ws_status` |
+| `tg-ws install` | скачивает последний релиз tg-ws-proxy-rs; включённый прокси перезапускается с ним | `install_tg_ws` |
+| `tg-ws on|off` | включает (нужен скачанный) или выключает прокси | `set_tg_ws_enabled` |
+| `tg-ws config [--port <n>] [--secret <32 hex>] [--args <флаги>]` | меняет порт, секрет или дополнительные флаги, остальное оставляет; работающий прокси перезапускается | `tg_ws_status`, `save_tg_ws_config` |
 | `router on\|off` | включает или выключает маршрутизацию; пишет `router_enabled` | `set_router_enabled` |
 | `router status` | идёт ли маршрутизация, состояние прокси, счётчики | `router_status` |
 | `routes list` | правила, их состояние, ошибка файла `routes.toml` и `system_doh` — включено ли шифрование DNS в Windows (тогда правила по доменам не срабатывают) | `list_routes` |
@@ -154,6 +158,7 @@ PowerShell читает вывод программ в кодировке `[Cons
 - `check_zapret2_folder` — открыл бы путь, переданный клиентом, и запустил бы из него `winws2.exe`, а папку
   zapret2 CLI не меняет (раздел «Настройки»);
 - `take_notices` — забрал бы уведомления у окна;
+- `open_tg_proxy` — открывает ссылку `tg://proxy` в Telegram; CLI печатает ссылку в `tg-ws status`;
 - `test_live` — его заменяет `tests status`, а `diag_live` — `diag status`;
 - `validate_route`, `import_route_lines` — проверка и импорт строк в редакторе правила окна.
 
@@ -349,6 +354,22 @@ Flowseal (`flowseal_copy: true`); с именами
 ставит её заново: движок читает списки при старте, а таблица nftables берёт порты. CLI проверяет значение до
 запроса: домен из двух и более меток, адрес или подсеть `a.b.c.d/n`, порт 1–65535 или диапазон по возрастанию —
 иначе код 2. `add` уже имеющегося и `remove` отсутствующего — код 1, ничего не пишется.
+
+## TG WS Proxy
+
+[tg-ws-proxy-rs](https://github.com/valnesfjord/tg-ws-proxy-rs) — локальный MTProto-прокси, который ведёт трафик
+Telegram через WebSocket. `tg-ws install` скачивает сборку своей ОС из последнего релиза
+(`tg-ws-proxy-x86_64-pc-windows-gnu.zip` или `tg-ws-proxy-x86_64-unknown-linux-musl.tar.gz`) в
+`<данные>/tg-ws-proxy`; если в релизе её нет, `tg-ws status` пишет причину в `unavailable`. Прокси слушает только
+`127.0.0.1`; секрет — 32 hex-символа, создаётся один раз и хранится в настройках, поэтому ссылка
+`tg://proxy?server=127.0.0.1&port=<порт>&secret=dd<секрет>` не меняется между запусками.
+
+- Linux: юнит `systemd --user` `zapret-hub-tg-ws` (`~/.config/systemd/user`), без прав root; включённый
+  прокси работает и без приложения, журнал — `journalctl --user -u zapret-hub-tg-ws`.
+- Windows: дочерний процесс приложения в его job object: стартует вместе с приложением, если включён, и
+  завершается вместе с ним. Журнал — `data\logs\tg-ws-proxy.log` (флаг `--log-file`).
+
+`--args` — дополнительные флаги через пробел (например `--dc-ip 2:149.154.167.220`), кавычки не поддерживаются.
 
 ## Рецепт: подобрать и применить лучшую стратегию
 

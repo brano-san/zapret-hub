@@ -39,6 +39,29 @@ pub struct Overview {
     pub platform: Platform,
 }
 
+/// TG WS Proxy (`tgws`): what its card shows, read in one go.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct TgWsStatus {
+    /// The binary is in the data folder.
+    pub installed: bool,
+    /// The release tag it came from.
+    pub version: Option<String>,
+    /// On, by the settings.
+    pub enabled: bool,
+    /// Linux: `systemctl --user is-active`; Windows: the app's own child process is alive.
+    pub running: bool,
+    /// Why there is nothing to install on this system, once a download found out: the release
+    /// has no build for it.
+    pub unavailable: Option<String>,
+    pub port: u16,
+    pub secret: String,
+    pub args: String,
+    /// `tg://proxy?server=127.0.0.1&port=<port>&secret=dd<secret>`.
+    pub link: String,
+    /// The last lines of its log: the unit's journal (Linux) or its output file (Windows).
+    pub logs: String,
+}
+
 /// The exclusions card: the zapret2 exclude lists the strategies read (`list-exclude-user.txt`,
 /// `ipset-exclude-user.txt`, one entry per line) and the ports that skip the engine (Linux).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]

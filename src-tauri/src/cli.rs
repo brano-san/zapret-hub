@@ -134,6 +134,14 @@ fn dispatch(app: &AppHandle, request: Request) -> Result<Value, String> {
                 .map_err(|err| format!("the exclusions do not parse: {err}"))?;
             json(block_on(commands::save_exclusions(handle, exclusions))?)
         }
+        Request::TgWsStatus => json(block_on(commands::tg_ws_status(handle))?),
+        Request::InstallTgWs => json(block_on(commands::install_tg_ws(handle))?),
+        Request::SetTgWsEnabled { enabled } => {
+            json(block_on(commands::set_tg_ws_enabled(handle, enabled))?)
+        }
+        Request::SaveTgWsConfig { port, secret, args } => json(block_on(
+            commands::save_tg_ws_config(handle, port, secret, args),
+        )?),
         Request::QuickCheck => json(block_on(commands::quick_check(handle))?),
         Request::SetRouterEnabled { enabled } => {
             json(block_on(commands::set_router_enabled(handle, enabled))?)

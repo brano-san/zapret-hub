@@ -203,7 +203,8 @@ fn startup(app: &AppHandle, flowseal: Option<PathBuf>) {
 
 /// Linux: after a boot the strategy's unit may be enabled yet down (`/home` or the network were
 /// not ready and systemd's retries ran out): it is started here, and the first background check
-/// turns the tray green. Windows' service manager does this itself.
+/// turns the tray green. Windows' service manager does this itself. TG WS Proxy comes up on
+/// both when it is on (Windows: it is the app's own child).
 fn raise_services(app: &AppHandle) {
     let (name, _) = active();
     let down = cfg!(target_os = "linux")
@@ -215,6 +216,14 @@ fn raise_services(app: &AppHandle) {
             app,
             NoticeLevel::Error,
             texts::SERVICE_RAISE_FAILED,
+            format!("{err:#}"),
+        );
+    }
+    if let Err(err) = crate::tgws::raise(app) {
+        actions::notice(
+            app,
+            NoticeLevel::Error,
+            texts::TG_WS_RAISE_FAILED,
             format!("{err:#}"),
         );
     }

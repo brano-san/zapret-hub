@@ -213,6 +213,8 @@ pub const ROUTER_OFF: &str = "Маршрутизация: выкл";
 pub const ROUTER_FAILED: &str = "Маршрутизация не включилась";
 
 pub const SERVICE_RAISE_FAILED: &str = "Служба zapret2 не запустилась после загрузки";
+
+pub const TG_WS_RAISE_FAILED: &str = "TG WS Proxy не запустился";
 pub const PROXY_DOWN: &str = "Прокси недоступен, трафик идёт напрямую";
 
 /// Windows cuts a tray tooltip at 127 characters: short lines, the strategy's name last, so a long

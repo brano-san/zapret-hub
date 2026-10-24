@@ -37,6 +37,7 @@ tester.workspace = true
 zapret.workspace = true
 zapret2.workspace = true
 anyhow.workspace = true
+getrandom.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true

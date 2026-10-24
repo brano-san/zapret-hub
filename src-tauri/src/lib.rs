@@ -14,6 +14,7 @@ mod settings;
 mod shell;
 mod state;
 mod texts;
+mod tgws;
 mod tray;
 mod window;
 
@@ -89,6 +90,11 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::flush_dns,
             commands::get_exclusions,
             commands::save_exclusions,
+            commands::tg_ws_status,
+            commands::install_tg_ws,
+            commands::set_tg_ws_enabled,
+            commands::save_tg_ws_config,
+            commands::open_tg_proxy,
             commands::quick_check,
             commands::take_notices,
             commands::set_router_enabled,
@@ -192,6 +198,12 @@ pub fn run() -> anyhow::Result<()> {
         if let Err(err) = settings::save(&paths.settings(), &settings) {
             log::error!("failed to save the settings moved off Flowseal: {err:#}");
         }
+    }
+    // The `tg://proxy` link must survive restarts: a secret is made once and kept.
+    if tgws::ensure_secret(&mut settings)
+        && let Err(err) = settings::save(&paths.settings(), &settings)
+    {
+        log::warn!("cannot save the TG WS Proxy secret: {err:#}");
     }
     let state = AppState::new(paths, settings);
     state.migrate_strategies();

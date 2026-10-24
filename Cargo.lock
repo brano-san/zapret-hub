@@ -5144,6 +5144,7 @@ dependencies = [
  "cli",
  "diag",
  "exec",
+ "getrandom 0.3.4",
  "log",
  "probe",
  "router",

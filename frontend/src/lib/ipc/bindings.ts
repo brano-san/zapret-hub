@@ -91,6 +91,14 @@ export const commands = {
 	flushDns: () => typedError<null, string>(__TAURI_INVOKE("flush_dns")),
 	getExclusions: () => typedError<Exclusions, string>(__TAURI_INVOKE("get_exclusions")),
 	saveExclusions: (exclusions: Exclusions) => typedError<null, string>(__TAURI_INVOKE("save_exclusions", { exclusions })),
+	tgWsStatus: () => typedError<TgWsStatus, string>(__TAURI_INVOKE("tg_ws_status")),
+	/**  The latest TG WS Proxy release over the installed one. */
+	installTgWs: () => typedError<TgWsStatus, string>(__TAURI_INVOKE("install_tg_ws")),
+	/**  The only command that writes `tg_ws_enabled`. */
+	setTgWsEnabled: (enabled: boolean) => typedError<TgWsStatus, string>(__TAURI_INVOKE("set_tg_ws_enabled", { enabled })),
+	saveTgWsConfig: (port: number, secret: string, args: string) => typedError<TgWsStatus, string>(__TAURI_INVOKE("save_tg_ws_config", { port, secret, args })),
+	/**  The `tg://proxy` link to Telegram. Window only: the CLI prints the link. */
+	openTgProxy: () => typedError<null, string>(__TAURI_INVOKE("open_tg_proxy")),
 	quickCheck: () => typedError<QuickCheck, string>(__TAURI_INVOKE("quick_check")),
 	takeNotices: () => __TAURI_INVOKE<Notice[]>("take_notices"),
 	/**  The only command that writes `router_enabled` (`routing::set_enabled`). */
@@ -933,6 +941,14 @@ export type Settings = {
 	 *  writes them.
 	 */
 	excluded_ports?: string[],
+	/**  TG WS Proxy runs (`tgws`); only `set_tg_ws_enabled` writes it. */
+	tg_ws_enabled?: boolean,
+	/**  The MTProto port it listens on, at 127.0.0.1. */
+	tg_ws_port?: number,
+	/**  32 hex characters, made once (`tgws::ensure_secret`): the `tg://proxy` link stays valid. */
+	tg_ws_secret?: string,
+	/**  Extra flags after `--secret`, e.g. `--dc-ip 2:149.154.167.220`. */
+	tg_ws_args?: string,
 };
 
 /**  zapret, the settings or the history changed: the page reads what it shows again. */
@@ -1052,6 +1068,30 @@ export type TestRun = {
 /**  The run is over and zapret is back; `run_id` is `None` when it failed before a result. */
 export type TestsFinished = {
 	run_id: string | null,
+};
+
+/**  TG WS Proxy (`tgws`): what its card shows, read in one go. */
+export type TgWsStatus = {
+	/**  The binary is in the data folder. */
+	installed: boolean,
+	/**  The release tag it came from. */
+	version: string | null,
+	/**  On, by the settings. */
+	enabled: boolean,
+	/**  Linux: `systemctl --user is-active`; Windows: the app's own child process is alive. */
+	running: boolean,
+	/**
+	 *  Why there is nothing to install on this system, once a download found out: the release
+	 *  has no build for it.
+	 */
+	unavailable: string | null,
+	port: number,
+	secret: string,
+	args: string,
+	/**  `tg://proxy?server=127.0.0.1&port=<port>&secret=dd<secret>`. */
+	link: string,
+	/**  The last lines of its log: the unit's journal (Linux) or its output file (Windows). */
+	logs: string,
 };
 
 export type Theme = "system" | "light" | "dark";

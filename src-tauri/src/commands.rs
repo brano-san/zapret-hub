@@ -22,10 +22,11 @@ use zapret::service::{QuickCheck, active};
 use crate::actions::{self, state as app};
 use crate::dto::{
     Candidates, Detected, DownloadProgress, Exclusions, FolderKind, LiveRun, Notice, Overview,
+    TgWsStatus,
 };
 use crate::settings::Settings;
 use crate::state::AppState;
-use crate::{routing, texts, window};
+use crate::{routing, texts, tgws, window};
 
 type Answer<T> = Result<T, String>;
 
@@ -516,6 +517,44 @@ pub async fn get_exclusions(handle: AppHandle) -> Answer<Exclusions> {
 #[specta::specta]
 pub async fn save_exclusions(handle: AppHandle, exclusions: Exclusions) -> Answer<()> {
     blocking(move || actions::save_exclusions(&handle, exclusions)).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn tg_ws_status(handle: AppHandle) -> Answer<TgWsStatus> {
+    blocking(move || Ok(tgws::status(&handle))).await
+}
+
+/// The latest TG WS Proxy release over the installed one.
+#[tauri::command]
+#[specta::specta]
+pub async fn install_tg_ws(handle: AppHandle) -> Answer<TgWsStatus> {
+    blocking(move || tgws::install(&handle)).await
+}
+
+/// The only command that writes `tg_ws_enabled`.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_tg_ws_enabled(handle: AppHandle, enabled: bool) -> Answer<TgWsStatus> {
+    blocking(move || tgws::set_enabled(&handle, enabled)).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn save_tg_ws_config(
+    handle: AppHandle,
+    port: u16,
+    secret: String,
+    args: String,
+) -> Answer<TgWsStatus> {
+    blocking(move || tgws::save_config(&handle, port, secret, args)).await
+}
+
+/// The `tg://proxy` link to Telegram. Window only: the CLI prints the link.
+#[tauri::command]
+#[specta::specta]
+pub async fn open_tg_proxy(handle: AppHandle) -> Answer<()> {
+    blocking(move || tgws::open_link(&handle)).await
 }
 
 #[tauri::command]

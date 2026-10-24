@@ -45,6 +45,14 @@ pub struct Settings {
     /// queue leaves them out (`zapret2::Engine::with_excluded_ports`); only `save_exclusions`
     /// writes them.
     pub excluded_ports: Vec<String>,
+    /// TG WS Proxy runs (`tgws`); only `set_tg_ws_enabled` writes it.
+    pub tg_ws_enabled: bool,
+    /// The MTProto port it listens on, at 127.0.0.1.
+    pub tg_ws_port: u16,
+    /// 32 hex characters, made once (`tgws::ensure_secret`): the `tg://proxy` link stays valid.
+    pub tg_ws_secret: String,
+    /// Extra flags after `--secret`, e.g. `--dc-ip 2:149.154.167.220`.
+    pub tg_ws_args: String,
 }
 
 impl Default for Settings {
@@ -63,6 +71,10 @@ impl Default for Settings {
             nekobox_dir: None,
             game_filter: true,
             excluded_ports: Vec::new(),
+            tg_ws_enabled: false,
+            tg_ws_port: 1443,
+            tg_ws_secret: String::new(),
+            tg_ws_args: String::new(),
         }
     }
 }
@@ -102,11 +114,15 @@ pub fn load_or_default(path: &Path) -> (Settings, Option<String>) {
 /// zapret-hub-cli (`pipe`) never turns the CLI on: a save that passed the gate just before the user
 /// turned the CLI off must not turn it back on (CLI spec 7.2). Nor does it move the zapret2 folder:
 /// the SYSTEM service runs winws2.exe from it, so any program of the user could pick what SYSTEM
-/// runs (CLI spec 5, zapret2 spec 10). Neither one changes `router_enabled` or the excluded ports:
-/// their own commands write them, and a Settings tab opened before must not undo them.
+/// runs (CLI spec 5, zapret2 spec 10). Neither one changes `router_enabled`, the excluded ports or
+/// TG WS Proxy: their own commands write them, and a Settings tab opened before must not undo them.
 pub fn to_save(current: &Settings, mut sent: Settings, pipe: bool) -> anyhow::Result<Settings> {
     sent.router_enabled = current.router_enabled;
     sent.excluded_ports.clone_from(&current.excluded_ports);
+    sent.tg_ws_enabled = current.tg_ws_enabled;
+    sent.tg_ws_port = current.tg_ws_port;
+    sent.tg_ws_secret.clone_from(&current.tg_ws_secret);
+    sent.tg_ws_args.clone_from(&current.tg_ws_args);
     if pipe {
         anyhow::ensure!(
             sent.zapret2_dir == current.zapret2_dir,
@@ -257,6 +273,10 @@ mod tests {
             nekobox_dir: Some(r"E:\nekoray".into()),
             game_filter: false,
             excluded_ports: vec!["51413".into(), "6881-6889".into()],
+            tg_ws_enabled: true,
+            tg_ws_port: 1444,
+            tg_ws_secret: "ab".repeat(16),
+            tg_ws_args: "--dc-ip 2:149.154.167.220".into(),
         };
         save(&path, &settings).unwrap();
         assert_eq!(load(&path).unwrap(), settings);
@@ -283,6 +303,10 @@ mod tests {
     fn a_settings_save_keeps_what_its_own_commands_write() {
         let current = Settings {
             excluded_ports: vec!["51413".into()],
+            tg_ws_enabled: true,
+            tg_ws_port: 1444,
+            tg_ws_secret: "ab".repeat(16),
+            tg_ws_args: "--x".into(),
             ..Settings::default()
         };
         let stale = Settings {
@@ -387,7 +411,8 @@ diag_budget_min = 10
         assert_eq!(settings.socks5.as_deref(), Some("127.0.0.1:18082"));
         assert!(settings.wizard_done && settings.cli_enabled && settings.router_enabled);
         assert!(settings.game_filter, "a new field takes its default");
-        assert!(settings.excluded_ports.is_empty());
+        assert!(settings.excluded_ports.is_empty() && !settings.tg_ws_enabled);
+        assert_eq!(settings.tg_ws_port, 1443);
         assert_eq!(flowseal_dir(&path), Some(PathBuf::from(r"E:\Zapret")));
         save(&path, &settings).unwrap();
         assert_eq!(flowseal_dir(&path), None, "the migration runs once");

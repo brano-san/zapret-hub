@@ -121,6 +121,9 @@ enum Command {
     /// What zapret2 leaves alone: domains, addresses and (Linux) ports.
     #[command(subcommand)]
     Exclusions(ExclusionsCommand),
+    /// TG WS Proxy: Telegram through a local MTProto proxy over WebSocket.
+    #[command(subcommand)]
+    TgWs(TgWsCommand),
     /// Route UDP through the local SOCKS5 proxy.
     #[command(subcommand)]
     Router(RouterCommand),
@@ -461,6 +464,25 @@ enum ExclusionList {
     Ips,
     /// A port or a range (6881-6889) whose traffic skips the engine (Linux).
     Ports,
+}
+
+#[derive(Debug, Subcommand)]
+enum TgWsCommand {
+    /// Installed, running, the port, the secret and the tg://proxy link.
+    Status,
+    /// Download the latest tg-ws-proxy-rs release.
+    Install,
+    On,
+    Off,
+    /// Change the port, the secret (32 hex characters) or the extra flags; the rest stays.
+    Config {
+        #[arg(long)]
+        port: Option<u16>,
+        #[arg(long)]
+        secret: Option<String>,
+        #[arg(long, allow_hyphen_values = true)]
+        args: Option<String>,
+    },
 }
 
 /// The keys of zapret-hub.toml the CLI may change (spec 7.2). Not `zapret2_dir`: the SYSTEM
@@ -850,6 +872,27 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
         Command::Exclusions(ExclusionsCommand::Reset) => Request::SaveExclusions {
             exclusions: json!({ "domains": [], "ips": [], "ports": [] }),
         },
+        Command::TgWs(TgWsCommand::Status) => Request::TgWsStatus,
+        Command::TgWs(TgWsCommand::Install) => Request::InstallTgWs,
+        Command::TgWs(TgWsCommand::On) => Request::SetTgWsEnabled { enabled: true },
+        Command::TgWs(TgWsCommand::Off) => Request::SetTgWsEnabled { enabled: false },
+        Command::TgWs(TgWsCommand::Config { port, secret, args }) => {
+            if port.is_none() && secret.is_none() && args.is_none() {
+                return Err(Fail::new(
+                    USAGE,
+                    "nothing to change: give --port, --secret or --args",
+                ));
+            }
+            let status = call(Request::TgWsStatus)?;
+            let held = |key: &str| status[key].as_str().unwrap_or_default().to_owned();
+            Request::SaveTgWsConfig {
+                port: port
+                    .or_else(|| status["port"].as_u64().and_then(|p| u16::try_from(p).ok()))
+                    .ok_or_else(|| Fail::new(UNAVAILABLE, "Zapret Hub sent no TG WS port"))?,
+                secret: secret.unwrap_or_else(|| held("secret")),
+                args: args.unwrap_or_else(|| held("args")),
+            }
+        }
         Command::Router(RouterCommand::On) => Request::SetRouterEnabled { enabled: true },
         Command::Router(RouterCommand::Off) => Request::SetRouterEnabled { enabled: false },
         Command::Router(RouterCommand::Status) => Request::RouterStatus,
@@ -1716,6 +1759,13 @@ mod tests {
                     exclusions: json!({ "domains": [], "ips": [], "ports": [] }),
                 },
             ),
+            (&["tg-ws", "status"], Request::TgWsStatus),
+            (&["tg-ws", "install"], Request::InstallTgWs),
+            (&["tg-ws", "on"], Request::SetTgWsEnabled { enabled: true }),
+            (
+                &["tg-ws", "off"],
+                Request::SetTgWsEnabled { enabled: false },
+            ),
         ];
         for (args, expected) in table {
             let (_, asked) = drive(args, Vec::new());
@@ -1786,6 +1836,37 @@ mod tests {
             assert_eq!(code(outcome), USAGE, "{list} {value}");
             assert!(asked.is_empty(), "{list} {value}");
         }
+    }
+
+    #[test]
+    fn tg_ws_config_changes_only_what_is_given() {
+        let status = || Ok(json!({"port": 1443, "secret": "ab", "args": "-v"}));
+        let sent = |args: &[&str]| {
+            let (_, asked) = drive(args, vec![status()]);
+            let [
+                Request::TgWsStatus,
+                Request::SaveTgWsConfig { port, secret, args },
+            ] = asked.as_slice()
+            else {
+                panic!("{asked:?}")
+            };
+            (*port, secret.clone(), args.clone())
+        };
+        assert_eq!(
+            sent(&["tg-ws", "config", "--port", "9000"]),
+            (9000, "ab".into(), "-v".into())
+        );
+        assert_eq!(
+            sent(&["tg-ws", "config", "--secret", "cd"]),
+            (1443, "cd".into(), "-v".into())
+        );
+        assert_eq!(
+            sent(&["tg-ws", "config", "--args", "--dc-ip 2:149.154.167.220"]),
+            (1443, "ab".into(), "--dc-ip 2:149.154.167.220".into())
+        );
+        let (outcome, asked) = drive(&["tg-ws", "config"], Vec::new());
+        assert_eq!(code(outcome), USAGE);
+        assert!(asked.is_empty());
     }
 
     #[test]
