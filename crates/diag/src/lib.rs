@@ -5,6 +5,7 @@ pub mod cover;
 pub mod culprits;
 pub mod evaluate;
 pub mod logs;
+pub mod next_steps;
 pub mod paths;
 pub mod patterns;
 pub mod profiles;
