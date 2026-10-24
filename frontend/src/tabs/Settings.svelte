@@ -168,7 +168,7 @@
     <div class="buttons">
       <button onclick={() => call(S.failed.open, commands.openFolder("Logs"))}>{S.settings.openLogs}</button>
       <button disabled={!app.settings?.zapret2_dir} onclick={() => call(S.failed.open, commands.openFolder("Zapret2"))}>
-        {S.settings.openZapret2}
+        {S.settings.openStrategies}
       </button>
     </div>
     {#if version}<p class="muted">{S.settings.version(version)}</p>{/if}

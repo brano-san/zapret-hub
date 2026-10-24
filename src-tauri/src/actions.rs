@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Manager as _};
 use tauri_specta::Event as _;
-use zapret::service::{QuickCheck, SERVICE, SvcState, active};
+use zapret::service::{QuickCheck, SERVICE, SERVICE2, SvcState, active};
 
 use crate::dto::{
     Candidates, Detected, FolderKind, Notice, NoticeLevel, NoticesChanged, Overview, StateChanged,
@@ -96,10 +96,34 @@ pub fn quick_check(app: &AppHandle) -> anyhow::Result<QuickCheck> {
     finish_with_check(app, Ok(check))
 }
 
+/// What the move off Flowseal does to the services, from what is there.
+#[derive(Debug, PartialEq, Eq)]
+enum MoveStep {
+    Nothing,
+    /// Only Flowseal's service: it gives way to the zapret2 copy of its strategy.
+    Switch,
+    /// The zapret2 service with this strategy: 0.8.0 baked the Flowseal folder's lists and fakes
+    /// into its arguments, so it is installed again to read the zapret2 folder. A Flowseal service
+    /// next to it stays, for the conflict check: the user's zapret2 strategy is not replaced.
+    Reinstall(String),
+}
+
+fn move_step(
+    zapret2_ready: bool,
+    flowseal_installed: bool,
+    zapret2_active: Option<String>,
+) -> MoveStep {
+    match zapret2_active {
+        _ if !zapret2_ready => MoveStep::Nothing,
+        Some(active) => MoveStep::Reinstall(active),
+        None if flowseal_installed => MoveStep::Switch,
+        None => MoveStep::Nothing,
+    }
+}
+
 /// The move off Flowseal of a 0.8.0 user (its folder was in the settings; `settings::migrate_flowseal`
 /// already took the rest), once, at start: its lists and fakes into the zapret2 folder, and the
-/// strategy of its service as its built-in zapret2 copy. With zapret2 ready, the Flowseal service
-/// gives way to that copy; without it, the wizard gets zapret2 and the system checks name the
+/// services as `move_step` says. Without zapret2 the wizard gets it and the system checks name the
 /// Flowseal service a conflict. One notice (and its journal line) says what happened.
 pub fn migrate_flowseal(app: &AppHandle, flowseal_dir: &Path) {
     let state = state(app);
@@ -119,24 +143,32 @@ pub fn migrate_flowseal(app: &AppHandle, flowseal_dir: &Path) {
         .then(|| zapret::service::strategy_of(SERVICE))
         .flatten();
     let target = zapret2::strategies::flowseal_copy(old.as_deref().unwrap_or("general"));
-    let switched = match &engine {
-        Some(engine) if installed => Some(
-            crate::routing::paused(app, || leave_flowseal(app, engine, &target))
-                .map_err(|err| format!("{err:#}")),
-        ),
+    let zapret2_active = (zapret::service::state(SERVICE2) != SvcState::NotInstalled)
+        .then(|| zapret::service::strategy_of(SERVICE2))
+        .flatten();
+    let step = move_step(engine.is_some(), installed, zapret2_active);
+    let result = |r: anyhow::Result<QuickCheck>| r.map(|_| ()).map_err(|err| format!("{err:#}"));
+    let outcome = match (&step, &engine) {
+        (MoveStep::Switch, Some(engine)) => Some(result(crate::routing::paused(app, || {
+            leave_flowseal(app, engine, &target)
+        }))),
+        (MoveStep::Reinstall(active), _) => {
+            Some(result(crate::routing::paused(app, || apply(app, active))))
+        }
         _ => None,
     };
-    let level = match &switched {
+    let level = match &outcome {
         Some(Err(_)) => NoticeLevel::Error,
         _ => NoticeLevel::Info,
     };
-    let text = texts::flowseal_moved(
-        old.as_deref(),
-        &target,
-        engine.is_some(),
-        installed,
-        switched.as_ref().map(|result| result.as_ref().map(|_| ())),
-    );
+    let moved = match (&step, &outcome) {
+        (MoveStep::Switch, Some(r)) => texts::Moved::Switched(r.as_ref().map(|_| ())),
+        (MoveStep::Reinstall(active), Some(r)) => {
+            texts::Moved::Reinstalled(active, r.as_ref().map(|_| ()))
+        }
+        _ => texts::Moved::NotTried,
+    };
+    let text = texts::flowseal_moved(old.as_deref(), &target, engine.is_some(), installed, moved);
     notice(app, level, texts::FLOWSEAL_MOVED, text);
 }
 
@@ -233,8 +265,7 @@ pub fn save_settings(app: &AppHandle, settings: Settings, pipe: bool) -> anyhow:
     if !diagnosing {
         crate::routing::sync(app);
     }
-    let reinstall = filter_changed
-        && zapret::service::state(zapret::service::SERVICE2) != SvcState::NotInstalled;
+    let reinstall = filter_changed && zapret::service::state(SERVICE2) != SvcState::NotInstalled;
     if let Some(active) = zapret::service::strategy().filter(|_| reinstall) {
         apply(app, &active)?;
     }
@@ -443,6 +474,27 @@ pub fn open_folder(app: &AppHandle, kind: FolderKind) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_move_off_flowseal_keeps_a_zapret2_strategy_and_switches_only_flowseal() {
+        let active = || Some("zapret2:mine".to_owned());
+        assert_eq!(
+            move_step(false, true, active()),
+            MoveStep::Nothing,
+            "no zapret2 folder"
+        );
+        assert_eq!(
+            move_step(true, false, active()),
+            MoveStep::Reinstall("zapret2:mine".into())
+        );
+        assert_eq!(
+            move_step(true, true, active()),
+            MoveStep::Reinstall("zapret2:mine".into()),
+            "both services: the user's zapret2 strategy stays"
+        );
+        assert_eq!(move_step(true, true, None), MoveStep::Switch);
+        assert_eq!(move_step(true, false, None), MoveStep::Nothing);
+    }
 
     #[test]
     fn a_strategy_opens_the_folder_of_its_file() {

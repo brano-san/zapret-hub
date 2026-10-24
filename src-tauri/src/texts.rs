@@ -140,15 +140,23 @@ pub fn quick_result(check: &QuickCheck) -> String {
 
 pub const FLOWSEAL_MOVED: &str = "Flowseal заменён на zapret2";
 
+/// What the move off Flowseal did to the services (`actions::move_step`).
+pub enum Moved<'a> {
+    NotTried,
+    /// Flowseal's service gave way to its zapret2 copy, or did not.
+    Switched(Result<(), &'a String>),
+    /// The zapret2 service installed again with its strategy, to read the zapret2 folder's lists.
+    Reinstalled(&'a str, Result<(), &'a String>),
+}
+
 /// The one notice of the move off Flowseal (`actions::migrate_flowseal`): `old` is the strategy of
-/// Flowseal's service, `target` its zapret2 copy, `switched` how the switch to it went when one was
-/// tried (zapret2 ready and the Flowseal service there).
+/// Flowseal's service, `target` its zapret2 copy, `installed` whether Flowseal's service is there.
 pub fn flowseal_moved(
     old: Option<&str>,
     target: &str,
     zapret2: bool,
     installed: bool,
-    switched: Option<Result<(), &String>>,
+    moved: Moved<'_>,
 ) -> String {
     let mut text = String::from(
         "Zapret Hub больше не работает с Flowseal: его стратегии встроены в zapret2 под тем же именем.",
@@ -157,18 +165,30 @@ pub fn flowseal_moved(
         text.push_str(&format!(" Стратегия «{old}» — это {target}."));
     }
     text.push(' ');
-    text.push_str(&match (zapret2, installed, switched) {
-        (_, _, Some(Ok(()))) => {
+    text.push_str(&match (zapret2, installed, moved) {
+        (_, _, Moved::Switched(Ok(()))) => {
             format!("Служба Flowseal удалена, вместо неё работает zapret2 со стратегией {target}.")
         }
-        (_, _, Some(Err(err))) => format!(
-            "Переключить службу на {target} не удалось, служба Flowseal оставлена как была:\n{err}"
+        (_, _, Moved::Switched(Err(err))) => format!(
+            "Переключить службу на {target} не удалось. Служба Flowseal восстановлена, но тесты и диагностика её останавливают: удалите её в «Системных проверках» и примените {target}.\n{err}"
         ),
-        (false, true, None) => format!(
-            "Укажите папку zapret2 (мастер настройки), удалите службу Flowseal в «Системных проверках» и примените {target}."
+        (_, installed, Moved::Reinstalled(active, Ok(()))) => {
+            let mut done = format!(
+                "Служба zapret2 установлена заново со стратегией {active}: списки и фейки она берёт из папки zapret2, папка Flowseal больше не нужна."
+            );
+            if installed {
+                done.push_str(" Служба Flowseal осталась: удалите её в «Системных проверках».");
+            }
+            done
+        }
+        (_, _, Moved::Reinstalled(active, Err(err))) => format!(
+            "Установить службу zapret2 заново со стратегией {active} не удалось: она ещё берёт списки и фейки из папки Flowseal. Не удаляйте эту папку, пока не примените стратегию снова.\n{err}"
         ),
-        (false, false, None) => "Укажите папку zapret2 в мастере настройки.".to_owned(),
-        (true, _, None) => "Списки и фейки Flowseal перенесены в папку zapret2.".to_owned(),
+        (false, true, Moved::NotTried) => format!(
+            "Укажите папку zapret2 (мастер настройки), удалите службу Flowseal в «Системных проверках» и примените {target}. Свои списки перенесите из папки lists Flowseal в папку lists zapret2."
+        ),
+        (false, false, Moved::NotTried) => "Укажите папку zapret2 в мастере настройки. Свои списки перенесите из папки lists Flowseal в папку lists zapret2.".to_owned(),
+        (true, _, Moved::NotTried) => "Списки и фейки Flowseal перенесены в папку zapret2.".to_owned(),
     });
     text
 }
@@ -272,19 +292,57 @@ mod tests {
     #[test]
     fn the_flowseal_notice_says_where_the_strategy_went() {
         let target = "zapret2:general (ALT11)";
-        let done = flowseal_moved(Some("general (ALT11)"), target, true, true, Some(Ok(())));
+        let done = flowseal_moved(
+            Some("general (ALT11)"),
+            target,
+            true,
+            true,
+            Moved::Switched(Ok(())),
+        );
         assert!(
             done.contains("«general (ALT11)» — это zapret2:general (ALT11)"),
             "{done}"
         );
         assert!(done.contains("вместо неё работает zapret2"), "{done}");
         let err = "winws2 --dry-run failed".to_owned();
-        let failed = flowseal_moved(Some("general (ALT11)"), target, true, true, Some(Err(&err)));
+        let failed = flowseal_moved(
+            Some("general (ALT11)"),
+            target,
+            true,
+            true,
+            Moved::Switched(Err(&err)),
+        );
         assert!(failed.ends_with(&err), "{failed}");
-        let no_zapret2 = flowseal_moved(Some("general (ALT11)"), target, false, true, None);
+        let no_zapret2 = flowseal_moved(
+            Some("general (ALT11)"),
+            target,
+            false,
+            true,
+            Moved::NotTried,
+        );
         assert!(no_zapret2.contains("Системных проверках"), "{no_zapret2}");
-        let quiet = flowseal_moved(None, "zapret2:general", true, false, None);
+        let quiet = flowseal_moved(None, "zapret2:general", true, false, Moved::NotTried);
         assert!(!quiet.contains("Стратегия"), "{quiet}");
+        let both = flowseal_moved(
+            None,
+            "zapret2:general",
+            true,
+            true,
+            Moved::Reinstalled("zapret2:mine", Ok(())),
+        );
+        assert!(both.contains("заново со стратегией zapret2:mine"), "{both}");
+        assert!(both.contains("Служба Flowseal осталась"), "{both}");
+        let kept = flowseal_moved(
+            None,
+            "zapret2:general",
+            true,
+            false,
+            Moved::Reinstalled("zapret2:mine", Err(&err)),
+        );
+        assert!(
+            kept.contains("Не удаляйте эту папку") && kept.ends_with(&err),
+            "{kept}"
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import type { CheckLevel, CheckStatus, DiagScore, DpiStatus, Fault, Fix,  MergeNote, PathKind, Pattern, Protocol, ProxyState, QuickCheck, Rule, StrategyResult, Suite, Traffic, Via } from "./ipc/bindings";
+import type { CheckLevel, CheckStatus, DiagScore, DpiStatus, Fault, Fix, MergeNote, PathKind, Pattern, Protocol, ProxyState, QuickCheck, Rule, StrategyResult, Suite, Traffic, Via } from "./ipc/bindings";
 import { plural, S } from "./strings";
 
 export function ms(value: number | null | undefined): string {

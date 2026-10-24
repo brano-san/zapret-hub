@@ -1,5 +1,5 @@
-//! The checks of Flowseal's `service.bat :service_diagnostics` (spec 5.7), on the zapret2 folder. Each gets a level; what the
-//! original fixes on its own becomes an action behind a button.
+//! The checks of Flowseal's `service.bat :service_diagnostics` (spec 5.7), on the zapret2 folder.
+//! Each gets a level; what the original fixes on its own becomes an action behind a button.
 
 use std::path::Path;
 
