@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Flowseal zapret folder model: strategies, service, flags, lists, updates, system checks."
+description = "Windows utilities: the services, processes, hosts, releases, the snapshot, system checks."
 
 [dependencies]
 exec.workspace = true

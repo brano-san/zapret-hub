@@ -1,6 +1,5 @@
-//! A test run (spec 7.3): snapshot, zapret stopped, each strategy started as winws (or winws2,
-//! zapret2 spec 7) directly with the arguments «Применить» would install, the checks, everything
-//! put back.
+//! A test run (spec 7.3): snapshot, zapret2 stopped, each strategy started as winws2 (zapret2
+//! spec 7) directly with the arguments «Применить» would install, the checks, everything put back.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
@@ -8,7 +7,6 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use probe::curl::CheckKind;
-use zapret::folder::Folder;
 use zapret::service::{SERVICE, SERVICE2};
 use zapret::snapshot::{Snapshot, pending_path};
 use zapret::targets::Target;
@@ -67,10 +65,8 @@ pub enum Progress {
 
 /// What can fail is checked and fetched first, while zapret still works; then the state is saved,
 /// zapret stopped and the strategies run. The state is put back even when something panics (the
-/// panic goes on afterwards). `folder` runs Flowseal's strategies, `engine2` the `zapret2:` ones:
-/// a run with only zapret2 strategies needs no Flowseal folder.
+/// panic goes on afterwards).
 pub fn run(
-    folder: Option<&Folder>,
     engine2: Option<&Engine>,
     data_dir: &Path,
     request: &Request,
@@ -79,7 +75,7 @@ pub fn run(
     progress: &(dyn Fn(Progress) + Sync),
 ) -> anyhow::Result<TestRun> {
     request.check()?;
-    needs_flowseal(folder, request)?;
+    zapret2_only(request)?;
     let zapret2_version = zapret2_version(engine2, request)?;
     anyhow::ensure!(
         probe::curl::available(),
@@ -95,18 +91,18 @@ pub fn run(
         Ok(())
     };
     not_canceled()?;
-    let work = prepare(folder, data_dir, request, socks5)?;
+    let work = prepare(data_dir, request, socks5)?;
     not_canceled()?;
     let pending = pending_path(data_dir);
     // An earlier pending.json is restored first; when that fails nothing starts (spec 10).
-    let snapshot = zapret::snapshot::begin(folder, "tests", &pending)?;
+    let snapshot = zapret::snapshot::begin("tests", &pending)?;
     let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let outcome = run_strategies(folder, engine2, request, &work, cancel, progress);
+        let outcome = run_strategies(engine2, request, &work, cancel, progress);
         let canceled = cancel.load(Ordering::Relaxed);
         progress(Progress::Restoring);
         (outcome, canceled)
     }));
-    let restore_error = snapshot.restore(folder).err().map(|err| format!("{err:#}"));
+    let restore_error = snapshot.restore().err().map(|err| format!("{err:#}"));
     match &restore_error {
         // Put back: the file has done its job.
         None => {
@@ -139,7 +135,6 @@ pub fn run(
     let run = TestRun {
         id,
         suite: request.suite,
-        flowseal_version: folder.and_then(Folder::version),
         zapret2_version,
         canceled,
         restore_error,
@@ -167,14 +162,18 @@ pub fn zapret2_version(
     Ok(Some(engine.version()?.text))
 }
 
-/// A Flowseal strategy without the Flowseal folder stops the run here, before anything changes.
-pub fn needs_flowseal(folder: Option<&Folder>, request: &Request) -> anyhow::Result<()> {
-    let flowseal = request
+/// A name without the `zapret2:` prefix (a Flowseal `.bat` of 0.8.0) stops the run here, before
+/// anything changes.
+pub fn zapret2_only(request: &Request) -> anyhow::Result<()> {
+    if let Some(name) = request
         .strategies
         .iter()
-        .find(|name| zapret2::strip_prefix(name).is_none());
-    if let (None, Some(name)) = (folder, flowseal) {
-        anyhow::bail!("{name} is a Flowseal strategy: {}", zapret::folder::NOT_SET);
+        .find(|name| zapret2::strip_prefix(name).is_none())
+    {
+        anyhow::bail!(
+            "{name} is not a zapret2 strategy: Flowseal's strategies are built in as {}<name>",
+            zapret2::PREFIX
+        );
     }
     Ok(())
 }
@@ -188,15 +187,10 @@ enum Work {
 
 /// Reads or downloads what the checks need. The DPI suite takes up to a minute to fetch and needs
 /// the bypass, so this runs before zapret is stopped, and a failure leaves nothing to restore.
-fn prepare(
-    folder: Option<&Folder>,
-    data_dir: &Path,
-    request: &Request,
-    socks5: Option<&str>,
-) -> anyhow::Result<Work> {
+fn prepare(data_dir: &Path, request: &Request, socks5: Option<&str>) -> anyhow::Result<Work> {
     Ok(match request.suite {
         Suite::Standard => {
-            let targets = folder.map_or_else(zapret::targets::defaults, zapret::targets::load);
+            let targets = zapret::targets::defaults();
             let extra = crate::rank::extra_targets(&targets);
             Work::Standard(
                 targets
@@ -217,14 +211,14 @@ fn prepare(
 }
 
 fn run_strategies(
-    folder: Option<&Folder>,
     engine2: Option<&Engine>,
     request: &Request,
     work: &Work,
     cancel: &AtomicBool,
     progress: &(dyn Fn(Progress) + Sync),
 ) -> anyhow::Result<Vec<StrategyResult>> {
-    // Both engines: a run may mix them (zapret2 spec 7).
+    // Flowseal's service too, when it is still there: nothing else may filter while a strategy is
+    // measured. It is a conflict (the system checks), so it is not started again afterwards.
     for service in [SERVICE, SERVICE2] {
         zapret::service::stop(service)?;
     }
@@ -234,10 +228,6 @@ fn run_strategies(
         && let Err(err) = zapret::service::enable_tcp_timestamps()
     {
         log::warn!("TCP timestamps stay off for the tests: {err:#}");
-    }
-    // Every address through the ipset profiles; without Flowseal there are none.
-    if let (Work::Dpi(..), Some(folder)) = (work, folder) {
-        zapret::ipset::enter_test_any(folder)?;
     }
     warm_dns(work);
     let total = request.strategies.len() as u32;
@@ -260,7 +250,7 @@ fn run_strategies(
             // Nothing of either engine may filter while this one is measured: the previous
             // strategy's process has exited (`Winws::stop` waits), and this catches any other.
             engine::stop_engines()?;
-            let result = run_one(folder, engine2, name, work, cancel);
+            let result = run_one(engine2, name, work, cancel);
             if cancel.load(Ordering::Relaxed) {
                 break 'passes; // cut short: not a result
             }
@@ -310,7 +300,6 @@ fn warm_dns(work: &Work) {
 }
 
 fn run_one(
-    folder: Option<&Folder>,
     engine2: Option<&Engine>,
     name: &str,
     work: &Work,
@@ -325,7 +314,7 @@ fn run_one(
         score: Score::default(),
         passes: Vec::new(),
     };
-    let launch = match engine::launch(folder, engine2, name) {
+    let launch = match engine::launch(engine2, name) {
         Ok(launch) => launch,
         Err(err) => {
             result.launch_error = Some(format!("{err:#}"));

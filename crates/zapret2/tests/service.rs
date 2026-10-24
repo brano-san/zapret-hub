@@ -1,8 +1,6 @@
 mod common;
 
-use std::fs;
-
-use zapret::service::{SERVICE, SERVICE2, active, state, strategy};
+use zapret::service::{SERVICE2, active, strategy};
 use zapret2::Engine;
 use zapret2::service::{bin_path, dry_run_args, intercept_args, save, validate};
 use zapret2::strategies;
@@ -52,26 +50,13 @@ fn a_save_writes_nothing_until_the_check_passes() {
     // The static check passes; winws2 (an empty file) cannot run, so nothing is saved.
     let err = format!(
         "{:#}",
-        save(&engine, None, data.path(), "mine", text, true).unwrap_err()
+        save(&engine, data.path(), "mine", text, true).unwrap_err()
     );
     assert!(err.contains("os error 193"), "{err}");
     assert!(!file.exists());
     let err = format!(
         "{:#}",
-        save(
-            &engine,
-            None,
-            data.path(),
-            "mine",
-            "--hostlist=\"%LISTS%a.txt\"",
-            true
-        )
-        .unwrap_err()
-    );
-    assert!(err.contains("%LISTS%"), "{err}");
-    let err = format!(
-        "{:#}",
-        save(&engine, None, data.path(), "mine", text, false).unwrap_err()
+        save(&engine, data.path(), "mine", text, false).unwrap_err()
     );
     assert!(err.contains("no zapret2 strategy of yours"), "{err}");
     assert!(!file.exists());
@@ -91,7 +76,7 @@ fn a_bad_name_is_refused_before_any_file_is_written() {
     ] {
         let err = format!(
             "{:#}",
-            save(&engine, None, data.path(), name, "--wf-tcp-out=443", true).unwrap_err()
+            save(&engine, data.path(), name, "--wf-tcp-out=443", true).unwrap_err()
         );
         assert!(
             err.contains(refusal) && !err.contains("os error 193"),
@@ -101,60 +86,29 @@ fn a_bad_name_is_refused_before_any_file_is_written() {
     assert!(!strategies::dir(data.path()).exists());
 }
 
-fn live() -> (Engine, zapret::folder::Folder, tempfile::TempDir) {
+fn live() -> (Engine, tempfile::TempDir) {
     let dir = std::env::var("ZAPRET2_DIR").expect("ZAPRET2_DIR is the zapret2 folder");
-    let engine = Engine::open(dir).unwrap();
-    let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
-    (engine, folder, tempfile::tempdir().unwrap())
+    (Engine::open(dir).unwrap(), tempfile::tempdir().unwrap())
 }
 
 #[test]
-#[ignore = "needs admin rights, a zapret2 release in ZAPRET2_DIR and E:\\Zapret; loads WinDivert"]
+#[ignore = "needs admin rights and a zapret2 release in ZAPRET2_DIR; loads WinDivert"]
 fn live_every_built_in_strategy_passes_the_whole_check() {
-    let (engine, folder, data) = live();
+    let (engine, data) = live();
     for s in strategies::list(data.path()).unwrap() {
-        let tail = strategies::tail(&engine, Some(&folder), &s.text).unwrap();
+        let tail = strategies::tail(&engine, &s.text).unwrap();
         validate(&engine, &tail).unwrap_or_else(|err| panic!("{}: {err:#}", s.name));
     }
 }
 
 #[test]
-#[ignore = "needs admin rights, a zapret2 release in ZAPRET2_DIR and E:\\Zapret; replaces the zapret and zapret2 services"]
-fn live_apply_zapret2_then_flowseal_back() {
-    let (engine, folder, data) = live();
-    let check = zapret2::service::apply(&engine, Some(&folder), data.path(), "general").unwrap();
+#[ignore = "needs admin rights and a zapret2 release in ZAPRET2_DIR; replaces the zapret2 service"]
+fn live_apply_zapret2() {
+    let (engine, data) = live();
+    let check = zapret2::service::apply(&engine, data.path(), "general").unwrap();
     eprintln!("zapret2: {check:?}");
     assert_eq!(active(), (SERVICE2, zapret::service::WINWS2));
     assert_eq!(strategy().as_deref(), Some("zapret2:general"));
-    assert_eq!(state(SERVICE), zapret::service::SvcState::NotInstalled);
-    let check = zapret::service::apply(&folder, "general").unwrap();
-    eprintln!("flowseal: {check:?}");
-    assert_eq!(active(), (SERVICE, "winws.exe"));
-    assert_eq!(state(SERVICE2), zapret::service::SvcState::NotInstalled);
-}
-
-#[test]
-#[ignore = "needs admin rights, a zapret2 release in ZAPRET2_DIR and E:\\Zapret; reinstalls zapret2"]
-fn live_a_game_filter_change_reinstalls_zapret2() {
-    let (engine, folder, data) = live();
-    strategies::write(
-        data.path(),
-        "game",
-        &format!(
-            "{}\n--new --filter-tcp=%GameFilterTCP% --lua-desync=fake:blob=fake_default_tls",
-            strategies::find(data.path(), "general").unwrap().text
-        ),
-    )
-    .unwrap();
-    zapret2::service::apply(&engine, Some(&folder), data.path(), "game").unwrap();
-    zapret2::service::reinstall_active(Some(&engine), &folder, data.path()).unwrap();
-    let image = zapret::service::config(SERVICE2).unwrap().image_path;
-    let filter = zapret::game_filter::read(&folder).vars();
-    assert!(
-        image.contains(&format!("--filter-tcp={}", filter.tcp)),
-        "{image}"
-    );
-    fs::remove_dir_all(strategies::dir(data.path())).unwrap();
 }
 
 #[test]
@@ -166,7 +120,7 @@ fn the_check_before_a_snapshot_changes_nothing_when_it_fails() {
     let text = "--lua-desync=nosuch\n";
     let err = format!(
         "{:#}",
-        zapret2::service::check_save(&engine, None, data.path(), "mine", text, true).unwrap_err()
+        zapret2::service::check_save(&engine, data.path(), "mine", text, true).unwrap_err()
     );
     assert!(err.contains("nosuch"), "{err}");
     assert!(!strategies::dir(data.path()).join("mine.txt").exists());

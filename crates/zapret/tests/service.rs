@@ -82,24 +82,6 @@ fn an_engine_that_exits_is_a_launch_error_naming_its_image() {
 }
 
 #[test]
-#[ignore = "needs admin rights and E:\\Zapret; replaces the zapret and zapret2 services"]
-fn a_flowseal_install_takes_zapret2_down() {
-    use zapret::service::{SERVICE, SERVICE2, active, create};
-    let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
-    // What `apply` does before `install` removes anything: a missing or broken `general` fails here,
-    // not with the stand-in left installed.
-    let file = zapret::strategies::find(&folder, "general").unwrap();
-    zapret::batparse::parse_file(&folder, &file.path).unwrap();
-    // A stand-in zapret2: the install removes it whatever it runs.
-    create(SERVICE2, r#""C:\Windows\System32\cmd.exe" /c exit"#, false).unwrap();
-    assert_eq!(active().0, SERVICE2);
-    let check = zapret::service::apply(&folder, "general").unwrap();
-    eprintln!("{check:?}");
-    assert_eq!(state(SERVICE2), SvcState::NotInstalled);
-    assert_eq!(active(), (SERVICE, "winws.exe"));
-}
-
-#[test]
 fn finds_a_process_with_its_arguments() {
     let mut child = Command::new("ping")
         .args(["-n", "20", "127.0.0.1"])
@@ -122,36 +104,32 @@ fn finds_a_process_with_its_arguments() {
 }
 
 #[test]
-#[ignore = "needs admin rights and the zapret service installed from E:\\Zapret"]
-fn live_status_of_the_zapret_service() {
-    let status = zapret::service::status(zapret::service::SERVICE);
-    let config = zapret::service::config(zapret::service::SERVICE);
-    let strategy = zapret::service::strategy_of(zapret::service::SERVICE);
+#[ignore = "needs admin rights and the zapret2 service installed"]
+fn live_status_of_the_zapret2_service() {
+    use zapret::service::SERVICE2;
+    let status = zapret::service::status(SERVICE2);
+    let config = zapret::service::config(SERVICE2);
+    let strategy = zapret::service::strategy_of(SERVICE2);
     let timestamps = zapret::service::tcp_timestamps();
-    let candidates = zapret::folder::candidates();
     eprintln!(
-        "zapret: {status:?}\nconfig: {config:?}\nstrategy: {strategy:?}\ntimestamps: {timestamps:?}\ncandidates: {candidates:?}"
+        "zapret2: {status:?}
+config: {config:?}
+strategy: {strategy:?}
+timestamps: {timestamps:?}"
     );
-    assert!(status.is_some(), "the zapret service is not installed");
+    assert!(status.is_some(), "the zapret2 service is not installed");
     let config = config.expect("the service has a configuration");
     assert!(
-        config.image_path.to_lowercase().contains("winws.exe"),
+        config.image_path.to_lowercase().contains("winws2.exe"),
         "{}",
         config.image_path
     );
     assert!(
         strategy.is_some(),
-        "service.bat records the installed strategy in the registry"
+        "the app records the installed strategy in the registry"
     );
     assert!(
         timestamps.is_some(),
         "netsh reports the TCP timestamps setting"
-    );
-    assert!(
-        candidates.iter().any(|root| root
-            .to_string_lossy()
-            .trim_end_matches('\\')
-            .eq_ignore_ascii_case(r"E:\Zapret")),
-        "{candidates:?}"
     );
 }

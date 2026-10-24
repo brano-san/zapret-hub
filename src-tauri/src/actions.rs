@@ -6,14 +6,10 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Manager as _};
 use tauri_specta::Event as _;
-use zapret::custom::CustomStrategy;
-use zapret::folder::Folder;
-use zapret::service::{QuickCheck, active};
-use zapret::user_lists::UserList;
+use zapret::service::{QuickCheck, SERVICE, SvcState, active};
 
 use crate::dto::{
-    Candidates, Detected, FlowsealState, FolderCheck, FolderKind, ListState, Notice, NoticeLevel,
-    NoticesChanged, Overview, StateChanged,
+    Candidates, Detected, FolderKind, Notice, NoticeLevel, NoticesChanged, Overview, StateChanged,
 };
 use crate::settings::Settings;
 use crate::state::AppState;
@@ -56,30 +52,20 @@ fn finish_with_check(
     result
 }
 
-/// «Применить» (spec 5.4). A `zapret2:` name goes to zapret2 (zapret2 spec 3.1, 6); its folder
-/// is opened first, so a broken one changes nothing. zapret2 needs no Flowseal folder. A switch to
-/// the other engine pauses routing: it comes back with the new engine's DLL (router spec 3.1, 7).
+/// «Применить» (spec 5.4) of a `zapret2:` name (zapret2 spec 3.1, 6): the folder is opened and
+/// the strategy checked first, so a broken one changes nothing.
 pub fn apply(app: &AppHandle, name: &str) -> anyhow::Result<QuickCheck> {
-    if crate::routing::switches_engine(name, active().0) {
-        return crate::routing::paused(app, || apply_now(app, name));
-    }
-    apply_now(app, name)
-}
-
-fn apply_now(app: &AppHandle, name: &str) -> anyhow::Result<QuickCheck> {
     let state = state(app);
-    let result = match zapret2::strip_prefix(name) {
-        Some(name) => state.engine2_required().and_then(|engine| {
-            // The check runs first: a failure changes nothing, no snapshot, no restart (spec 6).
-            let (strategy, tail) = state.change_any(|folder| {
-                zapret2::service::prepare(&engine, folder, engine.root(), name)
-            })?;
-            state.change_any_safely("apply", |folder| {
-                zapret2::service::install_checked(&engine, folder, &strategy, &tail)
-            })
-        }),
-        None => state.change_safely("apply", |folder| zapret::service::apply(folder, name)),
-    };
+    let result = state.engine2_required().and_then(|engine| {
+        let name = zapret2::strip_prefix(name)
+            .ok_or_else(|| anyhow::anyhow!("no zapret2 strategy named {name}"))?;
+        // The check runs first: a failure changes nothing, no snapshot, no restart (spec 6).
+        let (strategy, tail) =
+            state.change(|| zapret2::service::prepare(&engine, engine.root(), name))?;
+        state.change_safely("apply", || {
+            zapret2::service::install_checked(&engine, &strategy, &tail)
+        })
+    });
     finish_with_check(app, result)
 }
 
@@ -93,11 +79,11 @@ pub fn apply_best(app: &AppHandle) -> anyhow::Result<QuickCheck> {
 }
 
 pub fn restart(app: &AppHandle) -> anyhow::Result<QuickCheck> {
-    let result = state(app).change_any(|folder| {
+    let result = state(app).change(|| {
         zapret::service::restart(active().0)?;
-        // winws needs a moment before it intercepts anything (spec 5.4).
+        // winws2 needs a moment before it intercepts anything (spec 5.4).
         std::thread::sleep(Duration::from_secs(2));
-        Ok(zapret::service::quick_check(folder))
+        Ok(zapret::service::quick_check())
     });
     finish_with_check(app, result)
 }
@@ -106,22 +92,96 @@ pub fn restart(app: &AppHandle) -> anyhow::Result<QuickCheck> {
 /// and during a test run (`change` refuses it) it would check the strategy under test. A refusal
 /// changes nothing, so it is not announced.
 pub fn quick_check(app: &AppHandle) -> anyhow::Result<QuickCheck> {
-    let check = state(app).change_any(|folder| Ok(zapret::service::quick_check(folder)))?;
+    let check = state(app).change(|| Ok(zapret::service::quick_check()))?;
     finish_with_check(app, Ok(check))
 }
 
-pub fn check_flowseal_update(app: &AppHandle) -> anyhow::Result<Option<String>> {
+/// The move off Flowseal of a 0.8.0 user (its folder was in the settings; `settings::migrate_flowseal`
+/// already took the rest), once, at start: its lists and fakes into the zapret2 folder, and the
+/// strategy of its service as its built-in zapret2 copy. With zapret2 ready, the Flowseal service
+/// gives way to that copy; without it, the wizard gets zapret2 and the system checks name the
+/// Flowseal service a conflict. One notice (and its journal line) says what happened.
+pub fn migrate_flowseal(app: &AppHandle, flowseal_dir: &Path) {
     let state = state(app);
-    let newer = zapret::updates::newer_version(&state.folder()?, state.socks5().as_deref())?;
-    state.set_update(newer.clone());
-    changed(app);
-    Ok(newer)
+    let engine = state.engine2().ok().flatten();
+    if let Some(engine) = &engine {
+        let copied = zapret2::strategies::adopt_files(engine, flowseal_dir);
+        if !copied.is_empty() {
+            log::info!(
+                "copied from {} into the zapret2 folder: {}",
+                flowseal_dir.display(),
+                copied.join(", ")
+            );
+        }
+    }
+    let installed = zapret::service::state(SERVICE) != SvcState::NotInstalled;
+    let old = installed
+        .then(|| zapret::service::strategy_of(SERVICE))
+        .flatten();
+    let target = zapret2::strategies::flowseal_copy(old.as_deref().unwrap_or("general"));
+    let switched = match &engine {
+        Some(engine) if installed => Some(
+            crate::routing::paused(app, || leave_flowseal(app, engine, &target))
+                .map_err(|err| format!("{err:#}")),
+        ),
+        _ => None,
+    };
+    let level = match &switched {
+        Some(Err(_)) => NoticeLevel::Error,
+        _ => NoticeLevel::Info,
+    };
+    let text = texts::flowseal_moved(
+        old.as_deref(),
+        &target,
+        engine.is_some(),
+        installed,
+        switched.as_ref().map(|result| result.as_ref().map(|_| ())),
+    );
+    notice(app, level, texts::FLOWSEAL_MOVED, text);
+}
+
+/// Flowseal's service gives way to `target` on zapret2: the strategy is checked while nothing has
+/// changed, then `zapret` goes and `zapret2` comes. When that fails, the snapshot puts zapret2
+/// back, and Flowseal's service is made again as it was.
+fn leave_flowseal(
+    app: &AppHandle,
+    engine: &zapret2::Engine,
+    target: &str,
+) -> anyhow::Result<QuickCheck> {
+    let state = state(app);
+    let name = zapret2::strip_prefix(target).unwrap_or(target);
+    let (strategy, tail) =
+        state.change(|| zapret2::service::prepare(engine, engine.root(), name))?;
+    let flowseal = zapret::service::config(SERVICE);
+    let flowseal_strategy = zapret::service::strategy_of(SERVICE);
+    let result = state.change_safely("apply", || {
+        zapret::service::stop_and_delete(SERVICE)?;
+        if let Err(err) = zapret::procs::kill_all("winws.exe") {
+            log::warn!(target: "exec", "winws.exe was not ended: {err:#}");
+        }
+        zapret2::service::install_checked(engine, &strategy, &tail)
+    });
+    if result.is_err()
+        && let Some(config) = flowseal
+        && zapret::service::state(SERVICE) == SvcState::NotInstalled
+    {
+        let back = zapret::service::create(SERVICE, &config.image_path, config.auto_start)
+            .and_then(|()| match &flowseal_strategy {
+                Some(name) => zapret::service::set_strategy_of(SERVICE, name),
+                None => Ok(()),
+            })
+            .and_then(|()| zapret::service::start(SERVICE));
+        if let Err(err) = back {
+            log::error!("the Flowseal service did not come back: {err:#}");
+        }
+    }
+    finish_with_check(app, result)
 }
 
 /// One save at a time, from reading the settings in force to setting the new ones: otherwise the
 /// file, the memory and the scheduled task could disagree. A save from the `pipe` never turns the
-/// CLI on and never moves the zapret or zapret2 folder (`settings::to_save`, CLI spec 5, 7.2,
-/// zapret2 spec 10).
+/// CLI on and never moves the zapret2 folder (`settings::to_save`, CLI spec 5, 7.2, zapret2 spec
+/// 10). A new game filter installs the active strategy again: its ports are in the service.
 pub fn save_settings(app: &AppHandle, settings: Settings, pipe: bool) -> anyhow::Result<()> {
     let state = state(app);
     let _saving = state.saving();
@@ -145,16 +205,13 @@ pub fn save_settings(app: &AppHandle, settings: Settings, pipe: bool) -> anyhow:
         "diagnostics take 1 to 60 min, not {}",
         settings.diag_budget_min
     );
-    let folder_changed = settings.zapret_dir != old.zapret_dir;
     let engine_changed = settings.zapret2_dir != old.zapret2_dir;
-    if folder_changed || engine_changed {
+    let filter_changed = settings.game_filter != old.game_filter;
+    if engine_changed || filter_changed {
         anyhow::ensure!(
             !state.testing(),
             "a test run is going: wait for it or cancel it"
         );
-    }
-    if folder_changed && let Some(dir) = &settings.zapret_dir {
-        Folder::open(dir)?;
     }
     if engine_changed && let Some(dir) = &settings.zapret2_dir {
         zapret2::Engine::open(dir)?;
@@ -171,37 +228,18 @@ pub fn save_settings(app: &AppHandle, settings: Settings, pipe: bool) -> anyhow:
     if engine_changed {
         state.migrate_strategies();
     }
-    if folder_changed {
-        prepare_folder(app);
-    }
-    // The proxy or a folder, and with it the DLL, may have changed; not while diagnostics drive
+    // The proxy or the folder, and with it the DLL, may have changed; not while diagnostics drive
     // the router (and then neither did).
     if !diagnosing {
         crate::routing::sync(app);
     }
+    let reinstall = filter_changed
+        && zapret::service::state(zapret::service::SERVICE2) != SvcState::NotInstalled;
+    if let Some(active) = zapret::service::strategy().filter(|_| reinstall) {
+        apply(app, &active)?;
+    }
     changed(app);
     Ok(())
-}
-
-/// The active strategy's arguments are baked into the service: saving it installs it again.
-pub fn save_custom(
-    app: &AppHandle,
-    strategy: CustomStrategy,
-    create: bool,
-) -> anyhow::Result<Option<QuickCheck>> {
-    let state = state(app);
-    let store = state.store();
-    let active = zapret::service::strategy();
-    if !create && active.is_some_and(|active| active.eq_ignore_ascii_case(&strategy.file_stem())) {
-        let result = state.change_safely("custom", |folder| {
-            let saved = zapret::custom::save(folder, &store, &strategy, create)?;
-            zapret::service::apply(folder, &saved.file_stem())
-        });
-        return finish_with_check(app, result).map(Some);
-    }
-    let result = state.change(|folder| zapret::custom::save(folder, &store, &strategy, create));
-    changed(app);
-    result.map(|_| None)
 }
 
 /// `save_zapret2` (zapret2 spec 5.2). The active strategy's command line is baked into the
@@ -219,70 +257,33 @@ pub fn save_zapret2(
     let active = zapret::service::strategy();
     if !create && active.is_some_and(|active| active.eq_ignore_ascii_case(&full)) {
         // The check runs first: a failure changes nothing (spec 6).
-        let (claimed, tail) = state.change_any(|folder| {
-            zapret2::service::check_save(&engine, folder, &data, name, text, false)
-        })?;
+        let (claimed, tail) =
+            state.change(|| zapret2::service::check_save(&engine, &data, name, text, false))?;
         let saved = zapret2::strategies::Strategy {
             name: claimed,
             text: text.to_owned(),
             builtin: false,
             flowseal_copy: false,
         };
-        let result = state.change_any_safely("custom", |folder| {
+        let result = state.change_safely("custom", || {
             zapret2::strategies::write(&data, &saved.name, text)?;
             zapret2::service::install(&engine, &saved, &tail)?;
             // winws2 needs a moment before it intercepts anything (spec 5.4).
             std::thread::sleep(Duration::from_secs(2));
-            Ok(zapret::service::quick_check(folder))
+            Ok(zapret::service::quick_check())
         });
         return finish_with_check(app, result).map(Some);
     }
-    let result = state
-        .change_any(|folder| zapret2::service::save(&engine, folder, &data, name, text, create));
+    let result = state.change(|| zapret2::service::save(&engine, &data, name, text, create));
     changed(app);
     result.map(|_| None)
 }
 
-/// A folder found at start or chosen in Settings: the user lists exist, and the custom strategies'
-/// files are back after a Flowseal update (spec 5.5, 6).
-pub fn prepare_folder(app: &AppHandle) {
-    let state = state(app);
-    let Ok(folder) = state.folder() else { return };
-    if let Err(err) = zapret::user_lists::ensure_defaults(&folder) {
-        notice(
-            app,
-            NoticeLevel::Error,
-            texts::PREPARE_FAILED,
-            format!("{err:#}"),
-        );
-    }
-    match zapret::custom::materialize_all(&folder, &state.store()) {
-        Ok(restored) if !restored.is_empty() => notice(
-            app,
-            NoticeLevel::Info,
-            texts::FILES_RESTORED,
-            restored.join(", "),
-        ),
-        Ok(_) => {}
-        Err(err) => notice(
-            app,
-            NoticeLevel::Error,
-            texts::PREPARE_FAILED,
-            format!("{err:#}"),
-        ),
-    }
-}
-
 pub fn overview(app: &AppHandle) -> Overview {
     let state = state(app);
-    let folder = state.folder_if_set();
     let settings = state.settings();
     let (service, image) = active();
     Overview {
-        folder_error: folder_error(&folder, settings.zapret2_dir.is_some()),
-        folder: settings.zapret_dir,
-        version: folder.ok().flatten().as_ref().and_then(Folder::version),
-        update: state.update(),
         service_name: service.to_owned(),
         service: zapret::service::state(service),
         windivert: zapret::service::state("WinDivert"),
@@ -295,68 +296,90 @@ pub fn overview(app: &AppHandle) -> Overview {
     }
 }
 
-/// A Flowseal folder that does not open, or none at all while zapret2 is off too: zapret2 alone
-/// needs no Flowseal folder.
-fn folder_error(folder: &anyhow::Result<Option<Folder>>, zapret2: bool) -> Option<String> {
-    match folder {
-        Err(err) => Some(format!("{err:#}")),
-        Ok(None) if !zapret2 => Some(zapret::folder::NOT_SET.to_owned()),
-        Ok(_) => None,
-    }
-}
-
-pub fn flowseal(app: &AppHandle) -> anyhow::Result<FlowsealState> {
-    let folder = state(app).folder()?;
-    let lists = UserList::ALL
-        .iter()
-        .map(|&list| {
-            Ok(ListState {
-                list,
-                entries: zapret::user_lists::read(&folder, list)?,
-            })
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?;
-    Ok(FlowsealState {
-        game_filter: zapret::game_filter::read(&folder),
-        ipset: zapret::ipset::mode(&folder),
-        ipset_backup: zapret::ipset::has_backup(&folder),
-        check_updates: zapret::flags::check_updates(&folder),
-        fakes: zapret::fakes::state(&folder)?,
-        lists,
-    })
-}
-
-pub fn check_folder(path: &Path) -> FolderCheck {
-    FolderCheck {
-        path: path.display().to_string(),
-        missing: zapret::folder::missing_parts(path)
-            .into_iter()
-            .map(str::to_owned)
-            .collect(),
-        version: Folder::open(path).ok().and_then(|folder| folder.version()),
-    }
-}
-
-/// Where each engine's folder is, from the service, running processes and the cheap places a
-/// release is unpacked to (about a second at most).
+/// Where zapret2 is, from running processes and the cheap places a release is unpacked to (about
+/// a second at most).
 pub fn detect_folders() -> Detected {
-    let mut dirs = zapret::folder::candidates();
-    dirs.extend(zapret::folder::nearby_dirs(
-        std::time::Duration::from_millis(800),
-    ));
+    let mut dirs: Vec<PathBuf> = zapret::procs::find(zapret::service::WINWS2)
+        .into_iter()
+        .filter_map(|p| {
+            p.exe
+                .as_deref()
+                .and_then(Path::parent)
+                .map(Path::to_path_buf)
+        })
+        .flat_map(|dir| {
+            // `<root>\binaries\windows-x86_64\winws2.exe`, `<root>\winws2.exe`, `<root>\bin\winws2.exe`.
+            dir.ancestors()
+                .take(3)
+                .map(Path::to_path_buf)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    dirs.extend(nearby_dirs(Duration::from_millis(800)));
     Detected {
-        flowseal: zapret::folder::find_flowseal(&dirs).map(|path| check_folder(&path)),
         zapret2: zapret2::find_zapret2(&dirs).map(|path| path.display().to_string()),
     }
 }
 
-/// Folders where Flowseal probably is, and SOCKS5 ports that answer now: NekoBox's own port when
-/// it runs, then the default ports of known clients (spec 9.2).
+/// The cheap places a release is unpacked to, each with its direct subfolders and nothing
+/// deeper: next to the app, Downloads, Desktop, Documents, Program Files, then drive roots.
+/// Stops listing when `budget` is spent; the order is the order of preference.
+fn nearby_dirs(budget: Duration) -> Vec<PathBuf> {
+    let deadline = std::time::Instant::now() + budget;
+    let var = |name: &str| std::env::var_os(name).map(PathBuf::from);
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(app) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+    {
+        roots.extend(app.parent().map(Path::to_path_buf));
+        roots.push(app);
+    }
+    if let Some(home) = var("USERPROFILE") {
+        roots.extend(["Downloads", "Desktop", "Documents"].map(|name| home.join(name)));
+    }
+    roots.extend(
+        ["ProgramFiles", "ProgramFiles(x86)"]
+            .iter()
+            .filter_map(|name| var(name)),
+    );
+    roots.extend(
+        ('A'..='Z')
+            .map(|drive| PathBuf::from(format!("{drive}:\\")))
+            .filter(|root| root.is_dir()),
+    );
+    expand(&roots, deadline)
+}
+
+/// Each root, then its subfolders; a root that cannot be listed counts for itself only.
+fn expand(roots: &[PathBuf], deadline: std::time::Instant) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for root in roots {
+        if std::time::Instant::now() > deadline {
+            break;
+        }
+        if !root.is_dir() || dirs.contains(root) {
+            continue;
+        }
+        dirs.push(root.clone());
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if std::time::Instant::now() > deadline {
+                break;
+            }
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                dirs.push(entry.path());
+            }
+        }
+    }
+    dirs
+}
+
+/// SOCKS5 ports that answer now: NekoBox's own port when it runs, then the default ports of known
+/// clients (spec 9.2).
 pub fn candidates() -> Candidates {
-    let folders = zapret::folder::candidates()
-        .iter()
-        .map(|path| check_folder(path))
-        .collect();
     let mut ports: Vec<u16> = ["nekobox.exe", "nekoray.exe"]
         .iter()
         .flat_map(|image| zapret::procs::find(image))
@@ -369,12 +392,11 @@ pub fn candidates() -> Candidates {
         .collect();
     ports.extend(probe::socks::KNOWN_PORTS);
     Candidates {
-        folders,
         proxies: probe::socks::listening(&ports),
     }
 }
 
-/// Release pages and the issues `service.bat` links to: https only.
+/// Release pages and the issues the page links to: https only.
 pub fn open_url(url: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
         url.starts_with("https://"),
@@ -390,51 +412,30 @@ fn strategies_folder(home: &Path) -> anyhow::Result<PathBuf> {
     Ok(dir)
 }
 
-/// The folder of a strategy's file: Flowseal's `.bat` (its own and the custom ones) in the
-/// Flowseal folder, a zapret2 strategy of the user's in the zapret2 folder's `strategies`. Only names that are in
-/// the lists resolve, so the page cannot point anywhere else.
-fn strategy_folder(
-    folder: Option<&Folder>,
-    home: Option<&Path>,
-    name: &str,
-) -> anyhow::Result<PathBuf> {
-    if let Some(name) = zapret2::strip_prefix(name) {
-        let home = home.ok_or_else(|| {
-            anyhow::anyhow!("the zapret2 folder is not set: choose it in Settings")
-        })?;
-        let strategy = zapret2::strategies::find(home, name)?;
-        anyhow::ensure!(
-            !strategy.builtin,
-            "{} is built into Zapret Hub: it has no file",
-            strategy.full_name()
-        );
-        return Ok(zapret2::strategies::dir(home));
-    }
-    let folder = folder.ok_or_else(|| anyhow::anyhow!(zapret::folder::NOT_SET))?;
-    let file = zapret::strategies::find(folder, name)?;
-    Ok(file.path.parent().unwrap_or(folder.root()).to_path_buf())
+/// The folder of a zapret2 strategy of the user's: the zapret2 folder's `strategies`. Only names
+/// that are in the list resolve, so the page cannot point anywhere else.
+fn strategy_folder(home: &Path, name: &str) -> anyhow::Result<PathBuf> {
+    let name = zapret2::strip_prefix(name)
+        .ok_or_else(|| anyhow::anyhow!("no zapret2 strategy named {name}"))?;
+    let strategy = zapret2::strategies::find(home, name)?;
+    anyhow::ensure!(
+        !strategy.builtin,
+        "{} is built into Zapret Hub: it has no file",
+        strategy.full_name()
+    );
+    Ok(zapret2::strategies::dir(home))
 }
 
 pub fn open_folder(app: &AppHandle, kind: FolderKind) -> anyhow::Result<()> {
     let state = state(app);
     let path = match kind {
-        FolderKind::Zapret => state.folder()?.root().to_path_buf(),
         FolderKind::Zapret2 => strategies_folder(state.engine2_required()?.root())?,
         FolderKind::Logs => {
             let logs = state.paths.logs();
             std::fs::create_dir_all(&logs)?;
             logs
         }
-        FolderKind::Strategy(name) => {
-            // A zapret2 name needs its engine; a Flowseal one does not.
-            let home = match state.engine2() {
-                Ok(Some(engine)) => Some(engine.root().to_path_buf()),
-                Ok(None) => None,
-                Err(err) if zapret2::strip_prefix(&name).is_some() => return Err(err),
-                Err(_) => None,
-            };
-            strategy_folder(state.folder_if_set()?.as_ref(), home.as_deref(), &name)?
-        }
+        FolderKind::Strategy(name) => strategy_folder(state.engine2_required()?.root(), &name)?,
     };
     crate::shell::open(path.as_os_str())
 }
@@ -444,65 +445,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_overview_wants_a_flowseal_folder_only_without_zapret2() {
-        assert_eq!(
-            folder_error(&Ok(None), false).as_deref(),
-            Some(zapret::folder::NOT_SET)
-        );
-        assert_eq!(folder_error(&Ok(None), true), None);
-        let broken = Err(anyhow::anyhow!(r"E:\Zapret is not a zapret folder"));
-        assert!(
-            folder_error(&broken, true)
-                .unwrap()
-                .contains("not a zapret folder")
-        );
-    }
-
-    #[test]
     fn a_strategy_opens_the_folder_of_its_file() {
-        let zapret = tempfile::tempdir().unwrap();
-        let root = zapret.path();
-        std::fs::create_dir_all(root.join("bin")).unwrap();
-        std::fs::create_dir_all(root.join("lists")).unwrap();
-        for file in [
-            "service.bat",
-            "general (ALT11).bat",
-            r"bin\winws.exe",
-            r"bin\WinDivert64.sys",
-        ] {
-            std::fs::write(root.join(file), "").unwrap();
-        }
-        let folder = Folder::open(root).unwrap();
         let data = tempfile::tempdir().unwrap();
         zapret2::strategies::write(data.path(), "mine", "--wf-tcp-out=443").unwrap();
-
-        let open = |folder: Option<&Folder>, name: &str| {
-            strategy_folder(folder, Some(data.path()), name).map_err(|err| format!("{err:#}"))
-        };
-        assert_eq!(
-            open(Some(&folder), "GENERAL (alt11)"),
-            Ok(root.to_path_buf())
-        );
-        assert_eq!(
-            open(None, "zapret2:mine"),
-            Ok(data.path().join("strategies")),
-            "zapret2 needs no Flowseal folder"
-        );
-        assert!(
-            open(Some(&folder), "zapret2:general")
-                .unwrap_err()
-                .contains("no file")
-        );
-        assert!(open(Some(&folder), "zapret2:other").is_err());
-        assert!(
-            open(Some(&folder), r"..\..\Windows").is_err(),
-            "a path is not a name"
-        );
-        assert!(
-            open(None, "general (ALT11)")
-                .unwrap_err()
-                .contains("zapret folder is not set")
-        );
+        let open =
+            |name: &str| strategy_folder(data.path(), name).map_err(|err| format!("{err:#}"));
+        assert_eq!(open("zapret2:mine"), Ok(data.path().join("strategies")));
+        assert!(open("zapret2:general").unwrap_err().contains("no file"));
+        assert!(open("zapret2:other").is_err());
+        assert!(open(r"..\..\Windows").is_err(), "a path is not a name");
+        assert!(open("general (ALT11)").is_err(), "Flowseal's are gone");
     }
 
     #[test]
@@ -511,5 +463,27 @@ mod tests {
         let dir = strategies_folder(data.path()).unwrap();
         assert_eq!(dir, data.path().join("strategies"));
         assert!(dir.is_dir());
+    }
+
+    #[test]
+    fn a_subfolder_of_a_root_is_a_candidate_but_not_deeper() {
+        let tmp = tempfile::tempdir().unwrap();
+        let near = tmp.path().join("zapret2-v1.0");
+        let deep = tmp.path().join("a").join("b");
+        std::fs::create_dir_all(&near).unwrap();
+        std::fs::create_dir_all(&deep).unwrap();
+        let dirs = expand(
+            &[tmp.path().to_path_buf()],
+            std::time::Instant::now() + Duration::from_secs(5),
+        );
+        assert!(dirs.contains(&near) && !dirs.contains(&deep));
+        assert!(
+            expand(
+                &[tmp.path().to_path_buf()],
+                std::time::Instant::now() - Duration::from_secs(1)
+            )
+            .is_empty(),
+            "a spent budget lists nothing more"
+        );
     }
 }

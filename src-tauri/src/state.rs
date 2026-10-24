@@ -8,8 +8,6 @@ use std::time::Duration;
 use anyhow::Context as _;
 use tester::history::RunSummary;
 use tester::model::TestRun;
-use zapret::custom::Store;
-use zapret::folder::Folder;
 use zapret::service::QuickCheck;
 use zapret::snapshot::{Snapshot, pending_path};
 
@@ -39,10 +37,6 @@ impl Paths {
 
     pub fn data(&self) -> PathBuf {
         self.exe_dir.join("data")
-    }
-
-    pub fn strategies(&self) -> PathBuf {
-        self.data().join("strategies")
     }
 
     pub fn logs(&self) -> PathBuf {
@@ -97,8 +91,6 @@ pub struct AppState {
     quick: Mutex<Option<QuickCheck>>,
     /// The newest finished standard run: «Применить лучшую», the overview, the tray.
     ranking: Mutex<Option<TestRun>>,
-    /// A Flowseal version newer than the folder's.
-    update: Mutex<Option<String>>,
     notices: Mutex<Vec<Notice>>,
     /// How the newest run since the start ended: `tests_status` (CLI spec 7.1).
     last_outcome: Mutex<Option<cli::Outcome>>,
@@ -129,7 +121,6 @@ impl AppState {
             live: Mutex::new(None),
             quick: Mutex::new(None),
             ranking: Mutex::new(None),
-            update: Mutex::new(None),
             notices: Mutex::new(Vec::new()),
             last_outcome: Mutex::new(None),
         }
@@ -152,21 +143,13 @@ impl AppState {
         lock(&self.settings).socks5.clone()
     }
 
-    pub fn folder(&self) -> anyhow::Result<Folder> {
-        self.folder_if_set()?.context(zapret::folder::NOT_SET)
-    }
-
-    /// The Flowseal folder, `None` while it is not set (zapret2 alone). A set folder that does not
-    /// open is an error.
-    pub fn folder_if_set(&self) -> anyhow::Result<Option<Folder>> {
-        let dir = lock(&self.settings).zapret_dir.clone();
-        dir.map(Folder::open).transpose()
-    }
-
-    /// The zapret2 engine; `None` while `zapret2_dir` is empty (zapret2 spec 4).
+    /// The zapret2 engine with the settings' game filter; `None` while `zapret2_dir` is empty
+    /// (zapret2 spec 4).
     pub fn engine2(&self) -> anyhow::Result<Option<zapret2::Engine>> {
         let dir = lock(&self.settings).zapret2_dir.clone();
-        dir.map(zapret2::Engine::open).transpose()
+        let game_filter = lock(&self.settings).game_filter;
+        dir.map(|dir| Ok(zapret2::Engine::open(dir)?.with_game_filter(game_filter)))
+            .transpose()
     }
 
     /// Moves the strategies an older version kept in `data\zapret2` into the zapret2 folder.
@@ -187,10 +170,6 @@ impl AppState {
     pub fn engine2_required(&self) -> anyhow::Result<zapret2::Engine> {
         self.engine2()?
             .context("the zapret2 folder is not set: choose it in Settings")
-    }
-
-    pub fn store(&self) -> Store {
-        Store::new(self.paths.strategies())
     }
 
     pub fn testing(&self) -> bool {
@@ -378,63 +357,60 @@ impl AppState {
         lock(&self.queue)
     }
 
-    /// A change that needs the Flowseal folder: one at a time, never during a test run.
-    pub fn change<T>(&self, f: impl FnOnce(&Folder) -> anyhow::Result<T>) -> anyhow::Result<T> {
-        self.change_any(|folder| f(folder.context(zapret::folder::NOT_SET)?))
-    }
-
-    /// A change that works with either engine (zapret2 strategies, the services): the Flowseal
-    /// folder when one is set. Refused while neither folder is set.
-    pub fn change_any<T>(
-        &self,
-        f: impl FnOnce(Option<&Folder>) -> anyhow::Result<T>,
-    ) -> anyhow::Result<T> {
+    /// A change of the system (a service, hosts): one at a time, never during a test run or
+    /// diagnostics.
+    pub fn in_turn<T>(&self, f: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Result<T> {
         anyhow::ensure!(!self.testing(), TESTING);
         self.not_diagnosing()?;
         let _turn = self.turn();
-        let folder = self.folder_if_set()?;
-        anyhow::ensure!(
-            folder.is_some() || lock(&self.settings).zapret2_dir.is_some(),
-            "neither the zapret nor the zapret2 folder is set: choose one in Settings"
-        );
-        f(folder.as_ref())
+        f()
     }
 
-    /// A change that could leave zapret half done: the state goes to `pending.json` before the
+    /// A change of zapret2: `in_turn`, and only with the zapret2 folder set.
+    pub fn change<T>(&self, f: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Result<T> {
+        self.in_turn(|| {
+            anyhow::ensure!(
+                lock(&self.settings).zapret2_dir.is_some(),
+                "the zapret2 folder is not set: choose it in Settings"
+            );
+            f()
+        })
+    }
+
+    /// A change that could leave zapret2 half done: the state goes to `pending.json` before the
     /// first step and is put back if any step fails (spec 10). A `pending.json` an earlier
     /// operation left is restored first, and when that fails this one does not start
     /// (`zapret::snapshot::begin`). `operation` is the id `texts::operation` names.
     pub fn change_safely<T>(
         &self,
         operation: &str,
-        f: impl FnOnce(&Folder) -> anyhow::Result<T>,
+        f: impl FnOnce() -> anyhow::Result<T>,
     ) -> anyhow::Result<T> {
         // The folder is checked before the snapshot: a refusal has nothing to restore.
-        self.change(|folder| self.guarded(operation, Some(folder), || f(folder)))
+        self.change(|| self.guarded(operation, f))
     }
 
-    /// `change_safely` for a change that works with either engine (`change_any`).
-    pub fn change_any_safely<T>(
+    /// `change_safely` without the folder: removing the services needs none.
+    pub fn in_turn_safely<T>(
         &self,
         operation: &str,
-        f: impl FnOnce(Option<&Folder>) -> anyhow::Result<T>,
+        f: impl FnOnce() -> anyhow::Result<T>,
     ) -> anyhow::Result<T> {
-        self.change_any(|folder| self.guarded(operation, folder, || f(folder)))
+        self.in_turn(|| self.guarded(operation, f))
     }
 
     /// The snapshot around `f`, in the queue's turn.
     fn guarded<T>(
         &self,
         operation: &str,
-        folder: Option<&Folder>,
         f: impl FnOnce() -> anyhow::Result<T>,
     ) -> anyhow::Result<T> {
         let pending = pending_path(&self.paths.data());
-        let snapshot = zapret::snapshot::begin(folder, operation, &pending)?;
+        let snapshot = zapret::snapshot::begin(operation, &pending)?;
         let result = f();
         if let Err(err) = &result {
             log::error!("{operation} failed, restoring the previous state: {err:#}");
-            if let Err(undo) = snapshot.restore(folder) {
+            if let Err(undo) = snapshot.restore() {
                 // pending.json stays: the next start or operation tries again.
                 return Err(anyhow::anyhow!(
                     "{err:#}\n\nthe previous state was not restored either: {undo:#}"
@@ -489,14 +465,6 @@ impl AppState {
                     .collect()
             })
             .unwrap_or_default()
-    }
-
-    pub fn update(&self) -> Option<String> {
-        lock(&self.update).clone()
-    }
-
-    pub fn set_update(&self, version: Option<String>) {
-        *lock(&self.update) = version;
     }
 
     pub fn push_notice(&self, notice: Notice) {
@@ -558,25 +526,22 @@ mod tests {
     fn changes_need_a_folder_and_wait_out_a_test_run() {
         let dir = tempfile::tempdir().unwrap();
         let state = state(dir.path());
-        let err = state.change_any(|_| Ok(())).unwrap_err();
-        assert!(format!("{err:#}").contains("neither"), "{err:#}");
-        // zapret2 alone: its changes go, Flowseal's are refused.
+        let err = state.change(|| Ok(())).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("zapret2 folder is not set"),
+            "{err:#}"
+        );
         state.set_settings(Settings {
             zapret2_dir: Some(dir.path().display().to_string()),
             ..Settings::default()
         });
-        assert!(state.change_any(|folder| Ok(folder.is_none())).unwrap());
-        let err = state.change(|_| Ok(())).unwrap_err();
-        assert!(
-            format!("{err:#}").contains("zapret folder is not set"),
-            "{err:#}"
-        );
+        assert!(state.change(|| Ok(true)).unwrap());
         state.begin_testing().unwrap();
         assert!(
             state.begin_testing().is_err(),
             "a second run must not start"
         );
-        let err = state.change(|_| Ok(())).unwrap_err();
+        let err = state.change(|| Ok(())).unwrap_err();
         assert!(format!("{err:#}").contains("test run"), "{err:#}");
         state.end_testing(cli::Outcome::Failed {
             error: "canceled".into(),
@@ -595,7 +560,7 @@ mod tests {
         state.set_live(Some(LiveRun {
             request: Request {
                 suite: Suite::Standard,
-                strategies: vec!["general".into()],
+                strategies: vec!["zapret2:general".into()],
                 repeats: 1,
             },
             current: Some(0),
@@ -638,7 +603,7 @@ mod tests {
             ..Settings::default()
         });
         state.begin_diag(live()).unwrap();
-        let err = state.change_any(|_| Ok(())).unwrap_err();
+        let err = state.change(|| Ok(())).unwrap_err();
         assert_eq!(format!("{err:#}"), DIAGNOSING);
         let err = state.begin_testing().unwrap_err();
         assert_eq!(format!("{err:#}"), DIAGNOSING);
@@ -651,7 +616,7 @@ mod tests {
         assert_eq!(format!("{err:#}"), DIAGNOSING);
         drop(state.diag_ends());
         assert!(state.not_diagnosing().is_ok());
-        assert!(state.change_any(|_| Ok(())).is_ok());
+        assert!(state.change(|| Ok(())).is_ok());
         assert_eq!(state.diag_live(), None);
     }
 

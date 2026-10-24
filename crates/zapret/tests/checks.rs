@@ -28,14 +28,14 @@ fn a_service_matches_when_one_line_has_every_word() {
 }
 
 #[test]
-fn zapret2_is_a_conflict_only_next_to_zapret() {
+fn flowseals_service_is_a_conflict_and_zapret2_never_is() {
     let installed = |names: &'static [&'static str]| move |name: &str| names.contains(&name);
     assert!(conflicts(installed(&["zapret2"])).is_empty());
-    assert!(conflicts(installed(&["zapret"])).is_empty());
-    assert_eq!(conflicts(installed(&["zapret", "zapret2"])), ["zapret2"]);
+    assert_eq!(conflicts(installed(&["zapret"])), ["zapret"]);
+    assert_eq!(conflicts(installed(&["zapret", "zapret2"])), ["zapret"]);
     assert_eq!(
         conflicts(installed(&["zapret2", "winws2", "zapret", "GoodbyeDPI"])),
-        ["GoodbyeDPI", "winws2", "zapret2"]
+        ["GoodbyeDPI", "winws2", "zapret"]
     );
 }
 
@@ -104,10 +104,9 @@ fn discord_cache_is_cleared_for_installed_builds_only() {
 }
 
 #[test]
-#[ignore = "reads this machine's services, registry and E:\\Zapret"]
+#[ignore = "reads this machine's services and registry"]
 fn live_checks_of_this_machine() {
-    let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
-    let checks = zapret::checks::run_all(&folder);
+    let checks = zapret::checks::run_all(None);
     for check in &checks {
         eprintln!("{check:?}");
     }

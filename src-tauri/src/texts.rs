@@ -15,7 +15,7 @@ pub const WEBVIEW2_MISSING: &str = "Для окна Zapret Hub нужен Micros
 компьютере его нет.\n\nСкачайте его: https://go.microsoft.com/fwlink/p/?LinkId=2124703\n\n\
 Ctrl+C копирует этот текст.";
 
-pub const PICK_FOLDER: &str = "Папка zapret";
+pub const PICK_FOLDER: &str = "Папка zapret2";
 
 pub const SETTINGS_RESET: &str = "Настройки сброшены";
 
@@ -30,7 +30,7 @@ pub const RECOVERED: &str = "Прерванная операция отмене�
 
 pub fn recovered(operation: &str) -> String {
     format!(
-        "Прошлый запуск не довёл до конца операцию «{operation}». Служба, ipset, игровой фильтр и запущенные вручную winws возвращены как были."
+        "Прошлый запуск не довёл до конца операцию «{operation}». Служба zapret2 и запущенные вручную winws2 возвращены как были."
     )
 }
 
@@ -60,8 +60,6 @@ pub fn operation(id: &str) -> &str {
     }
 }
 
-pub const PREPARE_FAILED: &str = "Папка zapret не подготовлена";
-pub const FILES_RESTORED: &str = "Файлы своих стратегий выложены заново";
 pub const AUTOSTART_FAILED: &str = "Автозапуск не обновлён";
 pub const HISTORY_FAILED: &str = "История тестов не прочитана";
 pub const RESTORE_AFTER_TESTS: &str = "После тестов не всё вернулось на место";
@@ -140,10 +138,39 @@ pub fn quick_result(check: &QuickCheck) -> String {
         .join("\n")
 }
 
-pub const UPDATE: &str = "Вышла новая версия Flowseal";
+pub const FLOWSEAL_MOVED: &str = "Flowseal заменён на zapret2";
 
-pub fn update(version: &str) -> String {
-    format!("Версия {version}. Ссылка на релиз — на вкладке «Обзор».")
+/// The one notice of the move off Flowseal (`actions::migrate_flowseal`): `old` is the strategy of
+/// Flowseal's service, `target` its zapret2 copy, `switched` how the switch to it went when one was
+/// tried (zapret2 ready and the Flowseal service there).
+pub fn flowseal_moved(
+    old: Option<&str>,
+    target: &str,
+    zapret2: bool,
+    installed: bool,
+    switched: Option<Result<(), &String>>,
+) -> String {
+    let mut text = String::from(
+        "Zapret Hub больше не работает с Flowseal: его стратегии встроены в zapret2 под тем же именем.",
+    );
+    if let Some(old) = old {
+        text.push_str(&format!(" Стратегия «{old}» — это {target}."));
+    }
+    text.push(' ');
+    text.push_str(&match (zapret2, installed, switched) {
+        (_, _, Some(Ok(()))) => {
+            format!("Служба Flowseal удалена, вместо неё работает zapret2 со стратегией {target}.")
+        }
+        (_, _, Some(Err(err))) => format!(
+            "Переключить службу на {target} не удалось, служба Flowseal оставлена как была:\n{err}"
+        ),
+        (false, true, None) => format!(
+            "Укажите папку zapret2 (мастер настройки), удалите службу Flowseal в «Системных проверках» и примените {target}."
+        ),
+        (false, false, None) => "Укажите папку zapret2 в мастере настройки.".to_owned(),
+        (true, _, None) => "Списки и фейки Flowseal перенесены в папку zapret2.".to_owned(),
+    });
+    text
 }
 
 pub const OPEN: &str = "Открыть";
@@ -219,7 +246,6 @@ mod tests {
         TestRun {
             id: "2026-10-10_05-03-34".into(),
             suite: Suite::Standard,
-            flowseal_version: None,
             zapret2_version: None,
             canceled: false,
             restore_error: None,
@@ -241,6 +267,24 @@ mod tests {
             tests_done(&run(Vec::new())),
             "Ни одна стратегия не проверена"
         );
+    }
+
+    #[test]
+    fn the_flowseal_notice_says_where_the_strategy_went() {
+        let target = "zapret2:general (ALT11)";
+        let done = flowseal_moved(Some("general (ALT11)"), target, true, true, Some(Ok(())));
+        assert!(
+            done.contains("«general (ALT11)» — это zapret2:general (ALT11)"),
+            "{done}"
+        );
+        assert!(done.contains("вместо неё работает zapret2"), "{done}");
+        let err = "winws2 --dry-run failed".to_owned();
+        let failed = flowseal_moved(Some("general (ALT11)"), target, true, true, Some(Err(&err)));
+        assert!(failed.ends_with(&err), "{failed}");
+        let no_zapret2 = flowseal_moved(Some("general (ALT11)"), target, false, true, None);
+        assert!(no_zapret2.contains("Системных проверках"), "{no_zapret2}");
+        let quiet = flowseal_moved(None, "zapret2:general", true, false, None);
+        assert!(!quiet.contains("Стратегия"), "{quiet}");
     }
 
     #[test]

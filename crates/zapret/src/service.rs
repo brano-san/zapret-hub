@@ -1,5 +1,6 @@
-//! The `zapret` Windows service: state through the Service Control Manager, changes through
-//! `sc`/`net` exactly as `service.bat` makes them, and the quick check after an install (5.4).
+//! The `zapret2` Windows service (and Flowseal's `zapret`, a conflict now): state through the
+//! Service Control Manager, changes through `sc`/`net` as `service.bat` makes them, and the quick
+//! check after an install (5.4).
 
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -14,9 +15,7 @@ use windows::Win32::System::Services::{
 };
 use windows::core::{HSTRING, PCWSTR};
 
-use crate::batparse::ParsedArgs;
-use crate::folder::Folder;
-
+/// Flowseal's service: the hub no longer installs it, the system checks offer to remove it.
 pub const SERVICE: &str = "zapret";
 /// zapret2's service and process (zapret2 spec 3.1, 6): this crate knows the second engine by
 /// these two names only.
@@ -99,15 +98,9 @@ pub fn state(name: &str) -> SvcState {
     status(name).map_or(SvcState::NotInstalled, |(state, _)| state)
 }
 
-/// The installed engine's service and process (zapret2 spec 3.1): `zapret2` and `winws2.exe` while
-/// the `zapret2` service exists, else Flowseal's. The app installs one engine at a time; when
-/// `service.bat` puts `zapret` next to `zapret2`, the system checks name the conflict (spec 9).
+/// The engine's service and process (zapret2 spec 3.1): `zapret2` and `winws2.exe`.
 pub fn active() -> (&'static str, &'static str) {
-    if state(SERVICE2) == SvcState::NotInstalled {
-        (SERVICE, "winws.exe")
-    } else {
-        (SERVICE2, WINWS2)
-    }
+    (SERVICE2, WINWS2)
 }
 
 fn key(name: &str) -> String {
@@ -201,7 +194,7 @@ pub fn strategy_of(name: &str) -> Option<String> {
         .ok()
 }
 
-/// The active engine's strategy: a Flowseal name or `zapret2:<name>`.
+/// The active strategy: `zapret2:<name>`.
 pub fn strategy() -> Option<String> {
     strategy_of(active().0)
 }
@@ -235,7 +228,7 @@ fn wait_until(max: Duration, mut done: impl FnMut() -> bool) -> bool {
 }
 
 /// `sc create <name> binPath= ... DisplayName= <name> start= auto|demand` and the description, as
-/// `service.bat` makes `zapret`; `zapret2` the same way (zapret2 spec 6).
+/// `service.bat` makes `zapret` (zapret2 spec 6).
 pub fn create(name: &str, bin_path: &str, auto_start: bool) -> anyhow::Result<()> {
     let start = if auto_start { "auto" } else { "demand" };
     cmd(
@@ -252,26 +245,8 @@ pub fn create(name: &str, bin_path: &str, auto_start: bool) -> anyhow::Result<()
         ],
     )?
     .check()?;
-    let description = if name == SERVICE {
-        "Zapret DPI bypass software"
-    } else {
-        "zapret2 DPI bypass software"
-    };
-    let _ = cmd("sc", &["description", name, description]);
+    let _ = cmd("sc", &["description", name, "zapret2 DPI bypass software"]);
     Ok(())
-}
-
-/// `:service_install` after the menu: timestamps on, the old service gone, the new one created
-/// and started, the strategy name recorded. One engine at a time (zapret2 spec 6): zapret2 goes
-/// too, so every path that installs a Flowseal strategy takes it down.
-pub fn install(folder: &Folder, name: &str, parsed: &ParsedArgs) -> anyhow::Result<()> {
-    let _ = enable_tcp_timestamps();
-    stop_and_delete(SERVICE)?;
-    stop_and_delete(SERVICE2)?;
-    crate::procs::kill_all(WINWS2)?;
-    create(SERVICE, &parsed.bin_path(&folder.winws()), true)?;
-    cmd("sc", &["start", SERVICE])?.check()?;
-    set_strategy_of(SERVICE, name)
 }
 
 /// `net stop` + `sc delete` with errors ignored, as `service.bat` does where it does not care.
@@ -340,35 +315,6 @@ pub fn restart(name: &str) -> anyhow::Result<()> {
     start(name)
 }
 
-/// After a list or ipset change: winws reads its files at start.
-pub fn restart_if_running(name: &str) -> anyhow::Result<()> {
-    if state(name) == SvcState::Running {
-        restart(name)
-    } else {
-        Ok(())
-    }
-}
-
-/// The arguments live in the service: after a game filter change the active strategy is
-/// installed again. A service without a recorded strategy cannot be: that is an error, so the
-/// change is undone instead of reported as done.
-pub fn reinstall_active(folder: &Folder) -> anyhow::Result<()> {
-    if state(SERVICE) == SvcState::NotInstalled {
-        return Ok(());
-    }
-    let Some(name) = strategy_of(SERVICE) else {
-        anyhow::bail!(
-            "the zapret service has no strategy name in the registry, so it cannot be installed again with the new game filter: apply a strategy first"
-        );
-    };
-    let file = crate::strategies::find(folder, &name)?;
-    install(
-        folder,
-        &file.name,
-        &crate::batparse::parse_file(folder, &file.path)?,
-    )
-}
-
 /// `netsh interface tcp show global`, the `RFC 1323 Timestamps` line. Labels are translated, the
 /// RFC number and the value are not. `None` when the line is missing.
 pub fn tcp_timestamps() -> Option<bool> {
@@ -413,15 +359,12 @@ pub struct QuickCheck {
     pub checks: Vec<QuickItem>,
 }
 
-/// 5.4: the active engine's process runs and the first two URL targets answer `HTTP:OK`.
-/// The first two targets of the Flowseal folder's `targets.txt`, or of the built-in list without
-/// one (zapret2 alone).
-pub fn quick_check(folder: Option<&Folder>) -> QuickCheck {
+/// 5.4: the engine's process runs and the first two URL targets answer `HTTP:OK`.
+pub fn quick_check() -> QuickCheck {
     let (service, image) = active();
     let service = state(service);
     let winws_running = crate::procs::is_running(image);
-    let checks: Vec<QuickItem> = folder
-        .map_or_else(crate::targets::defaults, crate::targets::load)
+    let checks: Vec<QuickItem> = crate::targets::defaults()
         .into_iter()
         .filter_map(|target| Some((target.name, target.url?)))
         .take(2)
@@ -442,13 +385,4 @@ pub fn quick_check(folder: Option<&Folder>) -> QuickCheck {
         winws_running,
         checks,
     }
-}
-
-/// «Применить»: install `name` as the service, wait 2 s, run the quick check.
-pub fn apply(folder: &Folder, name: &str) -> anyhow::Result<QuickCheck> {
-    let file = crate::strategies::find(folder, name)?;
-    let parsed = crate::batparse::parse_file(folder, &file.path)?;
-    install(folder, &file.name, &parsed)?;
-    std::thread::sleep(Duration::from_secs(2));
-    Ok(quick_check(Some(folder)))
 }

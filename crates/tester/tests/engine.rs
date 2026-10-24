@@ -4,7 +4,12 @@ use tester::engine::{launch, launch_text};
 
 #[test]
 fn launch_unknown_name_errors() {
-    let err = launch(None, None, "nope").err().unwrap();
+    let err = launch(None, "nope").err().unwrap();
+    assert!(
+        format!("{err:#}").contains("no zapret2 strategy named nope"),
+        "{err:#}"
+    );
+    let err = launch(None, "zapret2:nope").err().unwrap();
     assert!(format!("{err:#}").contains("folder is not set"), "{err:#}");
 }
 
@@ -37,15 +42,15 @@ fn engine(dir: &std::path::Path) -> zapret2::Engine {
 fn launch_text_rejects_bad_args() {
     let dir = tempfile::tempdir().unwrap();
     let engine = engine(dir.path());
-    assert!(launch_text(&engine, None, "--lua-desync=nosuchfn").is_err());
-    assert!(launch_text(&engine, None, "--lua-desync=").is_err());
+    assert!(launch_text(&engine, "--lua-desync=nosuchfn").is_err());
+    assert!(launch_text(&engine, "--lua-desync=").is_err());
 }
 
 #[test]
 fn launch_text_starts_winws2_in_its_folder() {
     let dir = tempfile::tempdir().unwrap();
     let engine = engine(dir.path());
-    let launch = launch_text(&engine, None, "--filter-tcp=443 --lua-desync=fake").unwrap();
+    let launch = launch_text(&engine, "--filter-tcp=443 --lua-desync=fake").unwrap();
     assert!(launch.zapret2);
     assert_eq!(launch.exe, engine.exe());
     assert_eq!(launch.cwd, engine.root());

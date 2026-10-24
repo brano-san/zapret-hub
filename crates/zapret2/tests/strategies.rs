@@ -3,7 +3,6 @@ mod common;
 use std::fs;
 use std::path::Path;
 
-use zapret::game_filter::{GameFilter, GameFilterMode};
 use zapret2::Engine;
 use zapret2::strategies::{self, args, check, claim, split, tail};
 
@@ -76,7 +75,7 @@ fn flowseal_copies_are_listed_in_natural_order() {
         .map(|s| s.name)
         .collect();
     let mut sorted = copies.clone();
-    sorted.sort_by_key(|name| zapret::strategies::natural_key(name));
+    sorted.sort_by_key(|name| zapret::natural_key(name));
     assert_eq!(copies, sorted);
 }
 
@@ -161,66 +160,115 @@ fn the_command_line_fills_every_placeholder() {
     let dir = tempfile::tempdir().unwrap();
     // Spaces as in `C:\Program Files\…`: every path must stay one quoted argument.
     let engine = engine(&dir.path().join("zapret 2"));
-    let flowseal = dir.path().join("Flowseal zapret");
-    let folder = common::fake_flowseal(&flowseal, &[]);
     let text = "--wf-tcp-out=443,%GameFilterTCP% --wf-udp-out=443,%GameFilterUDP%\n\
                 --lua-init=@\"%LUA%zapret-lib.lua\" --blob=a:@\"%FILES%fake\\a.bin\"\n\
                 --hostlist=\"%LISTS%list-general.txt\" --blob=b:@\"%bin%stun.bin\" --filter-tcp=%GameFilter%";
     let root = engine.root().display().to_string();
-    let lists = flowseal.join("lists").display().to_string();
-    let bin = flowseal.join("bin").display().to_string();
-    let line = tail(&engine, Some(&folder), text).unwrap();
+    let line = tail(&engine, text).unwrap();
     assert_eq!(
         line,
         format!(
-            "--chdir=\"{root}\" --wf-tcp-out=443,12 --wf-udp-out=443,12 \
+            "--chdir=\"{root}\" --wf-tcp-out=443,1024-65535 --wf-udp-out=443,1024-65535 \
              --lua-init=@\"{root}\\lua\\zapret-lib.lua\" --blob=a:@\"{root}\\files\\fake\\a.bin\" \
-             --hostlist=\"{lists}\\list-general.txt\" --blob=b:@\"{bin}\\stun.bin\" --filter-tcp=12"
+             --hostlist=\"{root}\\lists\\list-general.txt\" --blob=b:@\"{root}\\bin\\stun.bin\" --filter-tcp=1024-65535"
         )
     );
-    let tokens = zapret::custom::quoted_tokens(&line);
+    let tokens = zapret::quoted_tokens(&line);
     assert_eq!(tokens.len(), 8, "{tokens:?}");
     assert_eq!(tokens[0], format!("--chdir=\"{root}\""));
     assert_eq!(
         tokens[5],
-        format!("--hostlist=\"{lists}\\list-general.txt\"")
+        format!("--hostlist=\"{root}\\lists\\list-general.txt\"")
     );
-    zapret::game_filter::write(
-        &folder,
-        &GameFilter {
-            mode: GameFilterMode::Tcp,
-            tcp: "1024-65535".into(),
-            udp: "1024-65535".into(),
-        },
-    )
-    .unwrap();
-    let filtered = tail(&engine, Some(&folder), text).unwrap();
+    let off = tail(&engine.clone().with_game_filter(false), text).unwrap();
     assert!(
-        filtered.contains("--wf-tcp-out=443,1024-65535 --wf-udp-out=443,12"),
-        "{filtered}"
+        off.contains("--wf-tcp-out=443,12 --wf-udp-out=443,12"),
+        "{off}"
     );
-    assert!(filtered.ends_with("--filter-tcp=1024-65535"), "{filtered}");
+    assert!(off.ends_with("--filter-tcp=12"), "{off}");
 }
 
 #[test]
-fn flowseal_placeholders_need_the_flowseal_folder() {
+fn the_lists_and_fakes_are_written_once_and_then_left_to_the_user() {
     let dir = tempfile::tempdir().unwrap();
     let engine = engine(dir.path());
-    let err = format!(
-        "{:#}",
-        tail(&engine, None, "--hostlist=\"%lists%list-general.txt\"").unwrap_err()
-    );
-    assert!(
-        err.contains("%LISTS%") && err.contains("zapret folder"),
-        "{err}"
-    );
-    let own = tail(
-        &engine,
-        None,
-        "--wf-tcp-out=443 --lua-init=@\"%LUA%zapret-lib.lua\"",
+    let lists = strategies::lists_dir(&engine);
+    tail(&engine, "--wf-tcp-out=443").unwrap();
+    for file in ["list-general.txt", "list-general-user.txt", "ipset-all.txt"] {
+        assert!(
+            !fs::read(lists.join(file)).unwrap().is_empty(),
+            "{file}: an empty list matches everything"
+        );
+    }
+    assert!(strategies::bin_dir(&engine).join("stun.bin").is_file());
+    fs::write(
+        lists.join("list-general.txt"),
+        "mine.example
+",
     )
     .unwrap();
-    assert!(own.starts_with(&format!("--chdir=\"{}\" ", engine.root().display())));
+    tail(&engine, "--wf-tcp-out=443").unwrap();
+    assert_eq!(
+        fs::read_to_string(lists.join("list-general.txt")).unwrap(),
+        "mine.example
+"
+    );
+}
+
+#[test]
+fn an_upgrade_takes_the_flowseal_folders_lists_and_fakes() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine(&dir.path().join("zapret2"));
+    let flowseal = dir.path().join("Flowseal");
+    fs::create_dir_all(flowseal.join("lists")).unwrap();
+    fs::create_dir_all(flowseal.join("bin")).unwrap();
+    fs::write(
+        flowseal.join("lists").join("ipset-all.txt"),
+        "1.1.1.0/24
+",
+    )
+    .unwrap();
+    fs::write(
+        flowseal.join("lists").join("other.txt"),
+        "x
+",
+    )
+    .unwrap();
+    fs::write(flowseal.join("bin").join("stun.bin"), "mine").unwrap();
+    // A list the zapret2 folder already has stays as it is.
+    let lists = strategies::lists_dir(&engine);
+    fs::create_dir_all(&lists).unwrap();
+    fs::write(
+        lists.join("list-google.txt"),
+        "own
+",
+    )
+    .unwrap();
+    fs::write(
+        flowseal.join("lists").join("list-google.txt"),
+        "theirs
+",
+    )
+    .unwrap();
+
+    let mut copied = strategies::adopt_files(&engine, &flowseal);
+    copied.sort();
+    assert_eq!(copied, ["ipset-all.txt", "stun.bin"]);
+    assert_eq!(
+        fs::read_to_string(lists.join("ipset-all.txt")).unwrap(),
+        "1.1.1.0/24
+"
+    );
+    assert_eq!(
+        fs::read_to_string(lists.join("list-google.txt")).unwrap(),
+        "own
+"
+    );
+    assert!(
+        !lists.join("other.txt").exists(),
+        "only what the strategies use"
+    );
+    assert!(strategies::adopt_files(&engine, &flowseal).is_empty());
 }
 
 /// A lenient first pass, not winws2's own option parsing: step 3 (`--intercept=0`) is the real
@@ -338,18 +386,13 @@ fn the_card_shows_the_global_part_and_each_profile() {
     );
 }
 
-/// The built-in strategies against zapret2's function list and Flowseal 1.10.3's files.
+/// The built-in strategies against zapret2's function list and the lists and fakes the hub writes.
 #[test]
 fn every_built_in_strategy_passes_the_static_check_and_names_files_that_exist() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("zapret2");
     common::fake_engine(&root, "", &common::lib_with_functions());
     let engine = Engine::open(&root).unwrap();
-    let flowseal_files: Vec<&str> = include_str!("fixtures/flowseal-1.10.3.txt")
-        .lines()
-        .filter(|line| !line.starts_with('#'))
-        .collect();
-    let folder = common::fake_flowseal(&dir.path().join("zapret"), &flowseal_files);
     let data = tempfile::tempdir().unwrap();
     let builtin: Vec<_> = strategies::list(data.path())
         .unwrap()
@@ -364,7 +407,7 @@ fn every_built_in_strategy_passes_the_static_check_and_names_files_that_exist() 
             "{}",
             strategy.name
         );
-        let tail = tail(&engine, Some(&folder), &strategy.text).unwrap();
+        let tail = tail(&engine, &strategy.text).unwrap();
         check(&engine, &tail).unwrap_or_else(|err| panic!("{}: {err:#}", strategy.name));
         let paths: Vec<&str> = tail
             .split('"')
@@ -454,4 +497,21 @@ fn old_strategies_move_into_the_zapret2_folder_without_overwriting() {
     );
     assert!(!old.path().join("a.txt").exists() && old.path().join("b.txt").exists());
     assert!(strategies::migrate(&old.path().join("missing"), home.path()).is_empty());
+}
+
+#[test]
+fn a_flowseal_strategy_maps_to_its_built_in_copy_or_general() {
+    assert_eq!(
+        strategies::flowseal_copy("general (ALT11)"),
+        "zapret2:general (ALT11)"
+    );
+    assert_eq!(
+        strategies::flowseal_copy("GENERAL (fake tls auto)"),
+        "zapret2:general (FAKE TLS AUTO)"
+    );
+    assert_eq!(strategies::flowseal_copy("general"), "zapret2:general");
+    assert_eq!(
+        strategies::flowseal_copy("general (HUB mine)"),
+        "zapret2:general"
+    );
 }

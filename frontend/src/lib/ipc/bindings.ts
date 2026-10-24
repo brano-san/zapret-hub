@@ -12,7 +12,6 @@ export const commands = {
 	checkProxy: (addr: string) => typedError<ProxyStatus, string>(__TAURI_INVOKE("check_proxy", { addr })),
 	wizardCandidates: () => typedError<Candidates, string>(__TAURI_INVOKE("wizard_candidates")),
 	detectFolders: () => typedError<Detected, string>(__TAURI_INVOKE("detect_folders")),
-	checkFolder: (path: string) => typedError<FolderCheck, string>(__TAURI_INVOKE("check_folder", { path })),
 	pickFolder: () => typedError<string | null, string>(__TAURI_INVOKE("pick_folder")),
 	openUrl: (url: string) => typedError<null, string>(__TAURI_INVOKE("open_url", { url })),
 	openFolder: (kind: FolderKind) => typedError<null, string>(__TAURI_INVOKE("open_folder", { kind })),
@@ -21,17 +20,6 @@ export const commands = {
 	applyStrategy: (name: string) => typedError<QuickCheck, string>(__TAURI_INVOKE("apply_strategy", { name })),
 	applyBest: () => typedError<QuickCheck, string>(__TAURI_INVOKE("apply_best")),
 	restartZapret: () => typedError<QuickCheck, string>(__TAURI_INVOKE("restart_zapret")),
-	cloneStrategy: (source: string, name: string) => typedError<CustomStrategy, string>(__TAURI_INVOKE("clone_strategy", { source, name })),
-	/**  The editor's «Проверить»: the parser and `winws --dry-run`, nothing saved. */
-	validateCustom: (strategy: CustomStrategy) => typedError<null, string>(__TAURI_INVOKE("validate_custom", { strategy })),
-	saveCustom: (strategy: CustomStrategy, create: boolean) => typedError<{
-	ok: boolean,
-	service: SvcState,
-	winws_running: boolean,
-	checks: QuickItem[],
-} | null, string>(__TAURI_INVOKE("save_custom", { strategy, create })),
-	/**  `name` is the record's name, not the file's. */
-	deleteCustom: (name: string) => typedError<null, string>(__TAURI_INVOKE("delete_custom", { name })),
 	/**  The zapret2 folder, its version and Lua compatibility, or why it cannot be used. */
 	zapret2Info: () => typedError<Info, string>(__TAURI_INVOKE("zapret2_info")),
 	/**
@@ -83,20 +71,9 @@ export const commands = {
 	getRun: (id: string) => typedError<TestRun, string>(__TAURI_INVOKE("get_run", { id })),
 	/**  «Копировать»: the run as `test zapret.ps1` writes it. */
 	runReport: (id: string) => typedError<string, string>(__TAURI_INVOKE("run_report", { id })),
-	getFlowseal: () => typedError<FlowsealState, string>(__TAURI_INVOKE("get_flowseal")),
-	/**  The ports are baked into the active service's arguments: it is installed again (spec 5.5). */
-	setGameFilter: (filter: GameFilter) => typedError<null, string>(__TAURI_INVOKE("set_game_filter", { filter })),
-	setIpsetMode: (mode: IpsetMode) => typedError<null, string>(__TAURI_INVOKE("set_ipset_mode", { mode })),
-	setCheckUpdates: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_check_updates", { enabled })),
-	replaceFake: (kind: FakeKind, source: string) => typedError<null, string>(__TAURI_INVOKE("replace_fake", { kind, source })),
-	/**  winws reads the lists again by itself: no restart. */
-	addListEntry: (list: UserList, entry: string) => typedError<null, string>(__TAURI_INVOKE("add_list_entry", { list, entry })),
-	removeListEntry: (list: UserList, entry: string) => typedError<null, string>(__TAURI_INVOKE("remove_list_entry", { list, entry })),
-	updateIpset: () => typedError<null, string>(__TAURI_INVOKE("update_ipset")),
 	/**  What applying would change in hosts; nothing is written. */
 	hostsPlan: () => typedError<HostsPlan, string>(__TAURI_INVOKE("hosts_plan")),
 	applyHosts: () => typedError<null, string>(__TAURI_INVOKE("apply_hosts")),
-	checkFlowsealUpdate: () => typedError<string | null, string>(__TAURI_INVOKE("check_flowseal_update")),
 	systemChecks: () => typedError<SystemCheck[], string>(__TAURI_INVOKE("system_checks")),
 	/**  Removing WinDivert under the router's own handles: on a pause (router spec 11). */
 	fixCheck: (action: CheckAction) => typedError<null, string>(__TAURI_INVOKE("fix_check", { action })),
@@ -217,9 +194,8 @@ export type Candidate = {
 	text: string,
 };
 
-/**  What the wizard offers (spec 9.2). */
+/**  SOCKS5 ports that answer, for the wizard (spec 9.2). */
 export type Candidates = {
-	folders: FolderCheck[],
 	/**  `127.0.0.1:<port>` that answer a SOCKS5 greeting now. */
 	proxies: string[],
 };
@@ -302,9 +278,6 @@ export type Confidence = {
 export type Context = {
 	strategy: string | null,
 	engine_running: boolean,
-	flowseal_outdated: boolean,
-	/**  The Flowseal folder's version, for the changes since the last report. */
-	flowseal_version: string | null,
 	routing: string,
 	proxy: string | null,
 	proxy_alive: boolean | null,
@@ -339,20 +312,8 @@ export type CulpritKind = {
 	kind: string,
 };
 
-export type CustomStrategy = {
-	/**  What follows `HUB ` in the file name. */
-	name: string,
-	/**  The strategy it was cloned from. */
-	cloned_from: string,
-	/**  `--wf-tcp=... --wf-udp=...`: what winws intercepts at all. */
-	wf: string,
-	/**  One entry per `--new` block, as the `.bat` has it (`%BIN%`, `%LISTS%`, `%GameFilter…%` kept). */
-	blocks: string[],
-};
-
-/**  What the wizard finds before the user picks anything: one folder per engine. */
+/**  What the wizard finds before the user picks anything: the zapret2 folder. */
 export type Detected = {
-	flowseal: FolderCheck | null,
 	zapret2: string | null,
 };
 
@@ -454,23 +415,13 @@ export type DpiTargetResult = {
 	checks: DpiResult[],
 };
 
-export type Engine = "Flowseal" | "Zapret2";
+export type Engine = "Zapret2";
 
 /**  One fact: a stable code, its arguments, and the text for a person. */
 export type Fact = {
 	code: string,
 	args: string[],
 	text: string,
-};
-
-export type FakeKind = "Discord" | "Game";
-
-export type Fakes = {
-	/**  Base names of `bin\*.bin` except `ACTIVE_*`, sorted. */
-	files: string[],
-	/**  The file each active fake is a copy of (same SHA-256), when one matches. */
-	discord: string | null,
-	game: string | null,
 };
 
 /**  `ResetEarly` is the default only for reading a report that lacks the fault. */
@@ -540,24 +491,7 @@ export type FlowRow = {
 	closed: boolean,
 };
 
-/**  The settings `service.bat` keeps in the folder: the «Zapret» tab. */
-export type FlowsealState = {
-	game_filter: GameFilter,
-	ipset: IpsetMode,
-	ipset_backup: boolean,
-	check_updates: boolean,
-	fakes: Fakes,
-	lists: ListState[],
-};
-
-export type FolderCheck = {
-	path: string,
-	/**  Empty for a usable Flowseal folder. */
-	missing: string[],
-	version: string | null,
-};
-
-export type FolderKind = "Zapret" | 
+export type FolderKind = 
 /**  `<zapret2 folder>/strategies`: the user's zapret2 strategies; needs the zapret2 folder to be set. */
 "Zapret2" | "Logs" | 
 /**
@@ -565,14 +499,6 @@ export type FolderKind = "Zapret" |
  *  page never sends one. A built-in zapret2 strategy has no file.
  */
 { Strategy: string };
-
-export type GameFilter = {
-	mode: GameFilterMode,
-	tcp: string,
-	udp: string,
-};
-
-export type GameFilterMode = "disabled" | "all" | "tcp" | "udp";
 
 /**  What a path is for: the culprit answering at all, or answering fast (games). */
 export type Goal = "reach" | "latency";
@@ -627,8 +553,6 @@ export type Info = {
 	error: string | null,
 };
 
-export type IpsetMode = "loaded" | "none" | "any";
-
 export type LastResult = {
 	run_id: string,
 	suite: Suite,
@@ -639,11 +563,6 @@ export type LastResult = {
 };
 
 export type Level = "low" | "medium" | "high";
-
-export type ListState = {
-	list: UserList,
-	entries: string[],
-};
 
 /**  The run in progress, for a page opened in the middle of it. */
 export type LiveRun = {
@@ -739,18 +658,11 @@ export type OpenTab = {
 
 /**  The «Обзор» tab, read in one go. */
 export type Overview = {
-	/**  `None` until the wizard sets it. */
-	folder: string | null,
-	/**  Why the folder cannot be used. */
-	folder_error: string | null,
-	version: string | null,
-	/**  A newer Flowseal version, once a check found one. */
-	update: string | null,
-	/**  The active engine's service: `zapret`, or `zapret2` once installed (zapret2 spec 3.1). */
+	/**  The engine's service: `zapret2` (zapret2 spec 3.1). */
 	service_name: string,
 	service: SvcState,
 	windivert: SvcState,
-	/**  That service's process: `winws.exe` or `winws2.exe`. */
+	/**  That service's process: `winws2.exe`. */
 	winws_running: boolean,
 	strategy: string | null,
 	/**  The zapret2 folder and its version, or why it cannot be used. */
@@ -936,7 +848,6 @@ export type Score = {
 };
 
 export type Settings = {
-	zapret_dir?: string | null,
 	/**  The zapret2 folder (zapret2 spec 4); `None` while zapret2 is off. */
 	zapret2_dir?: string | null,
 	/**  `127.0.0.1:2080`: checked on the overview, used when a download fails directly. */
@@ -956,6 +867,11 @@ export type Settings = {
 	diag_budget_min?: number,
 	/**  NekoBox's folder, for its logs (diag spec 5); `None`: the running NekoBox's. */
 	nekobox_dir?: string | null,
+	/**
+	 *  The game filter: the built-in strategies' `%GameFilter*%` ports open the unprivileged range
+	 *  (`zapret2::Engine::with_game_filter`).
+	 */
+	game_filter?: boolean,
 };
 
 /**  zapret, the settings or the history changed: the page reads what it shows again. */
@@ -965,15 +881,13 @@ export type StrategyDetail = {
 	row: StrategyRow,
 	wf: string,
 	blocks: string[],
-	/**  `Final args` as `service.bat` prints them. */
+	/**  The command line winws2 gets. */
 	final_args: string | null,
 	/**  Every check of the last run the strategy was in. */
 	result: StrategyResult | null,
-	/**  The record behind a custom strategy, for the editor. */
-	record: CustomStrategy | null,
-	/**  A zapret2 strategy's text as written, for its editor; empty for Flowseal's. */
+	/**  The strategy's text as written, for its editor. */
 	source: string,
-	/**  A zapret2 strategy's profiles, for its circular ones; empty for Flowseal's. */
+	/**  The strategy's profiles, for its circular ones. */
 	circular: Analysis,
 };
 
@@ -994,18 +908,12 @@ export type StrategyResult = {
 };
 
 export type StrategyRow = {
-	/**  File stem: `general (ALT11)`, `general (HUB mine)`; `zapret2:<name>` for zapret2. */
+	/**  `zapret2:<name>`, or `zapret2:<file>` for a file of the folder that is not a strategy. */
 	name: string,
-	/**
-	 *  A `HUB` file with a record in `data/strategies` (spec 5.2), or a zapret2 strategy of the
-	 *  user's.
-	 */
+	/**  A strategy of the user's. */
 	custom: boolean,
 	active: boolean,
-	/**
-	 *  Not a strategy (`service.bat` would capture nothing), not readable, or not passing the
-	 *  static check of zapret2.
-	 */
+	/**  Not readable, named like a built-in one, or not passing the static check of zapret2. */
 	error: string | null,
 	last: LastResult | null,
 	/**
@@ -1068,7 +976,6 @@ export type TestRun = {
 	/**  `2026-10-10_05-03-34`, also the file name. */
 	id: string,
 	suite: Suite,
-	flowseal_version: string | null,
 	/**
 	 *  `winws2.exe --version` when zapret2 strategies ran: the hash of a command line does not see
 	 *  an engine update (zapret2 spec 7). Runs from before zapret2 have none.
@@ -1117,8 +1024,6 @@ export type TurnOffTarget =
 "zapret" | 
 /**  Whatever the culprit goes through now: the zapret strategy or a routing rule. */
 "current";
-
-export type UserList = "General" | "Exclude" | "IpsetExclude";
 
 /**  The run's answer in one code (proposal 2). */
 export type VerdictCode = 

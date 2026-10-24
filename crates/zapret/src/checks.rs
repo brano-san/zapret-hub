@@ -1,8 +1,9 @@
-//! The checks of `service.bat :service_diagnostics` (spec 5.7). Each gets a level; what the
+//! The checks of Flowseal's `service.bat :service_diagnostics` (spec 5.7), on the zapret2 folder. Each gets a level; what the
 //! original fixes on its own becomes an action behind a button.
 
-use crate::folder::Folder;
-use crate::service::{self, SERVICE, SERVICE2, SvcState, WINWS2};
+use std::path::Path;
+
+use crate::service::{self, SERVICE, SvcState, WINWS2};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub enum CheckLevel {
@@ -48,17 +49,20 @@ pub struct SystemCheck {
     pub action: Option<CheckAction>,
 }
 
-/// Other bypasses `service.bat` offers to remove.
-pub const CONFLICTING: [&str; 4] = ["GoodbyeDPI", "discordfix_zapret", "winws1", "winws2"];
+/// Other bypasses `service.bat` offers to remove, and Flowseal's own `zapret`: the hub runs
+/// zapret2 alone, and two WinDivert bypasses get in each other's way.
+pub const CONFLICTING: [&str; 5] = [
+    "GoodbyeDPI",
+    "discordfix_zapret",
+    "winws1",
+    "winws2",
+    SERVICE,
+];
 
-/// The installed services «Удалить службы» removes: the other bypasses, and `zapret2` while `zapret`
-/// is installed too (zapret2 spec 9). `service.bat` knows nothing of zapret2 and may have put
-/// `zapret` next to it: the user's newer step outside the app wins.
+/// The installed services «Удалить службы» removes.
 pub fn conflicts(installed: impl Fn(&str) -> bool) -> Vec<&'static str> {
-    let zapret2 = installed(SERVICE).then_some(SERVICE2);
     CONFLICTING
         .into_iter()
-        .chain(zapret2)
         .filter(|name| installed(name))
         .collect()
 }
@@ -67,11 +71,14 @@ fn installed(name: &str) -> bool {
     service::state(name) != SvcState::NotInstalled
 }
 
-pub fn run_all(folder: &Folder) -> Vec<SystemCheck> {
+/// `zapret2` is the zapret2 folder setting: the checks of its path and its driver pass without one.
+pub fn run_all(zapret2: Option<&Path>) -> Vec<SystemCheck> {
     use CheckLevel::{Problem, Warn};
     let services = service::active_services();
     let find = |words: &[&str]| matching_services(&services, words).join(", ");
-    let root = folder.root_dp0();
+    // `%~dp0`: the folder with a trailing backslash.
+    let root = zapret2.map(|dir| format!("{}\\", dir.display().to_string().trim_end_matches('\\')));
+    let root = root.as_deref();
     let proxy = proxy_server();
     let windivert = service::state("WinDivert");
     // winws2 holds WinDivert too: removing the driver under it would break zapret2 (spec 9).
@@ -122,23 +129,25 @@ pub fn run_all(folder: &Folder) -> Vec<SystemCheck> {
         found(CheckId::SmartByte, find(&["smartbyte"]), Problem),
         check(
             CheckId::CyrillicPath,
-            has_cyrillic(&root),
+            root.is_some_and(has_cyrillic),
             Warn,
-            root.clone(),
+            root.unwrap_or_default().to_owned(),
             None,
         ),
         check(
             CheckId::OneDrive,
-            in_onedrive(&root, std::env::var("OneDrive").ok().as_deref()),
+            root.is_some_and(|root| in_onedrive(root, std::env::var("OneDrive").ok().as_deref())),
             Problem,
-            root.clone(),
+            root.unwrap_or_default().to_owned(),
             None,
         ),
         check(
             CheckId::WinDivertSys,
-            !has_driver(folder),
+            zapret2.is_some_and(|dir| !has_driver(dir, 3)),
             Problem,
-            folder.bin().display().to_string(),
+            zapret2
+                .map(|dir| dir.display().to_string())
+                .unwrap_or_default(),
             None,
         ),
         found(CheckId::Vpn, find(&["vpn"]), Warn),
@@ -297,13 +306,18 @@ fn youtube_in_hosts_file() -> bool {
     }
 }
 
-fn has_driver(folder: &Folder) -> bool {
-    std::fs::read_dir(folder.bin()).is_ok_and(|entries| {
+/// A `WinDivert64.sys` in `dir` or a folder up to `depth` levels below it: next to `winws2.exe`,
+/// wherever the release keeps it (`binaries\windows-x86_64`, `zapret-winws`, `bin`).
+fn has_driver(dir: &Path, depth: u8) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|entries| {
         entries.flatten().any(|entry| {
-            entry
-                .path()
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("sys"))
+            let path = entry.path();
+            if path.is_dir() {
+                depth > 0 && has_driver(&path, depth - 1)
+            } else {
+                path.file_name()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("WinDivert64.sys"))
+            }
         })
     })
 }
@@ -329,4 +343,20 @@ fn doh_configured() -> bool {
     windows_registry::LOCAL_MACHINE
         .open(r"SYSTEM\CurrentControlSet\Services\Dnscache\InterfaceSpecificParameters")
         .is_ok_and(|key| search(&key, 6))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_driver_is_found_where_a_release_keeps_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let deep = tmp.path().join("binaries").join("windows-x86_64");
+        std::fs::create_dir_all(&deep).unwrap();
+        assert!(!has_driver(tmp.path(), 3));
+        std::fs::write(deep.join("WinDivert64.sys"), "").unwrap();
+        assert!(has_driver(tmp.path(), 3));
+        assert!(!has_driver(tmp.path(), 0), "not deeper than asked");
+    }
 }

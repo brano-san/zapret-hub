@@ -1,6 +1,5 @@
 use router::divert::{
-    Engine, FILTER_BUDGET, MAX_FILTER_RANGES, capture_filter, filter, pick_dll, refused,
-    refused_for_good,
+    FILTER_BUDGET, MAX_FILTER_RANGES, capture_filter, filter, pick_dll, refused, refused_for_good,
 };
 use router::rules::{self, Preset, Protocol, Rule, Table};
 use std::net::Ipv4Addr;
@@ -286,42 +285,16 @@ fn many_ports_still_fit_the_budget() {
 }
 
 #[test]
-fn the_dll_comes_from_the_running_engine() {
-    let flowseal = Path::new(r"E:\Zapret");
+fn the_dll_comes_from_the_zapret2_folder() {
     let winws2 = Path::new(r"D:\zapret2\binaries\windows-x86_64");
-    let fs_dll = PathBuf::from(r"E:\Zapret\bin\WinDivert.dll");
-    let z2_dll = PathBuf::from(r"D:\zapret2\binaries\windows-x86_64\WinDivert.dll");
-    let all = |_: &Path| true;
-    assert_eq!(
-        pick_dll(Some(Engine::Zapret2), Some(flowseal), Some(winws2), all).unwrap(),
-        z2_dll
-    );
-    assert_eq!(
-        pick_dll(Some(Engine::Flowseal), Some(flowseal), Some(winws2), all).unwrap(),
-        fs_dll
-    );
-    assert_eq!(
-        pick_dll(None, Some(flowseal), Some(winws2), all).unwrap(),
-        fs_dll,
-        "Flowseal first"
-    );
-    let only_z2 = |path: &Path| path == z2_dll;
-    assert_eq!(
-        pick_dll(None, Some(flowseal), Some(winws2), only_z2).unwrap(),
-        z2_dll
-    );
-    let err = pick_dll(
-        Some(Engine::Flowseal),
-        Some(flowseal),
-        Some(winws2),
-        only_z2,
-    )
-    .unwrap_err();
+    let dll = PathBuf::from(r"D:\zapret2\binaries\windows-x86_64\WinDivert.dll");
+    assert_eq!(pick_dll(Some(winws2), |_| true).unwrap(), dll);
+    let err = pick_dll(Some(winws2), |_| false).unwrap_err();
     assert!(
-        format!("{err:#}").contains(r"E:\Zapret\bin\WinDivert.dll"),
-        "no fallback for a running engine: {err:#}"
+        format!("{err:#}").contains(r"windows-x86_64\WinDivert.dll"),
+        "{err:#}"
     );
-    assert!(pick_dll(None, None, None, all).is_err());
+    assert!(pick_dll(None, |_| true).is_err());
 }
 
 #[test]

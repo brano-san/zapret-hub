@@ -20,11 +20,6 @@ use tester::catalog::StrategyRow;
 use tester::model::{Pass, Suite, TestRun};
 use tester::run::Request as TestRequest;
 use zapret::checks::CheckAction;
-use zapret::custom::CustomStrategy;
-use zapret::fakes::FakeKind;
-use zapret::game_filter::{GameFilter, GameFilterMode};
-use zapret::ipset::IpsetMode;
-use zapret::user_lists::UserList;
 
 /// The app ran the command and it failed, or the test run failed.
 const FAILED: u8 = 1;
@@ -58,7 +53,7 @@ const DIAG_POLL: Duration = if cfg!(test) { Duration::ZERO } else { POLL };
                   4 --timeout reached."
 )]
 struct Cli {
-    /// Confirm what the window asks to confirm: custom delete, zapret2 delete, hosts apply, checks
+    /// Confirm what the window asks to confirm: zapret2 delete, hosts apply, checks
     /// fix remove-windivert|remove-conflicts, discord clear-cache, service remove, routes remove.
     #[arg(long, global = true)]
     yes: bool,
@@ -82,51 +77,23 @@ enum Command {
     Proxy(ProxyCommand),
     /// Zapret folders and SOCKS5 proxies found on this computer.
     Candidates,
-    /// Flowseal's strategies, then zapret2's.
+    /// zapret2's strategies.
     #[command(subcommand)]
     Strategies(StrategiesCommand),
-    /// Install a strategy as its engine's service (zapret or zapret2), then run a quick check.
+    /// Install a strategy as the zapret2 service, then run a quick check.
     Apply { name: String },
     /// Apply the best strategy of the newest standard test run.
     ApplyBest,
-    /// Restart the active service (zapret or zapret2), then run a quick check.
+    /// Restart the zapret2 service, then run a quick check.
     Restart,
     /// Check that zapret works now.
     QuickCheck,
-    /// Custom strategies.
-    #[command(subcommand)]
-    Custom(CustomCommand),
     /// zapret2: its folder and your own strategies (zapret2:<name>).
     #[command(subcommand)]
     Zapret2(Zapret2Command),
     /// Strategy test runs.
     #[command(subcommand)]
     Tests(TestsCommand),
-    /// Flowseal's settings, lists and fakes.
-    Flowseal {
-        #[command(subcommand)]
-        command: Option<FlowsealCommand>,
-    },
-    /// Set the game filter; ports not given stay as they are.
-    GameFilter {
-        mode: FilterMode,
-        /// TCP ports, e.g. 1024-65535.
-        #[arg(long)]
-        tcp: Option<String>,
-        /// UDP ports, e.g. 1024-65535.
-        #[arg(long)]
-        udp: Option<String>,
-    },
-    /// The ipset-all list.
-    #[command(subcommand)]
-    Ipset(IpsetCommand),
-    /// Flowseal's own update check.
-    CheckUpdates { state: Switch },
-    /// Make a file of bin\ (its name without .bin) the active fake.
-    Fake { kind: Fake, name: String },
-    /// The user lists.
-    #[command(subcommand)]
-    Lists(ListsCommand),
     /// The zapret-hub block in hosts.
     #[command(subcommand)]
     Hosts(HostsCommand),
@@ -138,7 +105,7 @@ enum Command {
     /// Discord.
     #[command(subcommand)]
     Discord(DiscordCommand),
-    /// The zapret service.
+    /// The zapret2 service.
     #[command(subcommand)]
     Service(ServiceCommand),
     /// Route UDP through the local SOCKS5 proxy.
@@ -169,27 +136,10 @@ enum ProxyCommand {
 
 #[derive(Debug, Subcommand)]
 enum StrategiesCommand {
-    /// Every strategy in service.bat's order with its last test result.
+    /// Every strategy with its last test result.
     List,
-    /// Arguments, last result and, for a custom strategy, its record.
+    /// Arguments and last result.
     Show { name: String },
-}
-
-#[derive(Debug, Subcommand)]
-enum CustomCommand {
-    /// Copy a strategy as "general (HUB <name>)" and print its record.
-    Clone { source: String, name: String },
-    /// Check a CustomStrategy JSON (a file, or - for stdin) without saving it.
-    Validate { file: PathBuf },
-    /// Save a CustomStrategy JSON (a file, or - for stdin).
-    Save {
-        file: PathBuf,
-        /// A new strategy rather than a change to one.
-        #[arg(long)]
-        create: bool,
-    },
-    /// Delete a custom strategy by its own name: mine for "general (HUB mine)" (needs --yes).
-    Delete { name: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -367,26 +317,6 @@ impl From<DiagAnswer> for Answer {
 }
 
 #[derive(Debug, Subcommand)]
-enum FlowsealCommand {
-    /// Look for a newer Flowseal version.
-    CheckUpdate,
-}
-
-#[derive(Debug, Subcommand)]
-enum IpsetCommand {
-    /// Switch the mode as service.bat does.
-    Mode { mode: Ipset },
-    /// Download ipset-all.txt again.
-    Update,
-}
-
-#[derive(Debug, Subcommand)]
-enum ListsCommand {
-    Add { list: List, entry: String },
-    Remove { list: List, entry: String },
-}
-
-#[derive(Debug, Subcommand)]
 enum HostsCommand {
     /// What applying would change; nothing is written.
     Plan,
@@ -476,13 +406,13 @@ impl From<PresetArg> for Preset {
 
 #[derive(Debug, Subcommand)]
 enum ServiceCommand {
-    /// Remove the zapret or zapret2 service and WinDivert (needs --yes).
+    /// Remove the zapret2 service (and Flowseal's zapret) and WinDivert (needs --yes).
     Remove,
 }
 
-/// The keys of zapret-hub.toml the CLI may change (spec 7.2). Not `zapret_dir` or `zapret2_dir`:
-/// the SYSTEM service runs that folder's winws.exe or winws2.exe, so the app takes a new one only
-/// from its window (spec 5; zapret2 spec 10).
+/// The keys of zapret-hub.toml the CLI may change (spec 7.2). Not `zapret2_dir`: the SYSTEM
+/// service runs that folder's winws2.exe, so the app takes a new one only from its window (zapret2
+/// spec 10).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "snake_case")]
 enum Key {
@@ -494,80 +424,7 @@ enum Key {
     DiagObserveSecs,
     DiagBudgetMin,
     NekoboxDir,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum FilterMode {
-    Disabled,
-    All,
-    Tcp,
-    Udp,
-}
-
-impl From<FilterMode> for GameFilterMode {
-    fn from(mode: FilterMode) -> Self {
-        match mode {
-            FilterMode::Disabled => Self::Disabled,
-            FilterMode::All => Self::All,
-            FilterMode::Tcp => Self::Tcp,
-            FilterMode::Udp => Self::Udp,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum Ipset {
-    Loaded,
-    None,
-    Any,
-}
-
-impl From<Ipset> for IpsetMode {
-    fn from(mode: Ipset) -> Self {
-        match mode {
-            Ipset::Loaded => Self::Loaded,
-            Ipset::None => Self::None,
-            Ipset::Any => Self::Any,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum Switch {
-    On,
-    Off,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum Fake {
-    Discord,
-    Game,
-}
-
-impl From<Fake> for FakeKind {
-    fn from(kind: Fake) -> Self {
-        match kind {
-            Fake::Discord => Self::Discord,
-            Fake::Game => Self::Game,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum List {
-    General,
-    Exclude,
-    IpsetExclude,
-}
-
-impl From<List> for UserList {
-    fn from(list: List) -> Self {
-        match list {
-            List::General => Self::General,
-            List::Exclude => Self::Exclude,
-            List::IpsetExclude => Self::IpsetExclude,
-        }
-    }
+    GameFilter,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -704,8 +561,7 @@ fn read<T: DeserializeOwned>(value: Value) -> Result<T, Fail> {
 fn needs_yes(command: &Command) -> bool {
     matches!(
         command,
-        Command::Custom(CustomCommand::Delete { .. })
-            | Command::Zapret2(Zapret2Command::Delete { .. })
+        Command::Zapret2(Zapret2Command::Delete { .. })
             | Command::Hosts(HostsCommand::Apply)
             | Command::Checks {
                 command: Some(ChecksCommand::Fix {
@@ -758,29 +614,6 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
                 })?;
             Request::CheckProxy { addr }
         }
-        Command::GameFilter { mode, tcp, udp } => {
-            let (tcp, udp) = match (tcp, udp) {
-                (Some(tcp), Some(udp)) => (tcp, udp),
-                (tcp, udp) => {
-                    let now: GameFilter = read(call(Request::GetFlowseal)?["game_filter"].clone())?;
-                    (tcp.unwrap_or(now.tcp), udp.unwrap_or(now.udp))
-                }
-            };
-            Request::SetGameFilter {
-                filter: GameFilter {
-                    mode: mode.into(),
-                    tcp,
-                    udp,
-                },
-            }
-        }
-        Command::Custom(CustomCommand::Validate { file }) => Request::ValidateCustom {
-            strategy: read_strategy(&file)?,
-        },
-        Command::Custom(CustomCommand::Save { file, create }) => Request::SaveCustom {
-            strategy: read_strategy(&file)?,
-            create,
-        },
         Command::Zapret2(Zapret2Command::Validate { file }) => Request::ValidateZapret2 {
             text: read_text(&file)?,
         },
@@ -885,36 +718,11 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
         Command::ApplyBest => Request::ApplyBest,
         Command::Restart => Request::RestartZapret,
         Command::QuickCheck => Request::QuickCheck,
-        Command::Custom(CustomCommand::Clone { source, name }) => {
-            Request::CloneStrategy { source, name }
-        }
-        Command::Custom(CustomCommand::Delete { name }) => Request::DeleteCustom { name },
         Command::Zapret2(Zapret2Command::Info) => Request::Zapret2Info,
         Command::Zapret2(Zapret2Command::Delete { name }) => Request::DeleteZapret2 { name },
         Command::Tests(TestsCommand::Status) => Request::TestsStatus,
         Command::Tests(TestsCommand::Cancel) => Request::CancelTests,
         Command::Tests(TestsCommand::List) => Request::ListRuns,
-        Command::Flowseal { command: None } => Request::GetFlowseal,
-        Command::Flowseal {
-            command: Some(FlowsealCommand::CheckUpdate),
-        } => Request::CheckFlowsealUpdate,
-        Command::Ipset(IpsetCommand::Mode { mode }) => Request::SetIpsetMode { mode: mode.into() },
-        Command::Ipset(IpsetCommand::Update) => Request::UpdateIpset,
-        Command::CheckUpdates { state } => Request::SetCheckUpdates {
-            enabled: state == Switch::On,
-        },
-        Command::Fake { kind, name } => Request::ReplaceFake {
-            kind: kind.into(),
-            source: name,
-        },
-        Command::Lists(ListsCommand::Add { list, entry }) => Request::AddListEntry {
-            list: list.into(),
-            entry,
-        },
-        Command::Lists(ListsCommand::Remove { list, entry }) => Request::RemoveListEntry {
-            list: list.into(),
-            entry,
-        },
         Command::Hosts(HostsCommand::Plan) => Request::HostsPlan,
         Command::Hosts(HostsCommand::Apply) => Request::ApplyHosts,
         Command::Checks { command: None } => Request::SystemChecks,
@@ -960,10 +768,8 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
         Command::Diag(DiagCommand::Stop) => Request::StopDiag,
         Command::Diag(DiagCommand::List) => Request::DiagReports,
     };
-    // Only `flowseal check-update` has a `null` that means something (no update).
-    let silent = !matches!(request, Request::CheckFlowsealUpdate);
     call(request).map(|data| {
-        Done::Json(if silent && data.is_null() {
+        Done::Json(if data.is_null() {
             json!({ "ok": true })
         } else {
             data
@@ -989,7 +795,7 @@ fn setting(key: Key, value: &str) -> Result<Value, Fail> {
     match key {
         Key::Socks5 if value.trim().is_empty() => Ok(Value::Null),
         Key::Socks5 => Ok(value.into()),
-        Key::Autostart | Key::StartMinimized | Key::CliEnabled => value
+        Key::Autostart | Key::StartMinimized | Key::CliEnabled | Key::GameFilter => value
             .parse::<bool>()
             .map(Value::Bool)
             .map_err(|_| bad("true or false")),
@@ -1043,21 +849,8 @@ fn read_rule(name: &str, file: &Path) -> Result<router::rules::Rule, Fail> {
     parse_rule_file(name, &read_text(file)?).map_err(|err| Fail::new(USAGE, err.to_string()))
 }
 
-/// A `CustomStrategy` JSON from a file, or from stdin for `-` (spec 7.3).
-fn read_strategy(file: &Path) -> Result<CustomStrategy, Fail> {
-    serde_json::from_str(&read_text(file)?).map_err(|err| {
-        Fail::new(
-            USAGE,
-            format!(
-                "{} is not a CustomStrategy (name, cloned_from, wf, blocks): {err}",
-                file.display()
-            ),
-        )
-    })
-}
-
-/// `tests run` without names: every strategy that parses, in service.bat's order (spec 7.1), but not
-/// the built-in copies of Flowseal's: those run when named.
+/// `tests run` without names: every strategy that passes its check, in the list's order (spec 7.1),
+/// but not the built-in copies of Flowseal's: those run when named.
 fn runnable(rows: Value) -> Result<Vec<String>, Fail> {
     let rows: Vec<StrategyRow> = read(rows)?;
     Ok(rows
@@ -1624,19 +1417,6 @@ mod tests {
             (&["apply-best"], Request::ApplyBest),
             (&["restart"], Request::RestartZapret),
             (&["quick-check"], Request::QuickCheck),
-            (
-                &["custom", "clone", "general (ALT11)", "mine"],
-                Request::CloneStrategy {
-                    source: general(),
-                    name: "mine".into(),
-                },
-            ),
-            (
-                &["custom", "delete", "mine", "--yes"],
-                Request::DeleteCustom {
-                    name: "mine".into(),
-                },
-            ),
             (&["zapret2", "info"], Request::Zapret2Info),
             (
                 &["zapret2", "delete", "mine", "--yes"],
@@ -1657,57 +1437,6 @@ mod tests {
                 &["tests", "report", "2026-10-10_05-03-34"],
                 Request::RunReport {
                     id: "2026-10-10_05-03-34".into(),
-                },
-            ),
-            (&["flowseal"], Request::GetFlowseal),
-            (&["flowseal", "check-update"], Request::CheckFlowsealUpdate),
-            (
-                &[
-                    "game-filter",
-                    "tcp",
-                    "--tcp",
-                    "80,443",
-                    "--udp",
-                    "1024-65535",
-                ],
-                Request::SetGameFilter {
-                    filter: GameFilter {
-                        mode: GameFilterMode::Tcp,
-                        tcp: "80,443".into(),
-                        udp: "1024-65535".into(),
-                    },
-                },
-            ),
-            (
-                &["ipset", "mode", "none"],
-                Request::SetIpsetMode {
-                    mode: IpsetMode::None,
-                },
-            ),
-            (&["ipset", "update"], Request::UpdateIpset),
-            (
-                &["check-updates", "off"],
-                Request::SetCheckUpdates { enabled: false },
-            ),
-            (
-                &["fake", "game", "quic_initial_www_google_com"],
-                Request::ReplaceFake {
-                    kind: FakeKind::Game,
-                    source: "quic_initial_www_google_com".into(),
-                },
-            ),
-            (
-                &["lists", "add", "ipset-exclude", "10.0.0.0/8"],
-                Request::AddListEntry {
-                    list: UserList::IpsetExclude,
-                    entry: "10.0.0.0/8".into(),
-                },
-            ),
-            (
-                &["lists", "remove", "general", "example.com"],
-                Request::RemoveListEntry {
-                    list: UserList::General,
-                    entry: "example.com".into(),
                 },
             ),
             (&["hosts", "plan"], Request::HostsPlan),
@@ -1746,8 +1475,7 @@ mod tests {
     #[test]
     fn what_the_window_confirms_needs_yes() {
         for args in [
-            &["custom", "delete", "mine"][..],
-            &["zapret2", "delete", "mine"],
+            &["zapret2", "delete", "mine"][..],
             &["hosts", "apply"],
             &["checks", "fix", "remove-windivert"],
             &["checks", "fix", "remove-conflicts"],
@@ -1874,7 +1602,7 @@ mod tests {
     fn bad_arguments_are_refused_by_clap() {
         for args in [
             &["settings", "set", "colour", "red"][..],
-            // Only the window moves the folders whose winws.exe and winws2.exe SYSTEM runs.
+            // Only the window moves the folder whose winws2.exe SYSTEM runs; zapret_dir is gone.
             &["settings", "set", "zapret_dir", r"C:\Users\me\winws"],
             &["settings", "set", "zapret2_dir", r"D:\zapret2"],
             &["lists", "add", "everything", "x"],
@@ -1901,7 +1629,6 @@ mod tests {
 
     fn settings() -> Value {
         json!({
-            "zapret_dir": "E:\\Zapret",
             "zapret2_dir": "D:\\zapret2",
             "socks5": "127.0.0.1:2080",
             "autostart": false,
@@ -1926,6 +1653,7 @@ mod tests {
             ("diag_budget_min", "60", json!(60)),
             ("nekobox_dir", r"E:\nekoray", json!("E:\\nekoray")),
             ("nekobox_dir", " ", Value::Null),
+            ("game_filter", "false", json!(false)),
         ] {
             let (outcome, asked) = drive(&["settings", "set", key, value], vec![Ok(settings())]);
             assert_eq!(outcome, Ok(Done::Json(json!({ "ok": true }))), "{key}");
@@ -1977,55 +1705,6 @@ mod tests {
     }
 
     #[test]
-    fn game_filter_keeps_the_ports_not_given() {
-        let flowseal = json!({
-            "game_filter": { "mode": "all", "tcp": "1024-65535", "udp": "50000-50100" },
-            "ipset": "loaded",
-        });
-        let (_, asked) = drive(&["game-filter", "tcp", "--tcp", "80"], vec![Ok(flowseal)]);
-        assert_eq!(
-            asked,
-            [
-                Request::GetFlowseal,
-                Request::SetGameFilter {
-                    filter: GameFilter {
-                        mode: GameFilterMode::Tcp,
-                        tcp: "80".into(),
-                        udp: "50000-50100".into(),
-                    }
-                }
-            ]
-        );
-    }
-
-    #[test]
-    fn custom_save_reads_the_strategy_from_a_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("mine.json");
-        let strategy = CustomStrategy {
-            name: "mine".into(),
-            cloned_from: "general (ALT11)".into(),
-            wf: "--wf-tcp=80,443".into(),
-            blocks: vec!["--filter-tcp=443 --dpi-desync=fake".into()],
-        };
-        let json = serde_json::to_string(&strategy).unwrap();
-        std::fs::write(&file, format!("\u{feff}{json}")).unwrap();
-        let path = file.to_str().unwrap();
-        let (_, asked) = drive(&["custom", "save", path, "--create"], Vec::new());
-        assert_eq!(
-            asked,
-            [Request::SaveCustom {
-                strategy,
-                create: true
-            }]
-        );
-        std::fs::write(&file, "{\"name\": 1}").unwrap();
-        let (outcome, asked) = drive(&["custom", "validate", path], Vec::new());
-        assert_eq!(code(outcome), USAGE);
-        assert!(asked.is_empty());
-    }
-
-    #[test]
     fn zapret2_save_and_validate_send_the_text_of_a_file() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("mine.txt");
@@ -2062,15 +1741,15 @@ mod tests {
 
     fn rows() -> Value {
         json!([
-            { "name": "general", "custom": false, "active": true, "error": null, "last": null, "flowseal_copy": false },
-            { "name": "general (broken)", "custom": false, "active": false, "error": "no winws line", "last": null, "flowseal_copy": false },
-            { "name": "general (ALT11)", "custom": false, "active": false, "error": null, "last": null, "flowseal_copy": false },
+            { "name": "zapret2:general", "custom": false, "active": true, "error": null, "last": null, "flowseal_copy": false },
+            { "name": "zapret2:broken", "custom": true, "active": false, "error": "--lua-desync calls nosuch", "last": null, "flowseal_copy": false },
+            { "name": "zapret2:mine", "custom": true, "active": false, "error": null, "last": null, "flowseal_copy": false },
             { "name": "zapret2:general (ALT11)", "custom": false, "active": false, "error": null, "last": null, "flowseal_copy": true },
         ])
     }
 
     #[test]
-    fn tests_run_without_names_takes_every_strategy_that_parses_except_flowseal_copies() {
+    fn tests_run_without_names_takes_every_strategy_that_passes_except_flowseal_copies() {
         let (outcome, asked) = drive(&["tests", "run"], vec![Ok(rows())]);
         assert_eq!(
             outcome,
@@ -2085,7 +1764,7 @@ mod tests {
                 Request::StartTests {
                     request: TestRequest {
                         suite: Suite::Standard,
-                        strategies: vec!["general".into(), "general (ALT11)".into()],
+                        strategies: vec!["zapret2:general".into(), "zapret2:mine".into()],
                         repeats: 1,
                     }
                 }
@@ -2113,7 +1792,6 @@ mod tests {
         TestRun {
             id: "2026-10-11_10-00-00".into(),
             suite: Suite::Dpi,
-            flowseal_version: Some("1.10.3".into()),
             zapret2_version: None,
             canceled: false,
             restore_error: None,
@@ -2564,13 +2242,11 @@ mod tests {
     }
 
     #[test]
-    fn silent_commands_print_ok_but_an_empty_update_check_stays_null() {
-        for args in [&["tests", "cancel"][..], &["ipset", "update"], &["restart"]] {
+    fn silent_commands_print_ok() {
+        for args in [&["tests", "cancel"][..], &["restart"]] {
             let (outcome, _) = drive(args, Vec::new());
             assert_eq!(outcome, Ok(Done::Json(json!({ "ok": true }))), "{args:?}");
         }
-        let (outcome, _) = drive(&["flowseal", "check-update"], Vec::new());
-        assert_eq!(outcome, Ok(Done::Json(Value::Null)));
     }
 
     #[test]

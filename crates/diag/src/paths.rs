@@ -255,7 +255,7 @@ pub fn plan(group: &Group, ctx: &Ctx) -> (Vec<PathKind>, Vec<String>) {
 /// file by other names do the same thing.
 pub fn action_key(text: &str) -> String {
     let (global, profiles) = zapret2::strategies::split(text);
-    let blobs: Vec<(String, String)> = zapret::custom::quoted_tokens(&global)
+    let blobs: Vec<(String, String)> = zapret::quoted_tokens(&global)
         .iter()
         .filter_map(|t| t.strip_prefix("--blob=")?.split_once(':'))
         .map(|(name, file)| {
@@ -271,7 +271,7 @@ pub fn action_key(text: &str) -> String {
     };
     profiles
         .iter()
-        .flat_map(|p| zapret::custom::quoted_tokens(p))
+        .flat_map(|p| zapret::quoted_tokens(p))
         .filter(|t| !t.starts_with("--hostlist") && !t.starts_with("--ipset"))
         .map(|t| {
             t.split(':')

@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Zapret Hub: a tray app that manages Flowseal zapret and tests its strategies."
+description = "Zapret Hub: a tray app that manages zapret2 and tests its strategies."
 # Two binaries: plain `cargo run`, which `tauri dev` calls, must pick the app.
 default-run = "zapret-hub"
 

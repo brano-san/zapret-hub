@@ -12,11 +12,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tester::run::Request as TestRequest;
 use zapret::checks::CheckAction;
-use zapret::custom::CustomStrategy;
-use zapret::fakes::FakeKind;
-use zapret::game_filter::GameFilter;
-use zapret::ipset::IpsetMode;
-use zapret::user_lists::UserList;
 
 /// Grows only with an incompatible change; a new command is not one.
 pub const PROTOCOL: u32 = 5;
@@ -55,20 +50,6 @@ pub enum Request {
     },
     ApplyBest,
     RestartZapret,
-    CloneStrategy {
-        source: String,
-        name: String,
-    },
-    ValidateCustom {
-        strategy: CustomStrategy,
-    },
-    SaveCustom {
-        strategy: CustomStrategy,
-        create: bool,
-    },
-    DeleteCustom {
-        name: String,
-    },
     Zapret2Info,
     ValidateZapret2 {
         text: String,
@@ -94,33 +75,10 @@ pub enum Request {
     RunReport {
         id: String,
     },
-    GetFlowseal,
-    SetGameFilter {
-        filter: GameFilter,
-    },
-    SetIpsetMode {
-        mode: IpsetMode,
-    },
-    SetCheckUpdates {
-        enabled: bool,
-    },
-    ReplaceFake {
-        kind: FakeKind,
-        source: String,
-    },
-    AddListEntry {
-        list: UserList,
-        entry: String,
-    },
-    RemoveListEntry {
-        list: UserList,
-        entry: String,
-    },
-    UpdateIpset,
     HostsPlan,
     ApplyHosts,
-    CheckFlowsealUpdate,
     SystemChecks,
+
     FixCheck {
         action: CheckAction,
     },
@@ -312,18 +270,8 @@ mod tests {
     use diag::run::Mode;
     use serde_json::json;
     use tester::model::Suite;
-    use zapret::game_filter::GameFilterMode;
 
     use super::*;
-
-    fn strategy() -> CustomStrategy {
-        CustomStrategy {
-            name: "mine".into(),
-            cloned_from: "general (ALT11)".into(),
-            wf: "--wf-tcp=80,443".into(),
-            blocks: vec!["--filter-tcp=443 --dpi-desync=fake".into()],
-        }
-    }
 
     /// One of each request.
     fn samples() -> Vec<Request> {
@@ -331,7 +279,7 @@ mod tests {
             Request::AppVersion,
             Request::GetSettings,
             Request::SaveSettings {
-                settings: json!({ "zapret_dir": null, "cli_enabled": true }),
+                settings: json!({ "zapret2_dir": null, "cli_enabled": true }),
             },
             Request::GetOverview,
             Request::CheckProxy {
@@ -340,27 +288,13 @@ mod tests {
             Request::WizardCandidates,
             Request::ListStrategies,
             Request::GetStrategy {
-                name: "general (ALT11)".into(),
+                name: "zapret2:general (ALT11)".into(),
             },
             Request::ApplyStrategy {
-                name: "general (ALT11)".into(),
+                name: "zapret2:general (ALT11)".into(),
             },
             Request::ApplyBest,
             Request::RestartZapret,
-            Request::CloneStrategy {
-                source: "general (ALT11)".into(),
-                name: "mine".into(),
-            },
-            Request::ValidateCustom {
-                strategy: strategy(),
-            },
-            Request::SaveCustom {
-                strategy: strategy(),
-                create: true,
-            },
-            Request::DeleteCustom {
-                name: "mine".into(),
-            },
             Request::Zapret2Info,
             Request::ValidateZapret2 {
                 text: "--wf-tcp-out=443".into(),
@@ -376,7 +310,7 @@ mod tests {
             Request::StartTests {
                 request: TestRequest {
                     suite: Suite::Standard,
-                    strategies: vec!["general".into()],
+                    strategies: vec!["zapret2:general".into()],
                     repeats: 1,
                 },
             },
@@ -389,34 +323,8 @@ mod tests {
             Request::RunReport {
                 id: "2026-10-10_05-03-34".into(),
             },
-            Request::GetFlowseal,
-            Request::SetGameFilter {
-                filter: GameFilter {
-                    mode: GameFilterMode::All,
-                    tcp: "1024-65535".into(),
-                    udp: "1024-65535".into(),
-                },
-            },
-            Request::SetIpsetMode {
-                mode: IpsetMode::Any,
-            },
-            Request::SetCheckUpdates { enabled: false },
-            Request::ReplaceFake {
-                kind: FakeKind::Discord,
-                source: "quic_initial_www_google_com".into(),
-            },
-            Request::AddListEntry {
-                list: UserList::General,
-                entry: "example.com".into(),
-            },
-            Request::RemoveListEntry {
-                list: UserList::IpsetExclude,
-                entry: "203.0.113.0/24".into(),
-            },
-            Request::UpdateIpset,
             Request::HostsPlan,
             Request::ApplyHosts,
-            Request::CheckFlowsealUpdate,
             Request::SystemChecks,
             Request::FixCheck {
                 action: CheckAction::RemoveWinDivert,
@@ -575,9 +483,9 @@ mod tests {
     fn a_request_line_carries_the_version_first() {
         assert_eq!(
             encode(&Request::ApplyStrategy {
-                name: "general (ALT11)".into()
+                name: "zapret2:general (ALT11)".into()
             }),
-            r#"{"v":5,"cmd":"apply_strategy","args":{"name":"general (ALT11)"}}"#
+            r#"{"v":5,"cmd":"apply_strategy","args":{"name":"zapret2:general (ALT11)"}}"#
         );
         assert_eq!(encode(&Request::ApplyBest), r#"{"v":5,"cmd":"apply_best"}"#);
     }

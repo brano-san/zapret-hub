@@ -1,6 +1,7 @@
 //! Work that outlives a command: a test run, and what happens once at start.
 
-use std::time::{Duration, Instant};
+use std::path::PathBuf;
+use std::time::Duration;
 
 use router::RouterState;
 use tauri::AppHandle;
@@ -21,18 +22,8 @@ pub fn start_tests(app: &AppHandle, request: Request) -> anyhow::Result<()> {
         "choose at least one strategy"
     );
     let state = state(app);
-    // A run of zapret2 strategies alone needs no Flowseal folder (`tester::run::needs_flowseal`).
-    let folder = state.folder_if_set()?;
-    // Only a run with zapret2 strategies needs zapret2: then a folder that opens, or the reason.
-    let engine2 = if request
-        .strategies
-        .iter()
-        .any(|name| zapret2::strip_prefix(name).is_some())
-    {
-        Some(state.engine2_required()?)
-    } else {
-        None
-    };
+    tester::run::zapret2_only(&request)?;
+    let engine2 = Some(state.engine2_required()?);
     state.begin_testing()?;
     state.set_live(Some(LiveRun {
         request: request.clone(),
@@ -52,7 +43,6 @@ pub fn start_tests(app: &AppHandle, request: Request) -> anyhow::Result<()> {
             // `run` puts zapret back before it passes a panic on: here the run only has to end.
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 tester::run::run(
-                    folder.as_ref(),
                     engine2.as_ref(),
                     &state.paths.data(),
                     &request,
@@ -141,25 +131,15 @@ fn finish(app: &AppHandle, outcome: anyhow::Result<TestRun>) {
 }
 
 const QUICK_EVERY: Duration = Duration::from_secs(30 * 60);
-const VERSION_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Called once from `setup`: the start, then a quick check every 30 minutes and the Flowseal
-/// version once a day (spec 5.6, 9.3).
-pub fn start(app: &AppHandle) {
+/// Called once from `setup`: the start (with the move off Flowseal when 0.8.0 left its folder in
+/// the settings), then a quick check every 30 minutes (spec 9.3).
+pub fn start(app: &AppHandle, flowseal: Option<PathBuf>) {
     let app = app.clone();
     std::thread::spawn(move || {
-        startup(&app);
-        let mut version_checked: Option<Instant> = None;
+        startup(&app, flowseal);
         loop {
-            // First: a download that hangs (up to 30 s per attempt) must not hold back the tray's
-            // first color.
             background_check(&app);
-            // The day counts from a check that ran: a skipped or failed one is tried again on the
-            // next tick.
-            if version_checked.is_none_or(|at| at.elapsed() >= VERSION_EVERY) && check_version(&app)
-            {
-                version_checked = Some(Instant::now());
-            }
             std::thread::sleep(QUICK_EVERY);
         }
     });
@@ -183,32 +163,8 @@ fn background_check(app: &AppHandle) {
     }
 }
 
-/// When Flowseal's own flag asks for it; one notification per new version. True when the check
-/// ran: no folder, the flag off (both silent) and a failed download all return false.
-fn check_version(app: &AppHandle) -> bool {
-    let state = state(app);
-    let Ok(folder) = state.folder() else {
-        return false;
-    };
-    if !zapret::flags::check_updates(&folder) {
-        return false;
-    }
-    let known = state.update();
-    match actions::check_flowseal_update(app) {
-        Ok(Some(version)) if known.as_deref() != Some(version.as_str()) => {
-            notify::show(app, texts::UPDATE, &texts::update(&version));
-            true
-        }
-        Ok(_) => true,
-        Err(err) => {
-            log::warn!("cannot check the Flowseal version: {err:#}");
-            false
-        }
-    }
-}
-
 /// Before anything else changes zapret, an interrupted operation is put back (spec 10).
-fn startup(app: &AppHandle) {
+fn startup(app: &AppHandle, flowseal: Option<PathBuf>) {
     recover(app);
     let state = state(app);
     // Routing comes back as it was left (router spec 3).
@@ -216,7 +172,9 @@ fn startup(app: &AppHandle) {
     if let RouterState::Unavailable { reason } = state.router.status().state {
         actions::notice(app, NoticeLevel::Error, texts::ROUTER_FAILED, reason);
     }
-    actions::prepare_folder(app);
+    if let Some(dir) = flowseal {
+        actions::migrate_flowseal(app, &dir);
+    }
     if state.settings().autostart {
         let refreshed = std::env::current_exe()
             .map_err(anyhow::Error::from)
@@ -271,10 +229,7 @@ fn recover(app: &AppHandle) {
         "unfinished operation {} found, restoring",
         snapshot.operation
     );
-    let restored = state
-        .folder_if_set()
-        .and_then(|folder| snapshot.restore(folder.as_ref()));
-    match restored.and_then(|()| Snapshot::clear(&pending)) {
+    match snapshot.restore().and_then(|()| Snapshot::clear(&pending)) {
         Ok(()) => actions::notice(
             app,
             NoticeLevel::Info,

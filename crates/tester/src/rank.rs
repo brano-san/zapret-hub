@@ -123,7 +123,7 @@ pub fn sort(suite: Suite, results: &mut [StrategyResult]) {
             r.launch_error.is_some(),
             first,
             second,
-            zapret::strategies::natural_key(&format!("{}.bat", r.name)),
+            zapret::natural_key(&format!("{}.bat", r.name)),
         )
     });
 }

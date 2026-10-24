@@ -17,7 +17,6 @@ fn run(id: &str, suite: Suite, canceled: bool, strategies: Vec<StrategyResult>) 
     TestRun {
         id: id.into(),
         suite,
-        flowseal_version: None,
         zapret2_version: None,
         canceled,
         restore_error: None,

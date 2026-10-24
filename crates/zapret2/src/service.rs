@@ -7,11 +7,10 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use zapret::folder::Folder;
-use zapret::service::{self, QuickCheck, SERVICE, SERVICE2, SvcState};
+use zapret::service::{self, QuickCheck, SERVICE2};
 
+use crate::Engine;
 use crate::strategies::{self, Strategy};
-use crate::{Engine, PREFIX};
 
 /// `--dry-run` goes last: before an option it does not know, it ends with code 1 and says
 /// nothing. `--wf-dup-check=0` lets it pass next to a running winws2 with the same filter.
@@ -63,11 +62,10 @@ fn run(engine: &Engine, args: &str) -> anyhow::Result<exec::Output> {
         .with_context(|| format!("starting {} {args}", engine.exe().display()))
 }
 
-/// Steps 2–5 of spec 6: Flowseal's service and winws gone, the previous `zapret2` gone, TCP
-/// timestamps on (as Flowseal does), `zapret2` created and started, its strategy recorded.
+/// Steps 2–5 of spec 6: the previous `zapret2` gone, TCP timestamps on (as Flowseal does),
+/// `zapret2` created and started, its strategy recorded. Flowseal's `zapret` is left to the system
+/// checks, which name it a conflict and remove it at the user's word.
 pub fn install(engine: &Engine, strategy: &Strategy, tail: &str) -> anyhow::Result<()> {
-    service::stop_and_delete(SERVICE)?;
-    zapret::procs::kill_all("winws.exe")?;
     service::stop_and_delete(SERVICE2)?;
     zapret::procs::kill_all(service::WINWS2)?;
     let _ = service::enable_tcp_timestamps();
@@ -77,14 +75,9 @@ pub fn install(engine: &Engine, strategy: &Strategy, tail: &str) -> anyhow::Resu
 }
 
 /// The check of «Применить» (spec 6), run before any snapshot so that a failure changes nothing.
-pub fn prepare(
-    engine: &Engine,
-    folder: Option<&Folder>,
-    home: &Path,
-    name: &str,
-) -> anyhow::Result<(Strategy, String)> {
+pub fn prepare(engine: &Engine, home: &Path, name: &str) -> anyhow::Result<(Strategy, String)> {
     let strategy = strategies::find(home, name)?;
-    let tail = strategies::tail(engine, folder, &strategy.text)?;
+    let tail = strategies::tail(engine, &strategy.text)?;
     validate(engine, &tail)?;
     Ok((strategy, tail))
 }
@@ -92,66 +85,31 @@ pub fn prepare(
 /// «Применить» after `prepare`: the service, and after 2 s the quick check (spec 6).
 pub fn install_checked(
     engine: &Engine,
-    folder: Option<&Folder>,
     strategy: &Strategy,
     tail: &str,
 ) -> anyhow::Result<QuickCheck> {
     install(engine, strategy, tail)?;
     std::thread::sleep(Duration::from_secs(2));
-    Ok(service::quick_check(folder))
+    Ok(service::quick_check())
 }
 
 /// «Применить» for `zapret2:<name>`: the check while nothing has changed yet, then the service.
-pub fn apply(
-    engine: &Engine,
-    folder: Option<&Folder>,
-    home: &Path,
-    name: &str,
-) -> anyhow::Result<QuickCheck> {
-    let (strategy, tail) = prepare(engine, folder, home, name)?;
-    install_checked(engine, folder, &strategy, &tail)
-}
-
-/// After a game filter change: the active zapret2 strategy installed again, its ports are in the
-/// service's arguments (spec 6). Nothing to do while `zapret2` is not installed.
-pub fn reinstall_active(
-    engine: Option<&Engine>,
-    folder: &Folder,
-    home: &Path,
-) -> anyhow::Result<()> {
-    if service::state(SERVICE2) == SvcState::NotInstalled {
-        return Ok(());
-    }
-    let engine = engine.ok_or_else(|| {
-        anyhow::anyhow!(
-            "the zapret2 service is installed, but the zapret2 folder is not usable, so the service cannot be installed again with the new game filter: check the folder in Settings"
-        )
-    })?;
-    let name = service::strategy_of(SERVICE2)
-        .and_then(|name| name.strip_prefix(PREFIX).map(str::to_owned))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "the zapret2 service has no zapret2 strategy name in the registry, so it cannot be installed again with the new game filter: apply a strategy first"
-            )
-        })?;
-    let strategy = strategies::find(home, &name)?;
-    let tail = strategies::tail(engine, Some(folder), &strategy.text)?;
-    validate(engine, &tail)?;
-    install(engine, &strategy, &tail)
+pub fn apply(engine: &Engine, home: &Path, name: &str) -> anyhow::Result<QuickCheck> {
+    let (strategy, tail) = prepare(engine, home, name)?;
+    install_checked(engine, &strategy, &tail)
 }
 
 /// `save_zapret2` before the file (spec 5.2): the name, `create` against what exists, the whole
 /// check. Returns the claimed name and the command line.
 pub fn check_save(
     engine: &Engine,
-    folder: Option<&Folder>,
     home: &Path,
     name: &str,
     text: &str,
     create: bool,
 ) -> anyhow::Result<(String, String)> {
     let name = strategies::claim(home, name, create)?;
-    let tail = strategies::tail(engine, folder, text)?;
+    let tail = strategies::tail(engine, text)?;
     validate(engine, &tail)?;
     Ok((name, tail))
 }
@@ -160,13 +118,12 @@ pub fn check_save(
 /// and its command line, for a service that runs it.
 pub fn save(
     engine: &Engine,
-    folder: Option<&Folder>,
     home: &Path,
     name: &str,
     text: &str,
     create: bool,
 ) -> anyhow::Result<(Strategy, String)> {
-    let (name, tail) = check_save(engine, folder, home, name, text, create)?;
+    let (name, tail) = check_save(engine, home, name, text, create)?;
     strategies::write(home, &name, text)?;
     let saved = Strategy {
         name,

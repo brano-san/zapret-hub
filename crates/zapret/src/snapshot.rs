@@ -3,11 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::folder::Folder;
-use crate::game_filter::{self, GameFilter};
-use crate::ipset::{self, IpsetMode};
 use crate::procs::{self, Proc};
-use crate::service::{self, SERVICE, SERVICE2, SvcState, WINWS2};
+use crate::service::{self, SERVICE2, SvcState, WINWS2};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ServiceSnap {
@@ -25,15 +22,11 @@ pub struct RouterSnap {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Snapshot {
-    /// The operation it guards: `apply`, `tests`, `ipset`, `game_filter`, `remove_service`.
+    /// The operation it guards: `apply`, `tests`, `remove_service`. A `pending.json` of 0.8.0
+    /// also holds Flowseal's service, winws and files: those fields are not read any more.
     pub operation: String,
-    pub service: Option<ServiceSnap>,
-    /// `zapret-discord-youtube` in the registry.
-    pub strategy: Option<String>,
-    /// winws started by a `.bat`, not by the service.
-    pub manual_winws: Vec<Proc>,
-    /// The same three for zapret2: the `zapret2` service, its `zapret2:<name>` and winws2 started
-    /// by hand (zapret2 spec 6). A `pending.json` from before zapret2 has none of them.
+    /// The `zapret2` service, its `zapret2:<name>` and winws2 started by hand (zapret2 spec 6). A
+    /// `pending.json` from before zapret2 has none of them.
     #[serde(default)]
     pub service2: Option<ServiceSnap>,
     #[serde(default)]
@@ -44,13 +37,6 @@ pub struct Snapshot {
     /// zapret2, whose restore leaves zapret2 alone.
     #[serde(default)]
     pub zapret2: bool,
-    /// The Flowseal files below: `None` (and `false`) when no Flowseal folder was set, as when
-    /// zapret2 runs alone.
-    pub ipset: Option<IpsetMode>,
-    pub ipset_backup: bool,
-    /// The flag file `utils\game_filter.enabled`, which the `game_filter` operation writes
-    /// before it reinstalls the service.
-    pub game_filter: Option<GameFilter>,
     /// Filled by the app; a `pending.json` from before it has none.
     #[serde(default)]
     pub router: Option<RouterSnap>,
@@ -64,7 +50,7 @@ pub fn pending_path(data_dir: &Path) -> PathBuf {
 /// Starts a mutating operation (spec 10). A `pending` file an earlier operation left is restored
 /// first; when that fails, or the file cannot be read, nothing starts and the file stays. After a
 /// successful restore the file is removed; then the state is taken and written to `pending`.
-pub fn begin(folder: Option<&Folder>, operation: &str, pending: &Path) -> anyhow::Result<Snapshot> {
+pub fn begin(operation: &str, pending: &Path) -> anyhow::Result<Snapshot> {
     let file = pending.display();
     let earlier = Snapshot::load(pending).map_err(|err| {
         anyhow::anyhow!(
@@ -73,7 +59,7 @@ pub fn begin(folder: Option<&Folder>, operation: &str, pending: &Path) -> anyhow
     })?;
     if let Some(earlier) = earlier {
         let was = &earlier.operation;
-        earlier.restore(folder).map_err(|err| {
+        earlier.restore().map_err(|err| {
             anyhow::anyhow!(
                 "{file} holds the unfinished operation \"{was}\" and its state could not be restored, so \"{operation}\" did not start. Deleting {file} lets operations go on without restoring that state.\n\n{err:#}"
             )
@@ -87,7 +73,7 @@ pub fn begin(folder: Option<&Folder>, operation: &str, pending: &Path) -> anyhow
             "{file}: the state before the unfinished \"{was}\" is back, the file is removed"
         );
     }
-    let snapshot = Snapshot::take(folder, operation)?;
+    let snapshot = Snapshot::take(operation)?;
     snapshot.save(pending)?;
     Ok(snapshot)
 }
@@ -95,22 +81,14 @@ pub fn begin(folder: Option<&Folder>, operation: &str, pending: &Path) -> anyhow
 impl Snapshot {
     /// Fails closed: what it cannot read would be restored as something else, so an operation
     /// does not start on it.
-    /// Without a Flowseal `folder` only the services and processes are recorded.
-    pub fn take(folder: Option<&Folder>, operation: &str) -> anyhow::Result<Self> {
-        let (service, strategy, manual_winws) = engine(SERVICE, "winws.exe", operation)?;
+    pub fn take(operation: &str) -> anyhow::Result<Self> {
         let (service2, strategy2, manual_winws2) = engine(SERVICE2, WINWS2, operation)?;
         Ok(Self {
             operation: operation.to_owned(),
-            service,
-            strategy,
-            manual_winws,
             service2,
             strategy2,
             manual_winws2,
             zapret2: true,
-            ipset: folder.map(ipset::try_mode).transpose()?,
-            ipset_backup: folder.is_some_and(ipset::has_backup),
-            game_filter: folder.map(game_filter::try_read).transpose()?,
             router: None,
         })
     }
@@ -153,59 +131,25 @@ impl Snapshot {
         }
     }
 
-    /// The files: the DPI test switch undone, the ipset mode and the game filter as they were. The
-    /// game filter is written only when it reads differently, so a file edited by hand stays.
-    /// Nothing to do when the snapshot recorded no Flowseal files; an error when it did and there
-    /// is no folder to put them back in.
-    pub fn restore_files(&self, folder: Option<&Folder>) -> anyhow::Result<()> {
-        let (Some(mode), Some(filter)) = (self.ipset, &self.game_filter) else {
-            return Ok(());
-        };
-        let folder = folder.ok_or_else(|| {
-            anyhow::anyhow!(
-                "the ipset mode and the game filter cannot be put back: {}",
-                crate::folder::NOT_SET
-            )
-        })?;
-        ipset::leave_test_any(folder)?;
-        ipset::set_mode(folder, mode)?;
-        if game_filter::read(folder) != *filter {
-            game_filter::write(folder, filter)?;
-        }
-        Ok(())
-    }
-
     /// Everything. Every step is tried even after one fails; the failures come back together.
-    /// zapret2 is part of it only when the snapshot recorded it.
-    pub fn restore(&self, folder: Option<&Folder>) -> anyhow::Result<()> {
+    /// Nothing to do for a snapshot that did not record zapret2.
+    pub fn restore(&self) -> anyhow::Result<()> {
         let mut errors: Vec<String> = Vec::new();
         let mut note = |step: &str, result: anyhow::Result<()>| {
             if let Err(err) = result {
                 errors.push(format!("{step}: {err:#}"));
             }
         };
-        note("files", self.restore_files(folder));
-        let mut engines = vec![(SERVICE, "winws.exe")];
         if self.zapret2 {
-            engines.push((SERVICE2, WINWS2));
-        }
-        for (name, image) in engines {
-            note(&format!("stop {name}"), service::stop(name));
-            note(&format!("stop {image}"), procs::kill_all(image));
-        }
-        note(
-            "service",
-            restore_service(SERVICE, self.service.as_ref(), self.strategy.as_deref()),
-        );
-        if self.zapret2 {
+            note(&format!("stop {SERVICE2}"), service::stop(SERVICE2));
+            note(&format!("stop {WINWS2}"), procs::kill_all(WINWS2));
             note(
                 "service zapret2",
                 restore_service(SERVICE2, self.service2.as_ref(), self.strategy2.as_deref()),
             );
-        }
-        let manual2 = self.manual_winws2.iter().filter(|_| self.zapret2);
-        for proc in self.manual_winws.iter().chain(manual2) {
-            note("start winws", procs::spawn_detached(proc));
+            for proc in &self.manual_winws2 {
+                note("start winws2", procs::spawn_detached(proc));
+            }
         }
         log::info!(
             "state before {} restored, {} errors",

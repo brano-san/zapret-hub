@@ -11,12 +11,11 @@ use std::process::Command;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
-/// Every zapret2 strategy's name starts with it: `zapret2:general` (zapret2 spec 3.1). A `.bat`
-/// file name has no colon, so the names never meet Flowseal's.
+/// Every zapret2 strategy's name starts with it: `zapret2:general` (zapret2 spec 3.1).
 pub const PREFIX: &str = "zapret2:";
 
 /// `name` without the `zapret2:` prefix, whatever its case (`Zapret2:General` from a CLI call
-/// reaches the same strategy as `zapret2:General`); `None` for a Flowseal name.
+/// reaches the same strategy as `zapret2:General`); `None` for a name without it.
 pub fn strip_prefix(name: &str) -> Option<&str> {
     let head = name.get(..PREFIX.len())?;
     head.eq_ignore_ascii_case(PREFIX)
@@ -35,6 +34,9 @@ const LUA_FILES: [&str; 2] = ["zapret-lib.lua", "zapret-antidpi.lua"];
 pub struct Engine {
     root: PathBuf,
     exe: PathBuf,
+    /// The game filter: the `%GameFilter*%` placeholders open the game ports when it is on
+    /// (`strategies::tail`). On unless the settings say otherwise.
+    game_filter: bool,
 }
 
 /// What `winws2.exe --version` says, checked against the Lua files.
@@ -103,12 +105,28 @@ impl Engine {
                 missing.join(", ")
             ),
         };
-        Ok(Self { root, exe })
+        Ok(Self {
+            root,
+            exe,
+            game_filter: true,
+        })
     }
 
     /// Where `lua\` is; `--chdir` makes it the working directory of every run.
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The engine with the game filter of the settings.
+    pub fn with_game_filter(self, on: bool) -> Self {
+        Self {
+            game_filter: on,
+            ..self
+        }
+    }
+
+    pub fn game_filter(&self) -> bool {
+        self.game_filter
     }
 
     pub fn exe(&self) -> &Path {

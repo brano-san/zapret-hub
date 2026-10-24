@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::time::Duration;
 
-use zapret::folder::Folder;
 use zapret::procs::Winws;
 use zapret::service::WINWS2;
 use zapret2::Engine;
@@ -27,38 +26,21 @@ pub struct Launch {
     pub zapret2: bool,
 }
 
-/// The one place a test run tells the engines apart (zapret2 spec 3.1): by the name's prefix.
-pub fn launch(
-    folder: Option<&Folder>,
-    engine2: Option<&Engine>,
-    name: &str,
-) -> anyhow::Result<Launch> {
+/// A `zapret2:<name>` strategy (zapret2 spec 3.1).
+pub fn launch(engine2: Option<&Engine>, name: &str) -> anyhow::Result<Launch> {
     let Some(name) = zapret2::strip_prefix(name) else {
-        let folder = folder.ok_or_else(|| anyhow::anyhow!(zapret::folder::NOT_SET))?;
-        let file = zapret::strategies::find(folder, name)?;
-        let parsed = zapret::batparse::parse_file(folder, &file.path)?;
-        return Ok(Launch {
-            exe: folder.winws(),
-            cwd: folder.bin(),
-            tail: parsed.command_tail(),
-            sha256: parsed.sha256(),
-            zapret2: false,
-        });
+        anyhow::bail!("no zapret2 strategy named {name}");
     };
     let engine = engine2
         .ok_or_else(|| anyhow::anyhow!("the zapret2 folder is not set: choose it in Settings"))?;
     let strategy = zapret2::strategies::find(engine.root(), name)?;
-    launch_text(engine, folder, &strategy.text)
+    launch_text(engine, &strategy.text)
 }
 
 /// A zapret2 strategy from its text (a candidate, a `hub-circular` result): placeholders filled
 /// (`strategies::tail`), then the checks a saved one passes before it runs (`strategies::check`).
-pub fn launch_text(
-    engine2: &Engine,
-    folder: Option<&Folder>,
-    text: &str,
-) -> anyhow::Result<Launch> {
-    let tail = zapret2::strategies::tail(engine2, folder, text)?;
+pub fn launch_text(engine2: &Engine, text: &str) -> anyhow::Result<Launch> {
+    let tail = zapret2::strategies::tail(engine2, text)?;
     zapret2::strategies::check(engine2, &tail)?;
     Ok(Launch {
         exe: engine2.exe().to_path_buf(),

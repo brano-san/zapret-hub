@@ -3,27 +3,16 @@
 use tester::history::RunSummary;
 use tester::model::StrategyResult;
 use tester::run::{Progress, Request};
-use zapret::fakes::Fakes;
-use zapret::game_filter::GameFilter;
-use zapret::ipset::IpsetMode;
 use zapret::service::{QuickCheck, SvcState};
-use zapret::user_lists::UserList;
 
 /// The «Обзор» tab, read in one go.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct Overview {
-    /// `None` until the wizard sets it.
-    pub folder: Option<String>,
-    /// Why the folder cannot be used.
-    pub folder_error: Option<String>,
-    pub version: Option<String>,
-    /// A newer Flowseal version, once a check found one.
-    pub update: Option<String>,
-    /// The active engine's service: `zapret`, or `zapret2` once installed (zapret2 spec 3.1).
+    /// The engine's service: `zapret2` (zapret2 spec 3.1).
     pub service_name: String,
     pub service: SvcState,
     pub windivert: SvcState,
-    /// That service's process: `winws.exe` or `winws2.exe`.
+    /// That service's process: `winws2.exe`.
     pub winws_running: bool,
     pub strategy: Option<String>,
     /// The zapret2 folder and its version, or why it cannot be used.
@@ -33,43 +22,16 @@ pub struct Overview {
     pub testing: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
-pub struct ListState {
-    pub list: UserList,
-    pub entries: Vec<String>,
-}
-
-/// The settings `service.bat` keeps in the folder: the «Zapret» tab.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
-pub struct FlowsealState {
-    pub game_filter: GameFilter,
-    pub ipset: IpsetMode,
-    pub ipset_backup: bool,
-    pub check_updates: bool,
-    pub fakes: Fakes,
-    pub lists: Vec<ListState>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
-pub struct FolderCheck {
-    pub path: String,
-    /// Empty for a usable Flowseal folder.
-    pub missing: Vec<String>,
-    pub version: Option<String>,
-}
-
-/// What the wizard offers (spec 9.2).
+/// SOCKS5 ports that answer, for the wizard (spec 9.2).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct Candidates {
-    pub folders: Vec<FolderCheck>,
     /// `127.0.0.1:<port>` that answer a SOCKS5 greeting now.
     pub proxies: Vec<String>,
 }
 
-/// What the wizard finds before the user picks anything: one folder per engine.
+/// What the wizard finds before the user picks anything: the zapret2 folder.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct Detected {
-    pub flowseal: Option<FolderCheck>,
     pub zapret2: Option<String>,
 }
 
@@ -102,7 +64,6 @@ pub struct LiveRun {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub enum FolderKind {
-    Zapret,
     /// `<zapret2 folder>/strategies`: the user's zapret2 strategies; needs the zapret2 folder to be set.
     Zapret2,
     Logs,

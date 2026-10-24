@@ -1,6 +1,4 @@
-//! `utils\targets.txt`, read the way `test zapret.ps1` reads it.
-
-use crate::folder::Folder;
+//! The targets of the tests and the quick check: the list Flowseal's `test zapret.ps1` falls back to.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
@@ -9,46 +7,6 @@ pub struct Target {
     pub url: Option<String>,
     /// Host or IP the ping goes to.
     pub ping: String,
-}
-
-/// `targets.txt`, or the script's built-in list when the file is missing or empty.
-pub fn load(folder: &Folder) -> Vec<Target> {
-    let parsed = crate::read_text(&folder.utils().join("targets.txt"))
-        .map(|text| parse(&text))
-        .unwrap_or_default();
-    if parsed.is_empty() {
-        defaults()
-    } else {
-        parsed
-    }
-}
-
-/// Lines `Key = "value"`; a repeated key keeps its first place and takes the last value
-/// (`OrderedDictionary` + `Add-OrSet`).
-pub fn parse(text: &str) -> Vec<Target> {
-    let mut targets: Vec<Target> = Vec::new();
-    for line in text.lines() {
-        let Some((key, value)) = parse_line(line) else {
-            continue;
-        };
-        let target = convert(key, value);
-        match targets.iter_mut().find(|t| t.name == key) {
-            Some(existing) => *existing = target,
-            None => targets.push(target),
-        }
-    }
-    targets
-}
-
-/// `^\s*(\w+)\s*=\s*"(.+)"\s*$`
-fn parse_line(line: &str) -> Option<(&str, &str)> {
-    let (key, rest) = line.split_once('=')?;
-    let key = key.trim();
-    if key.is_empty() || !key.chars().all(|c| c.is_alphanumeric() || c == '_') {
-        return None;
-    }
-    let value = rest.trim().strip_prefix('"')?.strip_suffix('"')?;
-    (!value.is_empty()).then_some((key, value))
 }
 
 /// `Convert-Target`: `PING:1.2.3.4` is ping-only; a URL pings its host.

@@ -50,7 +50,6 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::check_proxy,
             commands::wizard_candidates,
             commands::detect_folders,
-            commands::check_folder,
             commands::pick_folder,
             commands::open_url,
             commands::open_folder,
@@ -59,10 +58,6 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::apply_strategy,
             commands::apply_best,
             commands::restart_zapret,
-            commands::clone_strategy,
-            commands::validate_custom,
-            commands::save_custom,
-            commands::delete_custom,
             commands::zapret2_info,
             commands::check_zapret2_folder,
             commands::validate_zapret2,
@@ -80,17 +75,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::list_runs,
             commands::get_run,
             commands::run_report,
-            commands::get_flowseal,
-            commands::set_game_filter,
-            commands::set_ipset_mode,
-            commands::set_check_updates,
-            commands::replace_fake,
-            commands::add_list_entry,
-            commands::remove_list_entry,
-            commands::update_ipset,
             commands::hosts_plan,
             commands::apply_hosts,
-            commands::check_flowseal_update,
             commands::system_checks,
             commands::fix_check,
             commands::clear_discord_cache,
@@ -177,7 +163,15 @@ pub fn run() -> anyhow::Result<()> {
         env!("CARGO_PKG_VERSION"),
         paths.exe_dir.display()
     );
-    let (settings, damaged) = settings::load_or_default(&paths.settings());
+    // Read before the settings load: saving them drops the old key (0.8.0 used Flowseal).
+    let flowseal = settings::flowseal_dir(&paths.settings());
+    let (mut settings, damaged) = settings::load_or_default(&paths.settings());
+    if let Some(dir) = &flowseal {
+        settings::migrate_flowseal(&mut settings, dir);
+        if let Err(err) = settings::save(&paths.settings(), &settings) {
+            log::error!("failed to save the settings moved off Flowseal: {err:#}");
+        }
+    }
     let state = AppState::new(paths, settings);
     state.migrate_strategies();
     if let Some(text) = damaged {
@@ -216,7 +210,7 @@ pub fn run() -> anyhow::Result<()> {
             if !(autostarted && settings.start_minimized && settings.wizard_done) {
                 window::show(app.handle());
             }
-            jobs::start(app.handle());
+            jobs::start(app.handle(), flowseal);
             cli::start(app.handle());
             Ok(())
         })

@@ -1,7 +1,7 @@
 //! `zapret-hub.toml` next to the exe (spec 4.3).
 
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 
@@ -19,7 +19,6 @@ pub enum Theme {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(default)]
 pub struct Settings {
-    pub zapret_dir: Option<String>,
     /// The zapret2 folder (zapret2 spec 4); `None` while zapret2 is off.
     pub zapret2_dir: Option<String>,
     /// `127.0.0.1:2080`: checked on the overview, used when a download fails directly.
@@ -39,12 +38,14 @@ pub struct Settings {
     pub diag_budget_min: u32,
     /// NekoBox's folder, for its logs (diag spec 5); `None`: the running NekoBox's.
     pub nekobox_dir: Option<String>,
+    /// The game filter: the built-in strategies' `%GameFilter*%` ports open the unprivileged range
+    /// (`zapret2::Engine::with_game_filter`).
+    pub game_filter: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            zapret_dir: None,
             zapret2_dir: None,
             socks5: None,
             autostart: false,
@@ -56,6 +57,7 @@ impl Default for Settings {
             diag_observe_secs: 30,
             diag_budget_min: 10,
             nekobox_dir: None,
+            game_filter: true,
         }
     }
 }
@@ -93,17 +95,13 @@ pub fn load_or_default(path: &Path) -> (Settings, Option<String>) {
 
 /// What a save leaves of `sent` against the settings in force. The window's goes as sent. One from
 /// zapret-hub-cli (`pipe`) never turns the CLI on: a save that passed the gate just before the user
-/// turned the CLI off must not turn it back on (CLI spec 7.2). Nor does it move the zapret or the
-/// zapret2 folder: the SYSTEM service runs winws.exe or winws2.exe from it, so any program of the
-/// user could pick what SYSTEM runs (CLI spec 5, zapret2 spec 10). Neither one changes
+/// turned the CLI off must not turn it back on (CLI spec 7.2). Nor does it move the zapret2 folder:
+/// the SYSTEM service runs winws2.exe from it, so any program of the user could pick what SYSTEM
+/// runs (CLI spec 5, zapret2 spec 10). Neither one changes
 /// `router_enabled`: a Settings tab opened before the switch must not undo it (`routing::set_enabled`).
 pub fn to_save(current: &Settings, mut sent: Settings, pipe: bool) -> anyhow::Result<Settings> {
     sent.router_enabled = current.router_enabled;
     if pipe {
-        anyhow::ensure!(
-            sent.zapret_dir == current.zapret_dir,
-            "the zapret folder can be changed only in the Zapret Hub window (Settings)"
-        );
         anyhow::ensure!(
             sent.zapret2_dir == current.zapret2_dir,
             "the zapret2 folder can be changed only in the Zapret Hub window (Settings)"
@@ -125,15 +123,37 @@ pub fn validate_socks(text: &str) -> anyhow::Result<Option<String>> {
     Ok(Some(addr.to_string()))
 }
 
-/// A setting diagnostics read changed: the folders, the proxy, routing, NekoBox, their own.
+/// A setting diagnostics read changed: the folder, the game filter, the proxy, routing, NekoBox, their own.
 pub fn diag_reads_changed(old: &Settings, new: &Settings) -> bool {
-    old.zapret_dir != new.zapret_dir
-        || old.zapret2_dir != new.zapret2_dir
+    old.zapret2_dir != new.zapret2_dir
         || old.socks5 != new.socks5
         || old.router_enabled != new.router_enabled
         || old.nekobox_dir != new.nekobox_dir
         || old.diag_observe_secs != new.diag_observe_secs
         || old.diag_budget_min != new.diag_budget_min
+        || old.game_filter != new.game_filter
+}
+
+/// `zapret_dir` of a settings file 0.8.0 wrote: the Flowseal folder of a user who ran Flowseal.
+/// `Settings` no longer has the key (serde skips it), so it is read from the file as it is.
+pub fn flowseal_dir(path: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let table: toml::Table = toml::from_str(&text).ok()?;
+    let dir = table.get("zapret_dir")?.as_str()?.trim();
+    (!dir.is_empty()).then(|| PathBuf::from(dir))
+}
+
+/// The settings of a 0.8.0 Flowseal user on zapret2: the game filter as Flowseal had it (its flag
+/// file `utils\game_filter.enabled`), and the wizard again when there is no zapret2 folder yet, so
+/// that the user gets one.
+pub fn migrate_flowseal(settings: &mut Settings, flowseal_dir: &Path) {
+    settings.game_filter = flowseal_dir
+        .join("utils")
+        .join("game_filter.enabled")
+        .is_file();
+    if settings.zapret2_dir.is_none() {
+        settings.wizard_done = false;
+    }
 }
 
 #[cfg(test)]
@@ -217,7 +237,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("zapret-hub.toml");
         let settings = Settings {
-            zapret_dir: Some(r"E:\Zapret".into()),
             zapret2_dir: Some(r"D:\zapret2".into()),
             socks5: Some("127.0.0.1:18082".into()),
             autostart: true,
@@ -229,6 +248,7 @@ mod tests {
             diag_observe_secs: 45,
             diag_budget_min: 7,
             nekobox_dir: Some(r"E:\nekoray".into()),
+            game_filter: false,
         };
         save(&path, &settings).unwrap();
         assert_eq!(load(&path).unwrap(), settings);
@@ -243,7 +263,7 @@ mod tests {
     fn a_damaged_file_is_set_aside() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("zapret-hub.toml");
-        std::fs::write(&path, "zapret_dir = [").unwrap();
+        std::fs::write(&path, "zapret2_dir = [").unwrap();
         let (settings, notice) = load_or_default(&path);
         assert_eq!(settings, Settings::default());
         assert!(notice.unwrap().contains("zapret-hub.toml.broken"));
@@ -272,40 +292,6 @@ mod tests {
         assert!(
             to_save(&off, on, false).unwrap().cli_enabled,
             "the window turns it on"
-        );
-    }
-
-    #[test]
-    fn only_the_window_moves_the_zapret_folder() {
-        let current = Settings {
-            zapret_dir: Some(r"E:\Zapret".into()),
-            cli_enabled: true,
-            ..Settings::default()
-        };
-        let in_dir = |dir: Option<&str>| Settings {
-            zapret_dir: dir.map(str::to_owned),
-            ..current.clone()
-        };
-        for moved in [in_dir(Some(r"C:\Users\me\winws")), in_dir(None)] {
-            let refused = to_save(&current, moved.clone(), true).map_err(|err| err.to_string());
-            assert_eq!(
-                refused,
-                Err(
-                    "the zapret folder can be changed only in the Zapret Hub window (Settings)"
-                        .into()
-                ),
-                "{moved:?} from the pipe"
-            );
-            assert_eq!(
-                to_save(&current, moved.clone(), false).unwrap(),
-                moved,
-                "the window moves it"
-            );
-        }
-        assert_eq!(
-            to_save(&current, current.clone(), true).unwrap(),
-            current,
-            "the same folder goes through"
         );
     }
 
@@ -341,6 +327,65 @@ mod tests {
             current,
             "the same folder goes through"
         );
+    }
+
+    /// `zapret-hub.toml` as 0.8.0 wrote it for a user of Flowseal and zapret2.
+    const SETTINGS_0_8_0: &str = r#"zapret_dir = 'E:\Zapret'
+zapret2_dir = 'D:\zapret2-dl\zapret2-v1.0.5.2'
+socks5 = "127.0.0.1:18082"
+autostart = true
+start_minimized = true
+theme = "system"
+wizard_done = true
+cli_enabled = true
+router_enabled = true
+diag_observe_secs = 30
+diag_budget_min = 10
+"#;
+
+    #[test]
+    fn a_settings_file_of_0_8_0_loads_and_names_its_flowseal_folder_until_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("zapret-hub.toml");
+        std::fs::write(&path, SETTINGS_0_8_0).unwrap();
+        let settings = load(&path).unwrap();
+        assert_eq!(
+            settings.zapret2_dir.as_deref(),
+            Some(r"D:\zapret2-dl\zapret2-v1.0.5.2")
+        );
+        assert_eq!(settings.socks5.as_deref(), Some("127.0.0.1:18082"));
+        assert!(settings.wizard_done && settings.cli_enabled && settings.router_enabled);
+        assert!(settings.game_filter, "a new field takes its default");
+        assert_eq!(flowseal_dir(&path), Some(PathBuf::from(r"E:\Zapret")));
+        save(&path, &settings).unwrap();
+        assert_eq!(flowseal_dir(&path), None, "the migration runs once");
+        assert_eq!(load(&path).unwrap(), settings);
+        assert_eq!(flowseal_dir(&dir.path().join("none.toml")), None);
+    }
+
+    #[test]
+    fn a_flowseal_user_keeps_the_game_filter_and_gets_the_wizard_without_zapret2() {
+        let flowseal = tempfile::tempdir().unwrap();
+        let mut settings = Settings {
+            wizard_done: true,
+            zapret2_dir: Some(r"D:\zapret2".into()),
+            ..Settings::default()
+        };
+        migrate_flowseal(&mut settings, flowseal.path());
+        assert!(!settings.game_filter, "Flowseal had it off");
+        assert!(settings.wizard_done, "zapret2 is there already");
+
+        let utils = flowseal.path().join("utils");
+        std::fs::create_dir_all(&utils).unwrap();
+        std::fs::write(utils.join("game_filter.enabled"), "mode=all\r\n").unwrap();
+        let mut alone = Settings {
+            wizard_done: true,
+            game_filter: false,
+            ..Settings::default()
+        };
+        migrate_flowseal(&mut alone, flowseal.path());
+        assert!(alone.game_filter);
+        assert!(!alone.wizard_done, "the wizard gets zapret2");
     }
 
     #[test]

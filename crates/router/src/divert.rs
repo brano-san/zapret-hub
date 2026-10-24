@@ -236,46 +236,20 @@ pub fn capture_filter(table: &Table, acceptor: Option<u16>, held: &[Ipv4Addr]) -
     ))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Engine {
-    Flowseal,
-    Zapret2,
-}
-
-pub fn pick_dll(
-    running: Option<Engine>,
-    flowseal_root: Option<&Path>,
-    winws2_dir: Option<&Path>,
-    exists: impl Fn(&Path) -> bool,
-) -> Result<PathBuf> {
-    let flowseal = flowseal_root.map(|r| r.join("bin").join("WinDivert.dll"));
-    let zapret2 = winws2_dir.map(|d| d.join("WinDivert.dll"));
-    let running_dll = |dll: Option<PathBuf>| match dll {
-        Some(p) if exists(&p) => Ok(p),
-        Some(p) => bail!(
-            "{} is missing: the running engine's driver needs its own WinDivert.dll",
-            p.display()
-        ),
-        None => bail!("the running engine's folder is unknown: its WinDivert.dll cannot be found"),
+/// The WinDivert DLL of zapret2, next to `winws2.exe` in `winws2_dir`: the driver it loads must
+/// be the one the router talks to.
+pub fn pick_dll(winws2_dir: Option<&Path>, exists: impl Fn(&Path) -> bool) -> Result<PathBuf> {
+    let Some(dir) = winws2_dir else {
+        bail!("the zapret2 folder is not set: WinDivert.dll comes from it, choose it in Settings");
     };
-    match running {
-        Some(Engine::Flowseal) => running_dll(flowseal),
-        Some(Engine::Zapret2) => running_dll(zapret2),
-        None => {
-            let candidates: Vec<PathBuf> = flowseal.into_iter().chain(zapret2).collect();
-            match candidates.iter().find(|p| exists(p)) {
-                Some(p) => Ok(p.clone()),
-                None => bail!(
-                    "WinDivert.dll was not found in the zapret or the zapret2 folder (checked: {})",
-                    candidates
-                        .iter()
-                        .map(|p| p.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            }
-        }
+    let dll = dir.join("WinDivert.dll");
+    if !exists(&dll) {
+        bail!(
+            "{} is missing: the router needs zapret2's WinDivert.dll",
+            dll.display()
+        );
     }
+    Ok(dll)
 }
 
 /// `WINDIVERT_ADDRESS` of WinDivert 2.2.

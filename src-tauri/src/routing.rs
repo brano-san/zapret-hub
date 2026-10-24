@@ -4,18 +4,16 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use router::divert::{Engine, pick_dll};
+use router::divert::pick_dll;
 use router::{RouterState, RouterStatus, Setup, parse_proxy};
 use tauri::AppHandle;
 use zapret::checks::{CheckId, CheckLevel, SystemCheck};
-use zapret::service::{SERVICE2, WINWS2};
 
 use crate::actions::{self, state};
 use crate::settings::Settings;
 use crate::state::{AppState, lock};
 
-/// The DLL of the engine running now (spec 3.1) and the proxy from the settings. A zapret2 folder
-/// that does not open counts as none: it must not block Flowseal's DLL.
+/// zapret2's DLL (spec 3.1) and the proxy from the settings.
 pub fn setup(state: &AppState) -> anyhow::Result<Setup> {
     let proxy = parse_proxy(state.settings().socks5.as_deref())?;
     Ok(Setup {
@@ -24,20 +22,10 @@ pub fn setup(state: &AppState) -> anyhow::Result<Setup> {
     })
 }
 
-/// The WinDivert DLL of the engine running now, else of the first engine folder that has one.
+/// zapret2's WinDivert DLL; a zapret2 folder that does not open counts as none.
 pub fn dll(state: &AppState) -> anyhow::Result<PathBuf> {
-    let settings = state.settings();
-    let running = if zapret::procs::is_running(WINWS2) {
-        Some(Engine::Zapret2)
-    } else if zapret::procs::is_running("winws.exe") {
-        Some(Engine::Flowseal)
-    } else {
-        None
-    };
     let engine2 = state.engine2().ok().flatten();
     pick_dll(
-        running,
-        settings.zapret_dir.as_deref().map(Path::new),
         engine2.as_ref().and_then(|engine| engine.exe().parent()),
         Path::is_file,
     )
@@ -135,24 +123,5 @@ pub fn hide_own_driver(checks: &mut [SystemCheck], router: &RouterState) {
         check.level = CheckLevel::Ok;
         check.detail.clear();
         check.action = None;
-    }
-}
-
-/// A strategy of the other engine than the installed service's: the driver may change, and with
-/// it the DLL the router needs (spec 3.1).
-pub fn switches_engine(name: &str, service: &str) -> bool {
-    zapret2::strip_prefix(name).is_some() != (service == SERVICE2)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_a_strategy_of_the_other_engine_switches_it() {
-        assert!(switches_engine("zapret2:mine", "zapret"));
-        assert!(switches_engine("general (ALT11)", "zapret2"));
-        assert!(!switches_engine("general (ALT11)", "zapret"));
-        assert!(!switches_engine("zapret2:general", "zapret2"));
     }
 }

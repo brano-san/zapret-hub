@@ -1,6 +1,6 @@
-//! The latest GitHub release of Flowseal or bol-van/zapret2, downloaded with `curl.exe` and unpacked
-//! into a new folder. Only these two repositories and their asset names: nothing the page or the
-//! pipe sends becomes a URL.
+//! The latest GitHub release of bol-van/zapret2, downloaded with `curl.exe` and unpacked into a new
+//! folder. Only this repository and its asset names: nothing the page or the pipe sends becomes a
+//! URL.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,14 +14,12 @@ pub const DEFENDER: &str = "blocked or removed by Windows Defender or another an
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub enum Engine {
-    Flowseal,
     Zapret2,
 }
 
 impl Engine {
     fn repo(self) -> &'static str {
         match self {
-            Self::Flowseal => "Flowseal/zapret-discord-youtube",
             Self::Zapret2 => "bol-van/zapret2",
         }
     }
@@ -29,7 +27,6 @@ impl Engine {
     /// The zip is `<prefix><tag>.zip`, the folder `<prefix><tag>`.
     fn prefix(self) -> &'static str {
         match self {
-            Self::Flowseal => "zapret-discord-youtube-",
             Self::Zapret2 => "zapret2-",
         }
     }
@@ -53,8 +50,8 @@ pub struct Asset {
 pub struct Release {
     pub tag: String,
     pub zip: Asset,
-    /// `sha256sum.txt`: zapret2 always has one, Flowseal none.
-    pub sums: Option<Asset>,
+    /// `sha256sum.txt`.
+    pub sums: Asset,
 }
 
 /// What a finished download left.
@@ -66,8 +63,8 @@ pub struct Downloaded {
     pub sha256: String,
 }
 
-/// The release in the answer of `releases/latest`: the tag, the zip named after it and, for
-/// zapret2, `sha256sum.txt`; each URL must be a download of the same repository.
+/// The release in the answer of `releases/latest`: the tag, the zip named after it and
+/// `sha256sum.txt`; each URL must be a download of the same repository.
 pub fn select(engine: Engine, json: &str) -> anyhow::Result<Release> {
     let value: serde_json::Value =
         serde_json::from_str(json).context("GitHub answered with something other than JSON")?;
@@ -103,26 +100,18 @@ pub fn select(engine: Engine, json: &str) -> anyhow::Result<Release> {
     let zip_name = format!("{}{tag}.zip", engine.prefix());
     let zip = find(&zip_name)?
         .with_context(|| format!("release {tag} of {} has no {zip_name}", engine.repo()))?;
-    let sums = find("sha256sum.txt")?;
-    anyhow::ensure!(
-        engine == Engine::Flowseal || sums.is_some(),
-        "release {tag} of {} has no sha256sum.txt",
-        engine.repo()
-    );
+    let sums = find("sha256sum.txt")?
+        .with_context(|| format!("release {tag} of {} has no sha256sum.txt", engine.repo()))?;
     Ok(Release {
         tag: tag.to_owned(),
         zip,
-        sums: if engine == Engine::Zapret2 {
-            sums
-        } else {
-            None
-        },
+        sums,
     })
 }
 
 /// Where a release goes unless the user picks another folder: next to the app's folder, or the
-/// system drive's root when that path has spaces or non-ASCII letters (Flowseal's `service.bat`
-/// breaks on them).
+/// system drive's root when that path has spaces or non-ASCII letters (winws2, a Cygwin program,
+/// does not carry them).
 pub fn default_parent() -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -239,13 +228,10 @@ pub fn install(
     progress: &dyn Fn(u64, u64),
 ) -> anyhow::Result<Downloaded> {
     let release = select(engine, &probe::curl::fetch_text(&engine.api_url(), socks5)?)?;
-    let sums = match &release.sums {
-        Some(asset) => Some(probe::curl::fetch_text(&asset.url, socks5)?),
-        None => None,
-    };
+    let sums = probe::curl::fetch_text(&release.sums.url, socks5)?;
     let dir = target(parent, engine, &release.tag)?;
     std::fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
-    let sha256 = match unpack(&release, sums.as_deref(), &dir, socks5, cancel, progress) {
+    let sha256 = match unpack(&release, &sums, &dir, socks5, cancel, progress) {
         Ok(sha256) => {
             let _ = std::fs::remove_dir_all(dir.join(STAGING));
             sha256
@@ -281,7 +267,7 @@ const STAGING: &str = ".zapret-hub-download";
 /// The zip's SHA-256 once the release is in `dir`.
 fn unpack(
     release: &Release,
-    sums: Option<&str>,
+    sums: &str,
     dir: &Path,
     socks5: Option<&str>,
     cancel: &AtomicBool,
@@ -297,11 +283,10 @@ fn unpack(
     anyhow::ensure!(!cancel.load(Ordering::Relaxed), "canceled");
     let sha256 = hash_file(&zip)?;
     log::info!("{} SHA-256 {sha256}", release.zip.name);
-    if let Some(listed) = sums.and_then(|sums| {
-        parse_sums(sums)
-            .into_iter()
-            .find(|(_, path)| path.rsplit('/').next() == Some(release.zip.name.as_str()))
-    }) {
+    if let Some(listed) = parse_sums(sums)
+        .into_iter()
+        .find(|(_, path)| path.rsplit('/').next() == Some(release.zip.name.as_str()))
+    {
         anyhow::ensure!(
             listed.0 == sha256,
             "{} does not match sha256sum.txt: {sha256} instead of {}",
@@ -312,19 +297,7 @@ fn unpack(
     let raw = staging.join("x");
     expand(&zip, &raw, cancel)?;
     let root = content_root(&raw)?;
-    match sums {
-        Some(sums) => {
-            verify(&root, sums)?;
-        }
-        None => {
-            let missing = crate::folder::missing_parts(&root);
-            anyhow::ensure!(
-                missing.is_empty(),
-                "the release unpacked without {}: probably {DEFENDER}",
-                missing.join(", ")
-            );
-        }
-    }
+    verify(&root, sums)?;
     move_up(&root, dir)?;
     Ok(sha256)
 }
@@ -416,27 +389,10 @@ mod tests {
         serde_json::json!({"tag_name": tag, "assets": assets}).to_string()
     }
 
-    const FS: &str = "https://github.com/Flowseal/zapret-discord-youtube/releases/download/1.9.3/";
     const Z2: &str = "https://github.com/bol-van/zapret2/releases/download/v0.9.4/";
 
     #[test]
     fn picks_the_zip_named_after_the_tag() {
-        let json = api(
-            "1.9.3",
-            &[
-                ("zapret-discord-youtube-1.9.3.rar", FS),
-                (
-                    "zapret-discord-youtube-1.9.3.zip",
-                    &format!("{FS}zapret-discord-youtube-1.9.3.zip"),
-                ),
-            ],
-        );
-        let release = select(Engine::Flowseal, &json).unwrap();
-        assert_eq!(release.tag, "1.9.3");
-        assert_eq!(release.zip.name, "zapret-discord-youtube-1.9.3.zip");
-        assert_eq!(release.zip.size, 42);
-        assert_eq!(release.sums, None);
-
         let json = api(
             "v0.9.4",
             &[
@@ -446,28 +402,37 @@ mod tests {
             ],
         );
         let release = select(Engine::Zapret2, &json).unwrap();
+        assert_eq!(release.tag, "v0.9.4");
         assert_eq!(release.zip.name, "zapret2-v0.9.4.zip");
-        assert_eq!(release.sums.unwrap().name, "sha256sum.txt");
+        assert_eq!(release.zip.size, 42);
+        assert_eq!(release.sums.name, "sha256sum.txt");
     }
 
     #[test]
     fn refuses_missing_assets_foreign_urls_and_odd_tags() {
         let no_sums = api("v0.9.4", &[("zapret2-v0.9.4.zip", Z2)]);
         assert!(select(Engine::Zapret2, &no_sums).is_err());
+        let sums = ("sha256sum.txt", &*format!("{Z2}sha256sum.txt"));
         let foreign = api(
-            "1.9.3",
-            &[(
-                "zapret-discord-youtube-1.9.3.zip",
-                "https://evil.example/x.zip",
-            )],
+            "v0.9.4",
+            &[("zapret2-v0.9.4.zip", "https://evil.example/x.zip"), sums],
         );
-        assert!(select(Engine::Flowseal, &foreign).is_err());
-        let other_repo = api("1.9.3", &[("zapret-discord-youtube-1.9.3.zip", Z2)]);
-        assert!(select(Engine::Flowseal, &other_repo).is_err());
+        assert!(select(Engine::Zapret2, &foreign).is_err());
+        let other_repo = api(
+            "v0.9.4",
+            &[
+                (
+                    "zapret2-v0.9.4.zip",
+                    "https://github.com/Flowseal/zapret-discord-youtube/releases/download/1.9.3/x.zip",
+                ),
+                sums,
+            ],
+        );
+        assert!(select(Engine::Zapret2, &other_repo).is_err());
         let traversal = api("..\\..\\x", &[]);
-        assert!(select(Engine::Flowseal, &traversal).is_err());
-        assert!(select(Engine::Flowseal, &api("1.9.3", &[])).is_err());
-        assert!(select(Engine::Flowseal, "<html>").is_err());
+        assert!(select(Engine::Zapret2, &traversal).is_err());
+        assert!(select(Engine::Zapret2, &api("v0.9.4", &[])).is_err());
+        assert!(select(Engine::Zapret2, "<html>").is_err());
     }
 
     #[test]
@@ -479,11 +444,11 @@ mod tests {
         assert_eq!(target(tmp.path(), Engine::Zapret2, "v0.9.4").unwrap(), dir);
         std::fs::write(dir.join("x"), "").unwrap();
         assert!(target(tmp.path(), Engine::Zapret2, "v0.9.4").is_err());
-        let file = tmp.path().join("zapret-discord-youtube-1.9.3");
+        let file = tmp.path().join("zapret2-v1.0");
         std::fs::write(&file, "").unwrap();
-        assert!(target(tmp.path(), Engine::Flowseal, "1.9.3").is_err());
-        assert!(target(&tmp.path().join("nope"), Engine::Flowseal, "1.9.3").is_err());
-        assert!(target(Path::new("relative"), Engine::Flowseal, "1.9.3").is_err());
+        assert!(target(tmp.path(), Engine::Zapret2, "v1.0").is_err());
+        assert!(target(&tmp.path().join("nope"), Engine::Zapret2, "v1.0").is_err());
+        assert!(target(Path::new("relative"), Engine::Zapret2, "v1.0").is_err());
     }
 
     #[test]

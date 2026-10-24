@@ -68,13 +68,3 @@ fn plan_does_not_count_the_lines_of_an_unterminated_begin_as_its_own() {
     assert_eq!(p.added, ["5.6.7.8 b.com"]);
     assert!(p.removed.is_empty(), "{:?}", p.removed);
 }
-
-#[test]
-#[ignore = "needs the network"]
-fn live_flowseal_version_is_readable() {
-    let version = zapret::updates::latest_version(None).unwrap();
-    assert!(
-        version.chars().next().is_some_and(|c| c.is_ascii_digit()),
-        "{version}"
-    );
-}

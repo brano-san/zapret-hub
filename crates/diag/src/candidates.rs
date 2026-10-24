@@ -35,7 +35,7 @@ fn effective(global: &str, profile: &str) -> String {
                 == Some(name)
         })
     };
-    let used: Vec<String> = zapret::custom::quoted_tokens(global)
+    let used: Vec<String> = zapret::quoted_tokens(global)
         .into_iter()
         .filter(|t| {
             t.starts_with("--wf-")
@@ -70,7 +70,7 @@ pub fn candidates(strategies: &[(String, String)], group: &Group) -> (Vec<Candid
             }
             let mut tokens = Vec::new();
             let mut at = None;
-            for token in zapret::custom::quoted_tokens(profile) {
+            for token in zapret::quoted_tokens(profile) {
                 if token.starts_with("--hostlist") || token.starts_with("--ipset") {
                     at.get_or_insert(tokens.len());
                 } else {

@@ -10,7 +10,6 @@ use diag::paths::{Ctx, routed_by};
 use diag::summary::Summary;
 use diag::{compare, report};
 use router::RouterState;
-use zapret::folder::Folder;
 
 use super::args_of;
 use super::evidence::egress_ip;
@@ -89,17 +88,12 @@ fn v4(dst: &str) -> Option<Ipv4Addr> {
 pub(super) fn fill(
     state: &AppState,
     ctx: &Ctx,
-    folder: Option<&Folder>,
     engine2: Option<&zapret2::Engine>,
     summary: &mut Summary,
 ) {
-    let (service, image) = zapret::service::active();
+    let (_, image) = zapret::service::active();
     let engine_running = zapret::procs::is_running(image);
-    let engine = engine_running.then_some(if service == zapret::service::SERVICE2 {
-        "zapret2"
-    } else {
-        "zapret"
-    });
+    let engine = engine_running.then_some("zapret2");
     let strategy = zapret::service::strategy();
     let socks5 = state.socks5();
     let ranking = tester::history::latest_ranking(&tester::history::dir(&state.paths.data()))
@@ -116,8 +110,6 @@ pub(super) fn fill(
     summary.agent.context = diag::agent::Context {
         strategy: strategy.clone(),
         engine_running,
-        flowseal_outdated: state.update().is_some(),
-        flowseal_version: folder.and_then(Folder::version),
         routing: routing.into(),
         proxy: socks5.clone(),
         proxy_alive: socks5.as_ref().map(|_| ctx.proxy_ok),
@@ -131,12 +123,11 @@ pub(super) fn fill(
         tests_best,
         hub_errors: recent_errors(&journal_files(&state.paths.logs()), HUB_ERRORS),
     };
-    // ponytail: the lists are Flowseal's; zapret2 keeps its own, so only the zapret route has them.
-    let args = strategy
-        .as_deref()
-        .and_then(|n| args_of(folder, engine2, n).ok());
-    let lists = folder.filter(|_| engine == Some("zapret")).map(|f| {
-        let dir = f.lists();
+    let args = strategy.as_deref().and_then(|n| args_of(engine2, n).ok());
+    // The shared lists (Flowseal's, built in) count only for a strategy that names them.
+    let uses_lists = args.as_deref().is_some_and(|a| a.contains("%LISTS%"));
+    let lists = engine2.filter(|_| engine.is_some() && uses_lists).map(|e| {
+        let dir = zapret2::strategies::lists_dir(e);
         let (ipset, general) = (dir.join("ipset-all.txt"), dir.join("list-general.txt"));
         let mut host = lines_of(&general);
         if let (Some(h), Some(user)) = (host.as_mut(), lines_of(&dir.join("list-general-user.txt")))

@@ -124,3 +124,25 @@ pub fn fill_defaults(report: &mut Value) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_report_of_0_8_0_with_flowseals_fields_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = "2026-10-20_10-00-00";
+        let mut value = serde_json::to_value(Summary {
+            id: id.into(),
+            ..Summary::default()
+        })
+        .unwrap();
+        let context = &mut value["agent"]["context"];
+        context["flowseal_outdated"] = Value::Bool(true);
+        context["flowseal_version"] = Value::String("1.10.3".into());
+        std::fs::write(dir.path().join(format!("{id}.json")), value.to_string()).unwrap();
+        let summary = load(dir.path(), id).unwrap();
+        assert_eq!(summary.id, id);
+    }
+}

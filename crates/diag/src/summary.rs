@@ -3,7 +3,7 @@
 use router::rules::{Protocol, Rule};
 use serde::{Deserialize, Serialize};
 use zapret::checks::{CheckId, CheckLevel, SystemCheck};
-use zapret::custom::quoted_tokens;
+use zapret::quoted_tokens;
 
 use crate::circular_store::{Trick, is_filter};
 use crate::culprits::{Fault, Group, Verdict};

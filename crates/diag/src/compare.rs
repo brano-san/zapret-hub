@@ -68,17 +68,6 @@ pub fn changes(prev: &Summary, now: &Summary) -> Vec<Fact> {
             ));
         }
     }
-    if p.context.flowseal_version != n.context.flowseal_version {
-        let (a, b) = (
-            show(&p.context.flowseal_version),
-            show(&n.context.flowseal_version),
-        );
-        out.push(fact(
-            "flowseal_changed",
-            &[a, b],
-            format!("Версия Flowseal изменилась: {a} → {b}"),
-        ));
-    }
     out
 }
 
@@ -122,11 +111,9 @@ mod tests {
     fn every_kind_of_change() {
         let mut a = Summary::default();
         a.agent.context.strategy = Some("general".into());
-        a.agent.context.flowseal_version = Some("1.9.7".into());
         a.groups = vec![group("old.example", None), group("kept.example", Some("a"))];
         let mut b = Summary::default();
         b.agent.context.strategy = Some("alt".into());
-        b.agent.context.flowseal_version = Some("1.9.8".into());
         b.agent.verdict = crate::agent::VerdictCode::Clean;
         b.groups = vec![group("new.example", None), group("kept.example", Some("b"))];
         let f = changes(&a, &b);
@@ -137,8 +124,7 @@ mod tests {
                 "verdict_changed",
                 "culprit_new",
                 "best_path_changed",
-                "culprit_gone",
-                "flowseal_changed"
+                "culprit_gone"
             ]
         );
         assert_eq!(f[3].args[0], "kept.example");

@@ -8,7 +8,7 @@
 //! `strategies::check`.
 
 use serde::{Deserialize, Serialize};
-use zapret::custom::quoted_tokens;
+use zapret::quoted_tokens;
 
 use crate::strategies::args;
 

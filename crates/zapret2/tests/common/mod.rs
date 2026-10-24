@@ -25,22 +25,6 @@ pub fn fake_engine(root: &Path, exe_dir: &str, lib: &str) {
 pub const LIB: &str =
     "NFQWS2_COMPAT_VER_REQUIRED=6\n\nif NFQWS2_COMPAT_VER~=NFQWS2_COMPAT_VER_REQUIRED then\n";
 
-/// A Flowseal folder with what `Folder::open` checks, `utils\`, and `files` (`lists\x.txt`,
-/// `bin\y.bin`) empty.
-pub fn fake_flowseal(root: &Path, files: &[&str]) -> zapret::folder::Folder {
-    for dir in ["bin", "lists", "utils"] {
-        fs::create_dir_all(root.join(dir)).unwrap();
-    }
-    fs::write(root.join("service.bat"), "set \"LOCAL_VERSION=1.10.3\"\r\n").unwrap();
-    for file in [r"bin\winws.exe", r"bin\WinDivert64.sys"]
-        .iter()
-        .chain(files)
-    {
-        fs::write(root.join(file), b"").unwrap();
-    }
-    zapret::folder::Folder::open(root).unwrap()
-}
-
 /// `zapret-lib.lua` that defines every function zapret2's own Lua files define.
 pub fn lib_with_functions() -> String {
     let names = include_str!("../fixtures/functions.txt");

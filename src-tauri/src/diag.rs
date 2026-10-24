@@ -23,7 +23,6 @@ use router::rules::{Protocol, Rule};
 use tauri::{AppHandle, Manager as _};
 use tauri_specta::Event as _;
 use tester::engine::{Launch, Running};
-use zapret::folder::Folder;
 use zapret::service::{SERVICE, SERVICE2};
 use zapret::snapshot::{RouterSnap, Snapshot, pending_path};
 
@@ -280,7 +279,6 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
     // The whole diagnostics are one turn of the queue, like a test run.
     let _turn = state.turn();
     let settings = state.settings();
-    let folder = state.folder_if_set()?;
     let engine2 = state.engine2().ok().flatten();
     let observe_secs = request.observe_secs.unwrap_or(settings.diag_observe_secs);
     let run_settings = diag::run::Settings {
@@ -289,7 +287,7 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
         ),
         mode: request.mode,
     };
-    let mut ctx = context(&state, folder.as_ref(), engine2.as_ref(), profile);
+    let mut ctx = context(&state, engine2.as_ref(), profile);
     if let Some(goal) = request.goal {
         ctx.profile.goal = goal;
     }
@@ -331,7 +329,7 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
             rollback_error: None,
         }
     } else {
-        let mut snapshot = zapret::snapshot::begin(folder.as_ref(), "diag", &pending)?;
+        let mut snapshot = zapret::snapshot::begin("diag", &pending)?;
         snapshot.router = Some(RouterSnap {
             enabled: settings.router_enabled,
             paused: state.router.status().state == RouterState::Paused,
@@ -339,7 +337,6 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
         snapshot.save(&pending)?;
         let env = env.insert(AppEnv {
             app: app.clone(),
-            folder: folder.clone(),
             engine2: engine2.clone(),
             snapshot,
             pending: pending.clone(),
@@ -362,13 +359,7 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
         observe_secs,
     );
     client::fill(&mut summary, &ctx, &marks, &verdict);
-    context::fill(
-        &state,
-        &ctx,
-        folder.as_ref(),
-        engine2.as_ref(),
-        &mut summary,
-    );
+    context::fill(&state, &ctx, engine2.as_ref(), &mut summary);
     summary.sources_missing = missing;
     diag::judge::fill(&mut summary, &flows, &evidence, &ctx, observe_secs);
     summary.explanations.extend(summary::check_lines(&checks));
@@ -408,12 +399,7 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
 }
 
 /// The rules, strategies and ranking the paths are planned from.
-fn context(
-    state: &AppState,
-    folder: Option<&Folder>,
-    engine2: Option<&zapret2::Engine>,
-    profile: Profile,
-) -> Ctx {
+fn context(state: &AppState, engine2: Option<&zapret2::Engine>, profile: Profile) -> Ctx {
     let proxy_set = state.socks5().is_some();
     let proxy_ok = state.socks5().is_some_and(|addr| {
         router::parse_proxy(Some(&addr)).is_ok() && probe::socks::check(&addr).ok
@@ -425,7 +411,7 @@ fn context(
     let ranking = state.best(usize::MAX);
     let strategies = ranking
         .iter()
-        .filter_map(|name| Some((name.clone(), args_of(folder, engine2, name).ok()?)))
+        .filter_map(|name| Some((name.clone(), args_of(engine2, name).ok()?)))
         .collect();
     let zapret2 = engine2
         .and_then(|engine| zapret2::strategies::list(engine.root()).ok())
@@ -453,30 +439,17 @@ fn context(
     }
 }
 
-/// What `strategy_covers` reads: Flowseal's final args, zapret2's args.
-fn args_of(
-    folder: Option<&Folder>,
-    engine2: Option<&zapret2::Engine>,
-    name: &str,
-) -> anyhow::Result<String> {
-    match zapret2::strip_prefix(name) {
-        Some(short) => {
-            let engine = engine2.context("the zapret2 folder is not set")?;
-            let strategy = zapret2::strategies::find(engine.root(), short)?;
-            Ok(zapret2::strategies::args(&strategy.text))
-        }
-        None => {
-            let folder = folder.context(zapret::folder::NOT_SET)?;
-            let file = zapret::strategies::find(folder, name)?;
-            Ok(zapret::batparse::parse_file(folder, &file.path)?.final_args)
-        }
-    }
+/// What `strategy_covers` reads: a zapret2 strategy's args.
+fn args_of(engine2: Option<&zapret2::Engine>, name: &str) -> anyhow::Result<String> {
+    let short = zapret2::strip_prefix(name).context("not a zapret2 strategy")?;
+    let engine = engine2.context("the zapret2 folder is not set")?;
+    let strategy = zapret2::strategies::find(engine.root(), short)?;
+    Ok(zapret2::strategies::args(&strategy.text))
 }
 
 /// The hub as the diagnostics see it: paths set through the services, winws and the router.
 struct AppEnv {
     app: AppHandle,
-    folder: Option<Folder>,
     engine2: Option<zapret2::Engine>,
     snapshot: Snapshot,
     pending: PathBuf,
@@ -504,7 +477,7 @@ impl AppEnv {
     /// The services and winws as they were: the snapshot puts them back.
     fn zapret_as_is(&mut self) -> anyhow::Result<()> {
         if !self.zapret_as_is {
-            self.snapshot.restore(self.folder.as_ref())?;
+            self.snapshot.restore()?;
             self.zapret_as_is = true;
         }
         Ok(())
@@ -582,7 +555,7 @@ impl AppEnv {
     /// The services, winws and routing as the snapshot found them; the check rule gone.
     fn put_back(&mut self) -> anyhow::Result<()> {
         self.stop_running();
-        let restored = self.snapshot.restore(self.folder.as_ref());
+        let restored = self.snapshot.restore();
         self.zapret_as_is = true;
         let rule = self.state().router.set_temporary(None);
         self.router_as_is();
@@ -635,8 +608,7 @@ impl Env for AppEnv {
                 )
             }
             PathKind::Strategy { name } => {
-                let launch =
-                    tester::engine::launch(self.folder.as_ref(), self.engine2.as_ref(), name);
+                let launch = tester::engine::launch(self.engine2.as_ref(), name);
                 self.start(launch)
             }
             PathKind::Trick { candidate } => {
@@ -644,9 +616,7 @@ impl Env for AppEnv {
                     .engine2
                     .as_ref()
                     .context("the zapret2 folder is not set: choose it in Settings")
-                    .and_then(|engine| {
-                        tester::engine::launch_text(engine, self.folder.as_ref(), &candidate.text)
-                    });
+                    .and_then(|engine| tester::engine::launch_text(engine, &candidate.text));
                 self.start(launch)
             }
         }
@@ -902,7 +872,7 @@ fn recheck(
         .filter_map(|fix| match fix {
             Fix::ApplyStrategy { name } => Some((
                 name.clone(),
-                tester::engine::launch(env.folder.as_ref(), env.engine2.as_ref(), name),
+                tester::engine::launch(env.engine2.as_ref(), name),
             )),
             Fix::ApplyHubCircular { tricks, filter } => {
                 let launch = env
@@ -913,7 +883,7 @@ fn recheck(
                         let mut store = circular_store::load(&circular_path(state))?;
                         circular_store::add(&mut store, filter, tricks.clone());
                         let text = hub_text(engine, &store)?;
-                        tester::engine::launch_text(engine, env.folder.as_ref(), &text)
+                        tester::engine::launch_text(engine, &text)
                     });
                 Some((
                     format!("{}{}", zapret2::PREFIX, circular_store::NAME),
@@ -1029,16 +999,10 @@ mod tests {
     fn recover_restores_router_section() {
         let mut snapshot = Snapshot {
             operation: "diag".into(),
-            service: None,
-            strategy: None,
-            manual_winws: Vec::new(),
             service2: None,
             strategy2: None,
             manual_winws2: Vec::new(),
             zapret2: true,
-            ipset: None,
-            ipset_backup: false,
-            game_filter: None,
             router: None,
         };
         assert_eq!(
@@ -1209,15 +1173,14 @@ mod tests {
         let name = |active: Option<&str>| base(&engine, active).0;
         assert_eq!(name(None), "");
         assert_eq!(name(Some("zapret2:mine")), "mine");
-        assert_eq!(name(Some("general")), "general (Flowseal)");
-        assert_eq!(name(Some("general (ALT)")), "general (ALT)");
-        assert_eq!(name(Some("my own flowseal")), "", "no copy of it");
-        assert!(circular_base(&engine, Some("my own flowseal")).is_err());
+        assert_eq!(name(Some("zapret2:general (ALT)")), "general (ALT)");
+        assert_eq!(name(Some("general")), "", "not a zapret2 name");
+        assert!(circular_base(&engine, Some("general")).is_err());
         assert!(
             circular_base(&engine, None).is_ok(),
             "nothing active, nothing lost"
         );
-        assert!(circular_base(&engine, Some("general")).is_ok());
+        assert!(circular_base(&engine, Some("zapret2:general")).is_ok());
         // hub-circular names its base, and is never its own.
         let hub = format!(
             "{BASE_LINE}mine

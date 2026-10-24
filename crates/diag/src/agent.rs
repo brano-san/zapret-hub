@@ -135,9 +135,6 @@ pub struct Coverage {
 pub struct Context {
     pub strategy: Option<String>,
     pub engine_running: bool,
-    pub flowseal_outdated: bool,
-    /// The Flowseal folder's version, for the changes since the last report.
-    pub flowseal_version: Option<String>,
     pub routing: String,
     pub proxy: Option<String>,
     pub proxy_alive: Option<bool>,

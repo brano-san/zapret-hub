@@ -100,16 +100,6 @@ fn dispatch(app: &AppHandle, request: Request) -> Result<Value, String> {
         Request::ApplyStrategy { name } => json(block_on(commands::apply_strategy(handle, name))?),
         Request::ApplyBest => json(block_on(commands::apply_best(handle))?),
         Request::RestartZapret => json(block_on(commands::restart_zapret(handle))?),
-        Request::CloneStrategy { source, name } => {
-            json(block_on(commands::clone_strategy(handle, source, name))?)
-        }
-        Request::ValidateCustom { strategy } => {
-            json(block_on(commands::validate_custom(handle, strategy))?)
-        }
-        Request::SaveCustom { strategy, create } => {
-            json(block_on(commands::save_custom(handle, strategy, create))?)
-        }
-        Request::DeleteCustom { name } => json(block_on(commands::delete_custom(handle, name))?),
         Request::Zapret2Info => json(block_on(commands::zapret2_info(handle))?),
         Request::ValidateZapret2 { text } => {
             json(block_on(commands::validate_zapret2(handle, text))?)
@@ -127,27 +117,8 @@ fn dispatch(app: &AppHandle, request: Request) -> Result<Value, String> {
         Request::ListRuns => json(block_on(commands::list_runs(handle))?),
         Request::GetRun { id } => json(block_on(commands::get_run(handle, id))?),
         Request::RunReport { id } => json(block_on(commands::run_report(handle, id))?),
-        Request::GetFlowseal => json(block_on(commands::get_flowseal(handle))?),
-        Request::SetGameFilter { filter } => {
-            json(block_on(commands::set_game_filter(handle, filter))?)
-        }
-        Request::SetIpsetMode { mode } => json(block_on(commands::set_ipset_mode(handle, mode))?),
-        Request::SetCheckUpdates { enabled } => {
-            json(block_on(commands::set_check_updates(handle, enabled))?)
-        }
-        Request::ReplaceFake { kind, source } => {
-            json(block_on(commands::replace_fake(handle, kind, source))?)
-        }
-        Request::AddListEntry { list, entry } => {
-            json(block_on(commands::add_list_entry(handle, list, entry))?)
-        }
-        Request::RemoveListEntry { list, entry } => {
-            json(block_on(commands::remove_list_entry(handle, list, entry))?)
-        }
-        Request::UpdateIpset => json(block_on(commands::update_ipset(handle))?),
         Request::HostsPlan => json(block_on(commands::hosts_plan(handle))?),
         Request::ApplyHosts => json(block_on(commands::apply_hosts(handle))?),
-        Request::CheckFlowsealUpdate => json(block_on(commands::check_flowseal_update(handle))?),
         Request::SystemChecks => json(block_on(commands::system_checks(handle))?),
         Request::FixCheck { action } => json(block_on(commands::fix_check(handle, action))?),
         Request::ClearDiscordCache => json(block_on(commands::clear_discord_cache())?),

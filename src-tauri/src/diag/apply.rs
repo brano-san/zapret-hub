@@ -38,14 +38,13 @@ pub(super) fn circular_base(
     }
 }
 
-/// The zapret2 strategy `hub-circular` builds on: the active zapret2 one; for an active Flowseal
-/// strategy its copy (`general` is `general (Flowseal)`); for `hub-circular` itself the base it
-/// names. None (empty) for the user's own Flowseal strategy or nothing active.
+/// The zapret2 strategy `hub-circular` builds on: the active one; for `hub-circular` itself the
+/// base it names. None (empty) for a name without the zapret2 prefix or nothing active.
 pub(super) fn base(engine: &zapret2::Engine, active: Option<&str>) -> (String, String) {
     let Some(active) = active else {
         return Default::default();
     };
-    let (name, zapret2) = match zapret2::strip_prefix(active) {
+    let name = match zapret2::strip_prefix(active) {
         Some(circular_store::NAME) => {
             let named = zapret2::strategies::find(engine.root(), circular_store::NAME)
                 .ok()
@@ -56,18 +55,16 @@ pub(super) fn base(engine: &zapret2::Engine, active: Option<&str>) -> (String, S
                 })
                 .filter(|n| !n.is_empty() && n != circular_store::NAME);
             match named {
-                Some(name) => (name, true),
+                Some(name) => name,
                 None => return Default::default(),
             }
         }
-        Some(short) => (short.to_owned(), true),
-        None if active == "general" => ("general (Flowseal)".to_owned(), false),
-        None => (active.to_owned(), false),
+        Some(short) => short.to_owned(),
+        None => return Default::default(),
     };
-    match zapret2::strategies::find(engine.root(), &name) {
-        Ok(s) if zapret2 || s.flowseal_copy => (name, s.text),
-        _ => Default::default(),
-    }
+    zapret2::strategies::find(engine.root(), &name)
+        .map(|s| (name, s.text))
+        .unwrap_or_default()
 }
 
 /// «Применить» of a saved report's fix (diag spec 8). `None` for a rule: no quick check.
@@ -107,7 +104,7 @@ pub fn apply(app: &AppHandle, id: &str, fix: u32) -> anyhow::Result<Option<Quick
         Fix::ApplyHubCircular { tricks, filter } => {
             let engine = state.engine2_required()?;
             let path = circular_path(&state);
-            state.change_any(|folder| {
+            state.change(|| {
                 let mut store = circular_store::load(&path)?;
                 circular_store::add(&mut store, &filter, tricks);
                 let text = hub_text(&engine, &store)?;
@@ -116,7 +113,6 @@ pub fn apply(app: &AppHandle, id: &str, fix: u32) -> anyhow::Result<Option<Quick
                     .exists();
                 zapret2::service::save(
                     &engine,
-                    folder,
                     engine.root(),
                     circular_store::NAME,
                     &text,

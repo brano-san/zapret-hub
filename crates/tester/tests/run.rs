@@ -100,13 +100,13 @@ fn zapret2_strategies_need_a_working_engine_before_the_run_starts() {
         "{}",
         refusal(Some(&engine))
     );
-    // A Flowseal-only request needs no engine, and a mixed-case prefix is still zapret2's.
-    let flowseal = Request {
+    // A request without zapret2 names needs no engine, and a mixed-case prefix is still zapret2's.
+    let other = Request {
         suite: Suite::Standard,
         strategies: vec!["general".into()],
         repeats: 1,
     };
-    assert_eq!(tester::run::zapret2_version(None, &flowseal).unwrap(), None);
+    assert_eq!(tester::run::zapret2_version(None, &other).unwrap(), None);
     let upper = Request {
         suite: Suite::Standard,
         strategies: vec!["Zapret2:general".into()],
@@ -117,18 +117,21 @@ fn zapret2_strategies_need_a_working_engine_before_the_run_starts() {
 }
 
 #[test]
-fn flowseal_strategies_need_the_flowseal_folder_before_the_run_starts() {
+fn a_name_without_the_zapret2_prefix_stops_the_run_before_it_starts() {
     let request = |names: &[&str]| Request {
         suite: Suite::Standard,
         strategies: names.iter().map(|&n| n.to_owned()).collect(),
         repeats: 1,
     };
-    tester::run::needs_flowseal(None, &request(&["zapret2:mine", "ZAPRET2:general"])).unwrap();
-    let err = tester::run::needs_flowseal(None, &request(&["zapret2:mine", "general"]))
+    tester::run::zapret2_only(&request(&["zapret2:mine", "ZAPRET2:general"])).unwrap();
+    let err = tester::run::zapret2_only(&request(&["zapret2:mine", "general (ALT11)"]))
         .unwrap_err()
         .to_string();
-    assert!(err.contains("general is a Flowseal strategy"), "{err}");
-    assert!(err.contains("zapret folder is not set"), "{err}");
+    assert!(
+        err.contains("general (ALT11) is not a zapret2 strategy"),
+        "{err}"
+    );
+    assert!(err.contains("zapret2:<name>"), "{err}");
 }
 
 // Past its refusals, `run` is called only by the ignored tests below: it stops the services here.
@@ -148,85 +151,23 @@ fn a_request_without_strategies_is_refused() {
     );
 }
 
-#[test]
-#[ignore = "needs admin rights, E:\\Zapret and the network; stops zapret for about a minute"]
-fn live_run_of_two_strategies() {
-    let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
-    let data = tempfile::tempdir().unwrap();
-    let request = Request {
-        suite: Suite::Standard,
-        strategies: vec!["general (ALT11)".into(), "general".into()],
-        repeats: 1,
-    };
-    let run = tester::run::run(
-        Some(&folder),
-        None,
-        data.path(),
-        &request,
-        None,
-        &AtomicBool::new(false),
-        &|p| eprintln!("{p:?}"),
-    )
-    .unwrap();
-    eprintln!("{}", tester::report::to_text(&run));
-    assert_eq!(run.strategies.len(), 2);
-    assert!(run.restore_error.is_none(), "{:?}", run.restore_error);
-    assert!(!zapret::snapshot::pending_path(data.path()).exists());
-    assert!(
-        tester::history::dir(data.path())
-            .join(format!("{}.json", run.id))
-            .is_file()
-    );
+fn live_engine() -> zapret2::Engine {
+    zapret2::Engine::open(std::env::var("ZAPRET2_DIR").expect("ZAPRET2_DIR")).unwrap()
 }
 
 #[test]
-#[ignore = "needs admin rights and E:\\Zapret; stops zapret for a few seconds"]
-fn live_a_panic_during_the_run_is_passed_on_after_the_restore() {
-    use zapret::service::{SERVICE, state};
-    let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
-    let data = tempfile::tempdir().unwrap();
-    let before = state(SERVICE);
-    let request = Request {
-        suite: Suite::Standard,
-        strategies: vec!["general".into()],
-        repeats: 1,
-    };
-    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tester::run::run(
-            Some(&folder),
-            None,
-            data.path(),
-            &request,
-            None,
-            &AtomicBool::new(false),
-            &|p| {
-                // Zapret is stopped by now: the restore has to bring it back.
-                if matches!(p, Progress::Strategy { .. }) {
-                    panic!("progress panics");
-                }
-            },
-        )
-    }));
-    assert!(ran.is_err(), "the panic is passed on");
-    assert_eq!(state(SERVICE), before);
-    assert!(!zapret::snapshot::pending_path(data.path()).exists());
-}
-
-#[test]
-#[ignore = "needs admin rights, E:\\Zapret, a zapret2 release in ZAPRET2_DIR and the network"]
-fn live_a_run_mixes_the_engines_and_brings_the_active_one_back() {
+#[ignore = "needs admin rights, a zapret2 release in ZAPRET2_DIR and the network; stops zapret2 for about a minute"]
+fn live_run_of_two_strategies_brings_the_active_one_back() {
     use zapret::service::{active, strategy};
-    let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
-    let engine = zapret2::Engine::open(std::env::var("ZAPRET2_DIR").expect("ZAPRET2_DIR")).unwrap();
+    let engine = live_engine();
     let data = tempfile::tempdir().unwrap();
     let before = (active(), strategy());
     let request = Request {
         suite: Suite::Standard,
-        strategies: vec!["general".into(), "zapret2:general".into()],
+        strategies: vec!["zapret2:general (ALT11)".into(), "zapret2:general".into()],
         repeats: 1,
     };
     let run = tester::run::run(
-        Some(&folder),
         Some(&engine),
         data.path(),
         &request,
@@ -241,32 +182,61 @@ fn live_a_run_mixes_the_engines_and_brings_the_active_one_back() {
     assert!(run.restore_error.is_none(), "{:?}", run.restore_error);
     assert_eq!((active(), strategy()), before);
     assert!(!zapret::snapshot::pending_path(data.path()).exists());
+    assert!(
+        tester::history::dir(data.path())
+            .join(format!("{}.json", run.id))
+            .is_file()
+    );
 }
 
 #[test]
-#[ignore = "needs admin rights, E:\\Zapret and the network"]
+#[ignore = "needs admin rights and a zapret2 release in ZAPRET2_DIR; stops zapret2 for a few seconds"]
+fn live_a_panic_during_the_run_is_passed_on_after_the_restore() {
+    use zapret::service::{SERVICE2, state};
+    let engine = live_engine();
+    let data = tempfile::tempdir().unwrap();
+    let before = state(SERVICE2);
+    let request = Request {
+        suite: Suite::Standard,
+        strategies: vec!["zapret2:general".into()],
+        repeats: 1,
+    };
+    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tester::run::run(
+            Some(&engine),
+            data.path(),
+            &request,
+            None,
+            &AtomicBool::new(false),
+            &|p| {
+                // zapret2 is stopped by now: the restore has to bring it back.
+                if matches!(p, Progress::Strategy { .. }) {
+                    panic!("progress panics");
+                }
+            },
+        )
+    }));
+    assert!(ran.is_err(), "the panic is passed on");
+    assert_eq!(state(SERVICE2), before);
+    assert!(!zapret::snapshot::pending_path(data.path()).exists());
+}
+
+#[test]
+#[ignore = "needs admin rights, a zapret2 release in ZAPRET2_DIR and the network"]
 fn live_cancel_stops_after_the_current_strategy() {
-    let folder = zapret::folder::Folder::open(r"E:\Zapret").unwrap();
+    let engine = live_engine();
     let data = tempfile::tempdir().unwrap();
     let cancel = AtomicBool::new(false);
     let request = Request {
         suite: Suite::Standard,
-        strategies: vec!["general (ALT11)".into(), "general".into()],
+        strategies: vec!["zapret2:general (ALT11)".into(), "zapret2:general".into()],
         repeats: 1,
     };
-    let run = tester::run::run(
-        Some(&folder),
-        None,
-        data.path(),
-        &request,
-        None,
-        &cancel,
-        &|p| {
-            if matches!(p, Progress::Done { .. }) {
-                cancel.store(true, Ordering::Relaxed);
-            }
-        },
-    )
+    let run = tester::run::run(Some(&engine), data.path(), &request, None, &cancel, &|p| {
+        if matches!(p, Progress::Done { .. }) {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    })
     .unwrap();
     assert!(run.canceled);
     assert_eq!(run.strategies.len(), 1);

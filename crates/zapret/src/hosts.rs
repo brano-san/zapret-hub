@@ -137,6 +137,31 @@ pub fn apply(block: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Flowseal's hosts file for Discord and the rest: the block the hub keeps in hosts.
+pub fn flowseal_url() -> String {
+    "https://raw.githubusercontent.com/Flowseal/zapret-discord-youtube/refs/heads/main/.service/hosts"
+        .to_owned()
+}
+
+fn flowseal_hosts(socks5: Option<&str>) -> anyhow::Result<String> {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    probe::curl::fetch_text(&format!("{}?t={nonce}", flowseal_url()), socks5)
+}
+
+/// What applying Flowseal's hosts would change.
+pub fn download_plan(socks5: Option<&str>) -> anyhow::Result<HostsPlan> {
+    let flowseal = flowseal_hosts(socks5)?;
+    Ok(plan(&read()?, &flowseal))
+}
+
+/// Downloads Flowseal's hosts again and writes it as the zapret-hub block.
+pub fn download_and_apply(socks5: Option<&str>) -> anyhow::Result<()> {
+    apply(&flowseal_hosts(socks5)?)
+}
+
 /// `apply` on the hosts file at `path`, without the DNS flush (tests run it on a temp file).
 fn apply_at(path: &Path, block: &str) -> anyhow::Result<()> {
     let current = read_at(path)?;

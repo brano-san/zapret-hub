@@ -99,7 +99,6 @@ pub struct TestRun {
     /// `2026-10-10_05-03-34`, also the file name.
     pub id: String,
     pub suite: Suite,
-    pub flowseal_version: Option<String>,
     /// `winws2.exe --version` when zapret2 strategies ran: the hash of a command line does not see
     /// an engine update (zapret2 spec 7). Runs from before zapret2 have none.
     #[serde(default)]

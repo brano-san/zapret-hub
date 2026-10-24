@@ -5,7 +5,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
-use zapret::custom::quoted_tokens;
+use zapret::quoted_tokens;
 use zapret2::circular::{merge, widen};
 use zapret2::strategies::{args, split};
 

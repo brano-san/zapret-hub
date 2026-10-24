@@ -4,9 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
-use zapret::batparse::replace_ci;
-use zapret::custom::quoted_tokens;
-use zapret::folder::Folder;
+use zapret::{quoted_tokens, replace_ci};
 
 use crate::{Engine, PREFIX};
 
@@ -109,14 +107,138 @@ const FLOWSEAL: [(&str, &str); 22] = [
     ),
 ];
 
-/// The placeholders that come from the Flowseal folder.
-const FLOWSEAL_VARS: [&str; 5] = [
-    "%LISTS%",
-    "%BIN%",
-    "%GameFilter%",
-    "%GameFilterTCP%",
-    "%GameFilterUDP%",
+/// Matches no address: an empty list would match every one (winws reads an empty list as none).
+const NO_IP: &[u8] = b"203.0.113.113/32\r\n";
+/// Matches no domain, for the same reason.
+const NO_DOMAIN: &[u8] = b"domain.example.abc\r\n";
+
+/// What `%LISTS%` holds, written into `<zapret2 folder>\lists` when missing: the hub's own copy
+/// of Flowseal's lists (zapret-discord-youtube 1.10.3, https://github.com/Flowseal/zapret-discord-youtube,
+/// MIT License, Copyright (c) Flowseal), the user lists as `service.bat` creates them (the general
+/// one with the domains the hub adds), and `ipset-all.txt` in Flowseal's `none` mode. A file there
+/// is never overwritten: the user edits them.
+const LISTS: [(&str, &[u8]); 8] = [
+    (
+        "list-general.txt",
+        include_bytes!("files/lists/list-general.txt"),
+    ),
+    (
+        "list-google.txt",
+        include_bytes!("files/lists/list-google.txt"),
+    ),
+    (
+        "list-exclude.txt",
+        include_bytes!("files/lists/list-exclude.txt"),
+    ),
+    (
+        "ipset-exclude.txt",
+        include_bytes!("files/lists/ipset-exclude.txt"),
+    ),
+    (
+        "list-general-user.txt",
+        include_bytes!("files/lists/list-general-user.txt"),
+    ),
+    ("list-exclude-user.txt", NO_DOMAIN),
+    ("ipset-exclude-user.txt", NO_IP),
+    ("ipset-all.txt", NO_IP),
 ];
+
+/// What `%BIN%` holds, written into `<zapret2 folder>\bin` when missing: the fakes of Flowseal's
+/// `bin\` the built-in strategies use (the same release and license as `LISTS`).
+const BINS: [(&str, &[u8]); 10] = [
+    (
+        "ACTIVE_DISCORD_UDP.bin",
+        include_bytes!("files/bin/ACTIVE_DISCORD_UDP.bin"),
+    ),
+    (
+        "ACTIVE_GAME_UDP.bin",
+        include_bytes!("files/bin/ACTIVE_GAME_UDP.bin"),
+    ),
+    (
+        "quic_initial_4pda_to.bin",
+        include_bytes!("files/bin/quic_initial_4pda_to.bin"),
+    ),
+    (
+        "quic_initial_www_google_com.bin",
+        include_bytes!("files/bin/quic_initial_www_google_com.bin"),
+    ),
+    ("stun.bin", include_bytes!("files/bin/stun.bin")),
+    ("stun2.bin", include_bytes!("files/bin/stun2.bin")),
+    (
+        "tls_clienthello_4pda_to.bin",
+        include_bytes!("files/bin/tls_clienthello_4pda_to.bin"),
+    ),
+    (
+        "tls_clienthello_max_ru.bin",
+        include_bytes!("files/bin/tls_clienthello_max_ru.bin"),
+    ),
+    (
+        "tls_clienthello_sochi_park.bin",
+        include_bytes!("files/bin/tls_clienthello_sochi_park.bin"),
+    ),
+    (
+        "tls_clienthello_www_google_com.bin",
+        include_bytes!("files/bin/tls_clienthello_www_google_com.bin"),
+    ),
+];
+
+/// `%LISTS%`: `<zapret2 folder>\lists`.
+pub fn lists_dir(engine: &Engine) -> PathBuf {
+    engine.root().join("lists")
+}
+
+/// `%BIN%`: `<zapret2 folder>\bin`.
+pub fn bin_dir(engine: &Engine) -> PathBuf {
+    engine.root().join("bin")
+}
+
+fn files(engine: &Engine) -> impl Iterator<Item = (PathBuf, &'static [u8])> {
+    let lists = lists_dir(engine);
+    let bin = bin_dir(engine);
+    LISTS
+        .into_iter()
+        .map(move |(name, bytes)| (lists.join(name), bytes))
+        .chain(
+            BINS.into_iter()
+                .map(move |(name, bytes)| (bin.join(name), bytes)),
+        )
+}
+
+/// Writes every list and fake the placeholders point at that is not there yet.
+pub fn ensure_files(engine: &Engine) -> anyhow::Result<()> {
+    for (path, bytes) in files(engine) {
+        if path.exists() {
+            continue;
+        }
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).with_context(|| dir.display().to_string())?;
+        }
+        std::fs::write(&path, bytes).with_context(|| path.display().to_string())?;
+    }
+    Ok(())
+}
+
+/// Copies the lists and fakes of a Flowseal folder (`<root>\lists`, `<root>\bin`) that the zapret2
+/// folder does not have yet, so that an upgrade keeps the user's lists. Returns the files copied.
+pub fn adopt_files(engine: &Engine, flowseal_root: &Path) -> Vec<String> {
+    let mut copied = Vec::new();
+    for (path, _) in files(engine) {
+        let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+            continue;
+        };
+        let sub = dir.file_name().unwrap_or_default();
+        let from = flowseal_root.join(sub).join(name);
+        if path.exists() || !from.is_file() {
+            continue;
+        }
+        let done = std::fs::create_dir_all(dir).and_then(|()| std::fs::copy(&from, &path));
+        match done {
+            Ok(_) => copied.push(name.to_string_lossy().into_owned()),
+            Err(err) => log::warn!("{} not copied to {}: {err}", from.display(), path.display()),
+        }
+    }
+    copied
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Strategy {
@@ -225,7 +347,7 @@ fn scan(home: &Path) -> anyhow::Result<Scan> {
             Some("only .txt files are strategies".to_owned())
         } else if is_builtin(stem) {
             Some("named like a built-in strategy".to_owned())
-        } else if let Err(err) = zapret::custom::validate_name(stem) {
+        } else if let Err(err) = zapret::validate_name(stem) {
             Some(format!("{err:#}"))
         } else {
             None
@@ -251,7 +373,7 @@ fn scan(home: &Path) -> anyhow::Result<Scan> {
             }
         }
     }
-    own.sort_by_cached_key(|s| zapret::strategies::natural_key(&s.name));
+    own.sort_by_cached_key(|s| zapret::natural_key(&s.name));
     skipped.sort();
     Ok((own, skipped))
 }
@@ -276,6 +398,18 @@ fn is_builtin(name: &str) -> bool {
         .any(|(builtin, _)| builtin.eq_ignore_ascii_case(name))
 }
 
+/// The built-in zapret2 strategy that stands for a Flowseal `.bat` of 0.8.0: its copy of the same
+/// name (`general (ALT11)` → `zapret2:general (ALT11)`), else `zapret2:general`.
+pub fn flowseal_copy(flowseal_name: &str) -> String {
+    let name = FLOWSEAL
+        .iter()
+        .chain(&BUILTIN)
+        .map(|(name, _)| *name)
+        .find(|name| name.eq_ignore_ascii_case(flowseal_name.trim()))
+        .unwrap_or("general");
+    format!("{PREFIX}{name}")
+}
+
 /// `name` without the prefix.
 pub fn find(home: &Path, name: &str) -> anyhow::Result<Strategy> {
     list(home)?
@@ -287,7 +421,7 @@ pub fn find(home: &Path, name: &str) -> anyhow::Result<Strategy> {
 /// The name a save writes under (spec 5.2): a valid one, not a built-in one; new for `create`,
 /// one of the user's otherwise.
 pub fn claim(home: &Path, name: &str, create: bool) -> anyhow::Result<String> {
-    let name = zapret::custom::validate_name(name)?;
+    let name = zapret::validate_name(name)?;
     anyhow::ensure!(
         !is_builtin(&name),
         "{PREFIX}{name} is built in: save a copy under another name"
@@ -336,41 +470,36 @@ pub fn args(text: &str) -> String {
         .join(" ")
 }
 
+/// The game filter's ports when it is on: the whole unprivileged range, as Flowseal's default.
+pub const GAME_PORTS: &str = "1024-65535";
+/// The ports the game filter placeholders stand for when it is off: `12` never matches, as
+/// `service.bat` writes it.
+const GAME_PORTS_OFF: &str = "12";
+
 /// The one command line of a text, for the test, the check and the service alike (spec 5.1):
 /// `--chdir="<root>"`, then the arguments with the placeholders filled in. Every path placeholder
-/// ends in `\`. `%LISTS%`, `%BIN%` and the game filter come from the Flowseal folder: without one
-/// they are an error.
-pub fn tail(engine: &Engine, folder: Option<&Folder>, text: &str) -> anyhow::Result<String> {
+/// ends in `\`. `%LISTS%` and `%BIN%` are the zapret2 folder's `lists` and `bin` (their missing
+/// files written first, `ensure_files`); `%GameFilter%`, `%GameFilterTCP%` and `%GameFilterUDP%`
+/// are the engine's game filter ports.
+pub fn tail(engine: &Engine, text: &str) -> anyhow::Result<String> {
+    ensure_files(engine)?;
     let dir = |path: PathBuf| format!("{}\\", path.display());
+    let ports = if engine.game_filter() {
+        GAME_PORTS
+    } else {
+        GAME_PORTS_OFF
+    };
     let mut args = args(text);
     for (var, value) in [
         ("%LUA%", dir(engine.lua())),
         ("%FILES%", dir(engine.root().join("files"))),
+        ("%LISTS%", dir(lists_dir(engine))),
+        ("%BIN%", dir(bin_dir(engine))),
+        ("%GameFilterTCP%", ports.to_owned()),
+        ("%GameFilterUDP%", ports.to_owned()),
+        ("%GameFilter%", ports.to_owned()),
     ] {
         args = replace_ci(&args, var, &value);
-    }
-    match folder {
-        Some(folder) => {
-            let filter = zapret::game_filter::try_read(folder)?.vars();
-            for (var, value) in [
-                ("%LISTS%", dir(folder.lists())),
-                ("%BIN%", dir(folder.bin())),
-                ("%GameFilterTCP%", filter.tcp),
-                ("%GameFilterUDP%", filter.udp),
-                ("%GameFilter%", filter.all),
-            ] {
-                args = replace_ci(&args, var, &value);
-            }
-        }
-        None => {
-            let lower = args.to_ascii_lowercase();
-            if let Some(var) = FLOWSEAL_VARS
-                .iter()
-                .find(|var| lower.contains(&var.to_ascii_lowercase()))
-            {
-                anyhow::bail!("the strategy uses {var}: choose the zapret folder in Settings");
-            }
-        }
     }
     Ok(format!("--chdir=\"{}\" {args}", engine.root().display()))
 }

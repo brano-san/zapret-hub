@@ -13,7 +13,7 @@ pub struct Cover {
 
 /// `--name=value` and `--name value` (Flowseal's final args) as pairs; a flag has an empty value.
 fn options(text: &str) -> Vec<(String, String)> {
-    let tokens: Vec<String> = zapret::custom::quoted_tokens(text)
+    let tokens: Vec<String> = zapret::quoted_tokens(text)
         .into_iter()
         .map(|t| t.replace('"', ""))
         .collect();
@@ -78,7 +78,7 @@ pub fn covers(c: &Cover, protocol: Protocol, port: u16) -> bool {
 
 /// Some profile of `args` (Flowseal's final args or zapret2's `strategies::args`) covers it.
 pub fn strategy_covers(args: &str, protocol: Protocol, port: u16) -> bool {
-    zapret::custom::quoted_tokens(args)
+    zapret::quoted_tokens(args)
         .split(|t| t == "--new" || t.starts_with("--new="))
         .any(|profile| covers(&cover(&profile.join(" ")), protocol, port))
 }
