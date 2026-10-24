@@ -121,7 +121,7 @@ pub(super) fn fill(
         routing: routing.into(),
         proxy: socks5.clone(),
         proxy_alive: socks5.as_ref().map(|_| ctx.proxy_ok),
-        proxy_udp: None,
+        proxy_udp: ctx.proxy_udp,
         egress_ip_direct: egress_ip(None),
         egress_ip_proxy: socks5
             .as_deref()
