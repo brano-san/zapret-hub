@@ -466,3 +466,29 @@ fn a_new_flow_takes_its_rule_and_the_proxy_decision() {
         ("", Some(DirectReason::NoRule))
     );
 }
+
+#[test]
+fn each_udp_flow_can_have_its_own_idle_limit() {
+    let t0 = Instant::now();
+    let flow = |port| FlowKey {
+        protocol: Protocol::Udp,
+        local_port: 50000,
+        dst: format!("10.0.0.1:{port}").parse().unwrap(),
+    };
+    let (dns, voice) = (flow(53), flow(50000));
+    let mut stats = Stats::default();
+    stats.open(dns, "r", Via::Proxy, t0);
+    stats.open(voice, "r", Via::Proxy, t0);
+    let short = |k: &FlowKey| Duration::from_secs(if k.dst.port() == 53 { 5 } else { 30 });
+    let at = |s| t0 + Duration::from_secs(s);
+    assert_eq!(stats.idle_after(at(4), short), [] as [FlowKey; 0]);
+    assert_eq!(stats.idle_after(at(5), short), [dns]);
+    let mut both = stats.idle_after(at(30), short);
+    both.sort_by_key(|k| k.dst.port());
+    assert_eq!(both, [dns, voice]);
+    assert_eq!(
+        stats.idle(at(29)),
+        [] as [FlowKey; 0],
+        "`idle` keeps the 30 s"
+    );
+}

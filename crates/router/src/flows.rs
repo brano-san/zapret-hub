@@ -252,10 +252,17 @@ impl Stats {
 
     /// Open UDP flows without packets for `IDLE` or more; TCP ends with its connection.
     pub fn idle(&self, now: Instant) -> Vec<FlowKey> {
-        let quiet = |f: &Flow| f.closed.is_none() && now.saturating_duration_since(f.last) >= IDLE;
+        self.idle_after(now, |_| IDLE)
+    }
+
+    /// `idle` with a limit per flow (a DNS query needs no 30 s).
+    pub fn idle_after(&self, now: Instant, limit: impl Fn(&FlowKey) -> Duration) -> Vec<FlowKey> {
+        let quiet = |k: &FlowKey, f: &Flow| {
+            f.closed.is_none() && now.saturating_duration_since(f.last) >= limit(k)
+        };
         self.0
             .iter()
-            .filter(|(k, f)| k.protocol == Protocol::Udp && quiet(f))
+            .filter(|(k, f)| k.protocol == Protocol::Udp && quiet(k, f))
             .map(|(k, _)| *k)
             .collect()
     }
