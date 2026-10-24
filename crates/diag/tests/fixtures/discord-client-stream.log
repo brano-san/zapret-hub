@@ -1,0 +1,23 @@
+[2026-10-23 01:50:00.100] [info]  [GatewaySocket] [CONNECT] wss://gateway-us-east1-d.discord.gg, encoding: etf, version: 9, compression: zstd-stream
+[2026-10-23 01:50:00.400] [info]  [GatewaySocket] [CONNECTED] wss://gateway-us-east1-d.discord.gg/?encoding=etf&v=9&compress=zstd-stream in 300 ms
+[2026-10-23 01:50:00.700] [info]  [GatewaySocket] [RESUMED] took 600ms, replayed 0 events, new seq: 10
+[2026-10-23 01:55:00.000] [info]  [RTCControlSocket(default)] [CONNECT] wss://finland14000.discord.media:443/
+[2026-10-23 01:55:00.001] [info]  [RTCConnection(111111111111111111, default)] RTC connection state: AWAITING_ENDPOINT => CONNECTING
+[2026-10-23 01:55:00.250] [info]  [RTCControlSocket(default)] [CONNECTED] wss://finland14000.discord.media:443/ in 249 ms
+[2026-10-23 01:55:00.300] [info]  [Connection(default)] Creating connection to 203.0.113.20:50004 with audio ssrc: 11029
+[2026-10-23 01:55:00.350] [info]  [Connection(default)] Connected with local address 203.0.113.10:16444 and protocol: udp
+[2026-10-23 01:55:00.351] [info]  [RTCConnection(111111111111111111, default)] RTC connection state: RTC_CONNECTING => RTC_CONNECTED
+[2026-10-23 01:55:00.360] [info]  [Connection(default)] Creating user: 111111111111111112 with audio SSRC: 10923 and video SSRCs:
+[2026-10-23 01:55:00.400] [info]  [RTCConnection(111111111111111111, default)] DAVE protocol init with protocol version: 1
+[2026-10-23 01:55:00.401] [info]  [RTCControlSocket(default)] Sending MLS key package
+[2026-10-23 01:55:00.500] [info]  [RTCControlSocket(default)] Received MLS commit
+[2026-10-23 01:55:44.080] [info]  [RTCControlSocket(stream)] [CONNECT] wss://finland14022.discord.media:443/
+[2026-10-23 01:55:44.081] [info]  [RTCConnection(111111111111111113, stream)] RTC connection state: DISCONNECTED => CONNECTING
+[2026-10-23 01:55:44.226] [info]  [RTCControlSocket(stream)] [CONNECTED] wss://finland14022.discord.media:443/ in 147 ms
+[2026-10-23 01:55:44.262] [info]  [Connection(stream)] Creating connection to 203.0.113.30:50008 with audio ssrc: 24136
+[2026-10-23 01:55:50.294] [info]  [Connection(stream)] Connection state change: CONNECTING => NO_ROUTE
+[2026-10-23 01:55:50.295] [info]  [RTCConnection(111111111111111113, stream)] RTC connection state: RTC_CONNECTING => NO_ROUTE
+[2026-10-23 01:55:50.295] [error] [RTCConnection(111111111111111113, stream)] Error occurred while connecting to RTC server: [OnConnectAttemptTimedOut] Connection timed out 3 times.
+[2026-10-23 01:55:50.325] [info]  [RTCControlSocket(stream)] CLOSE
+[2026-10-23 01:55:50.326] [info]  [RTCConnection(111111111111111113, stream)] RTC connection state: NO_ROUTE => RTC_DISCONNECTED
+[2026-10-23 01:55:50.326] [info]  [RTCConnection(111111111111111113, stream)] RTC connection state: RTC_DISCONNECTED => DISCONNECTED

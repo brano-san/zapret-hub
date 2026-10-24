@@ -1,8 +1,11 @@
 //! Read-only readers of the proxy and Discord logs.
 
 pub mod discord;
+pub mod discord_client;
 pub mod neko;
 pub mod neko_routes;
+pub mod steam;
+pub mod webrtc;
 
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom};
@@ -71,5 +74,17 @@ pub fn discord_log_paths() -> Vec<PathBuf> {
                 .join("renderer_js.log")
         })
         .filter(|p| p.is_file())
+        .collect()
+}
+
+/// The `logs` folders of Discord, PTB and Canary that exist.
+pub fn discord_log_dirs() -> Vec<PathBuf> {
+    let Some(appdata) = std::env::var_os("APPDATA") else {
+        return Vec::new();
+    };
+    ["discord", "discordptb", "discordcanary"]
+        .iter()
+        .map(|d| Path::new(&appdata).join(d).join("logs"))
+        .filter(|p| p.is_dir())
         .collect()
 }

@@ -1,0 +1,5 @@
+[2026-10-24 11:40:12] AppID 111 update canceled : Failed downloading 3 manifests (No connection)
+[2026-10-24 21:18:31] Current download rate: 100.123 Mbps
+[2026-10-24 21:19:32] Current download rate: 0.000 Mbps
+[2026-10-24 21:20:57] AppID 111 scheduler finished : removed from schedule (result No Error, state 0xc)
+[2026-10-24 21:24:04] AppID 7 failed to update ownership ticket (Access Denied)

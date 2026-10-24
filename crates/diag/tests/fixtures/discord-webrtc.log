@@ -1,0 +1,27 @@
+[2026-10-24 16:01:42.274] [45696] (udp_socket.cpp:1222): Sending ping to 203.0.113.20:50004, seq: 461
+[2026-10-24 16:01:42.300] [27412] (socket_client.cpp:333): Ping received from 203.0.113.20:50004, seq: 461, rtt: 26
+[2026-10-24 16:01:43.000] [15248] (udp_socket.cpp:1222): Sending ping to 203.0.113.30:50008, seq: 900
+[2026-10-24 16:01:47.103] [45696] (udp_socket.cpp:1222): Sending ping to 203.0.113.20:50004, seq: 462
+[2026-10-24 16:01:47.130] [27412] (socket_client.cpp:333): Ping received from 203.0.113.20:50004, seq: 462, rtt: 27
+[2026-10-24 16:01:52.274] [45696] (udp_socket.cpp:1222): Sending ping to 203.0.113.20:50004, seq: 463
+[2026-10-24 16:01:57.274] [45696] (udp_socket.cpp:1222): Sending ping to 203.0.113.20:50004, seq: 464
+[2026-10-24 16:01:57.330] [27412] (socket_client.cpp:333): Ping received from 203.0.113.20:50004, seq: 464, rtt: 56
+[2026-10-24 16:02:02.274] [45696] (udp_socket.cpp:1222): Sending ping to 203.0.113.20:50004, seq: 465
+[2026-10-24 16:02:19.200] [45696] (udp_socket.cpp:839): Reconnection started, sending echo
+[2026-10-24 16:02:19.239] [45696] (udp_socket.cpp:336): ReconnectionAttemptFinished: socket: 904ac1b0, succeeded: 1, error:
+[2026-10-24 16:02:19.239] [45696] (udp_socket.cpp:339): ReconnectionAttemptFinished: succeeded, local address: 203.0.113.10:37343
+[2026-10-24 16:03:19.200] [15248] (udp_socket.cpp:839): Reconnection started, sending echo
+[2026-10-24 16:03:24.239] [15248] (udp_socket.cpp:336): ReconnectionAttemptFinished: socket: 904ac1c0, succeeded: 0, error: timeout
+[2026-10-24 16:05:11.563] [27412] (connection.cpp:1401): [default] Outbound audio stats for user: 111111111111111111, audio ssrc: 11029, packets sent: 33797, packets skipped: 88530, packets failed to send: 0, packets lost: 0, target bitrate: 64000
+[2026-10-24 16:05:42.010] [27412] (connection.cpp:1592): [default] Transport stats for user: 111111111111111111, rtt: 30 [ms], available bitrate: 10000000 [bps], outbound estimate: 10000000 [bps], remb: 0 [bps], inbound estimate: 0 [bps], ssrcs: 11029: {seq: 45503, tseq: -1},  packets sent: 30890, received: 2314, bytes sent: 1457028, received: 147727
+[2026-10-24 16:05:47.010] [27412] (connection.cpp:1592): [default] Transport stats for user: 111111111111111111, rtt: 30 [ms], available bitrate: 10000000 [bps], outbound estimate: 10000000 [bps], remb: 0 [bps], inbound estimate: 0 [bps], ssrcs: 11029: {seq: 45753, tseq: -1},  packets sent: 31140, received: 2318, bytes sent: 1469028, received: 147927
+[2026-10-24 16:05:42.020] [27412] (connection.cpp:1592): [stream] Transport stats for user: 111111111111111111, rtt: 0 [ms], available bitrate: 4200000 [bps], outbound estimate: 0 [bps], remb: 0 [bps], inbound estimate: 0 [bps], ssrcs: 24136: {seq: 100, tseq: -1},  packets sent: 500, received: 0, bytes sent: 600000, received: 0
+[2026-10-24 16:05:47.020] [27412] (connection.cpp:1592): [stream] Transport stats for user: 111111111111111111, rtt: 0 [ms], available bitrate: 4200000 [bps], outbound estimate: 0 [bps], remb: 0 [bps], inbound estimate: 0 [bps], ssrcs: 24136: {seq: 900, tseq: -1},  packets sent: 1300, received: 0, bytes sent: 1600000, received: 0
+[2026-10-24 16:06:00.000] [27412] (decryptor.cpp:171): Decrypted audio: 180658, video: 103206. Failed audio: 18, video: 0
+[2026-10-24 16:06:01.354] [27412] (decryptor.cpp:153): Decrypt failed, no valid cryptor found, type: audio, encrypted frame size: 184, plaintext frame size: 184, number of cryptor managers: 1, pass through enabled: no
+[2026-10-24 16:06:10.000] [27412] (decryptor.cpp:171): Decrypted audio: 180700, video: 103206. Failed audio: 45, video: 0
+[2026-10-24 16:07:28.971] [30688] (region_latency_tester.cpp:80): Sending 5 latency test pings to region helsinki
+[2026-10-24 16:07:28.971] [30688] (region_latency_tester.cpp:141): Sending latency test ping to IP 203.0.113.40:19300
+[2026-10-24 16:07:29.235] [30688] (region_latency_tester.cpp:317): Average RTT for region helsinki is 259.5
+[2026-10-24 16:07:29.240] [30688] (region_latency_tester.cpp:317): Average RTT for region finland is 31.2
+[2026-10-24 16:07:29.250] [30688] (region_latency_tester.cpp:317): Average RTT for region stockholm is 44

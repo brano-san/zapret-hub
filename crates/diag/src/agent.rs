@@ -147,6 +147,15 @@ pub struct Context {
     pub hub_errors: Vec<String>,
 }
 
+/// Which of the client's connections a culprit group carries (proposal 3, Go Live).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, specta::Type)]
+pub struct CulpritKind {
+    /// The culprit group's key.
+    pub key: String,
+    /// `voice`, `stream`, `other`.
+    pub kind: String,
+}
+
 /// The agent's part of a report; `Summary.agent`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, specta::Type)]
 pub struct AgentView {
@@ -165,4 +174,6 @@ pub struct AgentView {
     pub changes: Vec<Fact>,
     /// Exact CLI commands or `ask_user: …` lines, in order.
     pub next_steps: Vec<String>,
+    /// Culprit groups by the client connection they belong to; Discord only.
+    pub culprit_kinds: Vec<CulpritKind>,
 }
