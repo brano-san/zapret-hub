@@ -423,6 +423,8 @@ fn check_target(target: &Target, extra: bool, cancel: &AtomicBool) -> TargetResu
     }
 }
 
+/// One check at a time: each sends the payload to a host of someone else's, and three uploads at
+/// once to one server would look like more load than the suite means to put on it.
 fn check_dpi(target: &DpiTarget, payload: &Path, cancel: &AtomicBool) -> DpiTargetResult {
     let checks = CheckKind::ALL
         .iter()
