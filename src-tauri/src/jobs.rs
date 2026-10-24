@@ -167,7 +167,10 @@ fn background_check(app: &AppHandle) {
 
 /// Before anything else changes zapret, an interrupted operation is put back (spec 10).
 fn startup(app: &AppHandle, flowseal: Option<PathBuf>) {
-    crate::routing::clear_stale();
+    // A routing start clears it itself; doing it here too would hold the session lock meanwhile.
+    if !state(app).settings().router_enabled {
+        crate::routing::clear_stale();
+    }
     recover(app);
     raise_services(app);
     let state = state(app);

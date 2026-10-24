@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use router::divert::pick_dll;
 use router::{RouterState, RouterStatus, Setup, parse_proxy};
@@ -46,10 +47,15 @@ pub fn clear_stale() {
     }
 }
 
+/// Set once the app is ending: routing stays off.
+static EXITING: AtomicBool = AtomicBool::new(false);
+
 /// On the way out (`RunEvent::Exit`, a signal): Linux routing is the system's table and rules,
 /// which outlive the process; Windows' handles close with it.
 pub fn stop_on_exit(state: &AppState) {
     if cfg!(target_os = "linux") {
+        // A pause ending now (a canceled test run) must not start it again.
+        EXITING.store(true, Ordering::SeqCst);
         // The app is ending: nothing to tell the window or the tray.
         state.router.on_change(|| {});
         state.router.stop();
@@ -70,7 +76,7 @@ pub fn dll(state: &AppState) -> anyhow::Result<PathBuf> {
 /// is already in the router's status.
 pub fn sync(app: &AppHandle) {
     let state = state(app);
-    if !state.settings().router_enabled {
+    if !state.settings().router_enabled || EXITING.load(Ordering::SeqCst) {
         state.router.stop();
         return;
     }

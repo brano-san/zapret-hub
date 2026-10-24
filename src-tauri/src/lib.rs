@@ -275,16 +275,22 @@ pub fn run() -> anyhow::Result<()> {
 }
 
 /// SIGTERM (logout, `kill`), SIGINT (Ctrl+C) and SIGHUP end the app as «Выход» does, routing
-/// stopped first: its table and rules outlive the process. A second signal kills at once.
+/// stopped first: its table and rules outlive the process. Any second signal kills at once.
 #[cfg(target_os = "linux")]
 fn quit_on_signals(app: &tauri::AppHandle) {
     use std::sync::atomic::{AtomicI32, Ordering};
 
     static WRITE: AtomicI32 = AtomicI32::new(-1);
+    const SIGNALS: [libc::c_int; 3] = [libc::SIGTERM, libc::SIGINT, libc::SIGHUP];
     extern "C" fn wake(_: libc::c_int) {
         let byte = 0u8;
-        // SAFETY: write(2) is async-signal-safe; the pipe stays open for the process's life.
-        unsafe { libc::write(WRITE.load(Ordering::Relaxed), (&raw const byte).cast(), 1) };
+        // SAFETY: write(2) is async-signal-safe and never blocks here (O_NONBLOCK); the pipe stays
+        // open for the process's life; errno is put back for the interrupted code.
+        unsafe {
+            let errno = *libc::__errno_location();
+            libc::write(WRITE.load(Ordering::Relaxed), (&raw const byte).cast(), 1);
+            *libc::__errno_location() = errno;
+        }
     }
 
     let mut fds = [0; 2];
@@ -297,11 +303,12 @@ fn quit_on_signals(app: &tauri::AppHandle) {
             );
             return;
         }
+        libc::fcntl(fds[1], libc::F_SETFL, libc::O_NONBLOCK);
         WRITE.store(fds[1], Ordering::Relaxed);
         let mut action: libc::sigaction = std::mem::zeroed();
         action.sa_sigaction = wake as extern "C" fn(libc::c_int) as libc::sighandler_t;
         action.sa_flags = libc::SA_RESETHAND | libc::SA_RESTART;
-        for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+        for signal in SIGNALS {
             libc::sigaction(signal, &raw const action, std::ptr::null_mut());
         }
     }
@@ -310,6 +317,10 @@ fn quit_on_signals(app: &tauri::AppHandle) {
         let mut byte = 0u8;
         // SAFETY: reads one byte into a local.
         if unsafe { libc::read(fds[0], (&raw mut byte).cast(), 1) } == 1 {
+            for signal in SIGNALS {
+                // SAFETY: back to the default action.
+                unsafe { libc::signal(signal, libc::SIG_DFL) };
+            }
             log::info!("quitting on a signal");
             routing::stop_on_exit(&app.state::<AppState>());
             tray::quit(&app);
