@@ -20,5 +20,8 @@ windows = { workspace = true, features = ["Win32_Foundation", "Win32_NetworkMana
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+zapret.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
