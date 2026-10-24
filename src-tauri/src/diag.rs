@@ -294,6 +294,18 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
         log::info!("diagnostics without system checks: {err:#}");
         Vec::new()
     });
+    // Nothing to watch: say so at once instead of after the whole observation.
+    if !ctx.profile.apps.is_empty()
+        && !ctx
+            .profile
+            .apps
+            .iter()
+            .any(|a| zapret::procs::is_running(a))
+    {
+        let summary = diag::next_steps::not_running(&ctx.profile, exec::LocalTime::now().stamp());
+        report::save(&state.paths.diag(), &summary)?;
+        return Ok(summary);
+    }
     // Watching changes nothing: no snapshot yet.
     let (flows, dns) = watch(app, &ctx.profile.apps, observe_secs, true)?;
     let verdict = culprits::verdict(&flows);
@@ -370,6 +382,7 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
     if env.is_some() && summary.rollback_error.is_none() {
         Snapshot::clear(&pending)?;
     }
+    diag::next_steps::fill(&mut summary, &ctx.profile);
     report::save(&state.paths.diag(), &summary)?;
     Ok(summary)
 }
