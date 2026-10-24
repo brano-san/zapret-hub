@@ -34,10 +34,12 @@ pub struct Profile {
     pub probes: Vec<ProbeSpec>,
 }
 
-const BUILTIN: [&str; 3] = [
+const BUILTIN: [&str; 5] = [
     include_str!("builtin/discord.toml"),
     include_str!("builtin/dbd.toml"),
     include_str!("builtin/youtube.toml"),
+    include_str!("builtin/steam.toml"),
+    include_str!("builtin/discord-stream.toml"),
 ];
 
 pub fn builtin() -> Vec<Profile> {

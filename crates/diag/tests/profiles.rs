@@ -1,10 +1,13 @@
 use diag::profiles::{ProbeKind, any_program, builtin, load};
 
 #[test]
-fn builtin_has_three_profiles() {
+fn builtin_has_five_profiles() {
     let p = builtin();
     let ids: Vec<_> = p.iter().map(|p| p.id.as_str()).collect();
-    assert_eq!(ids, ["discord", "dbd", "youtube"]);
+    assert_eq!(
+        ids,
+        ["discord", "dbd", "youtube", "steam", "discord-stream"]
+    );
     // No STUN: Discord media servers do not answer a plain binding request.
     assert_eq!(p[0].probes.len(), 2);
     assert!(p[0].probes.iter().all(|s| s.kind != ProbeKind::Stun));
@@ -28,7 +31,7 @@ fn override_replaces_by_id_and_adds_new() {
     )
     .unwrap();
     let all = load(dir.path()).unwrap();
-    assert_eq!(all.len(), 4);
+    assert_eq!(all.len(), 6);
     assert_eq!(all[1].hint, "X");
     assert_eq!(all.last().unwrap().id, "mine");
 }
@@ -42,7 +45,7 @@ fn a_missing_folder_gives_the_builtins_and_other_files_are_skipped() {
     dbd.hint = "Y".into();
     std::fs::write(dir.path().join("DBD.TOML"), toml::to_string(&dbd).unwrap()).unwrap();
     let all = load(dir.path()).unwrap();
-    assert_eq!((all.len(), all[1].hint.as_str()), (3, "Y"));
+    assert_eq!((all.len(), all[1].hint.as_str()), (5, "Y"));
 }
 
 #[test]
