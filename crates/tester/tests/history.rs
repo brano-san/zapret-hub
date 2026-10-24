@@ -165,3 +165,31 @@ fn runs_and_requests_from_before_repeats_still_load() {
     };
     assert!(too_many.check().is_err());
 }
+
+#[test]
+fn saving_keeps_the_newest_50_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    for day in 1..=55 {
+        std::fs::write(
+            dir.path().join(format!("2026-01-01_00-00-{day:02}.json")),
+            "{}",
+        )
+        .unwrap();
+    }
+    std::fs::write(dir.path().join("notes.txt"), "").unwrap();
+    history::save(
+        dir.path(),
+        &run("2026-10-09_10-00-00", Suite::Standard, false, Vec::new()),
+    )
+    .unwrap();
+    let mut json: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".json"))
+        .collect();
+    json.sort();
+    assert_eq!(json.len(), 50);
+    assert_eq!(json[0], "2026-01-01_00-00-07.json");
+    assert_eq!(json[49], "2026-10-09_10-00-00.json");
+    assert!(dir.path().join("notes.txt").exists());
+}

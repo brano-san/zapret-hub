@@ -1,4 +1,4 @@
-//! `data/tests/<id>.json`: every finished run (spec 7.5).
+//! `data/tests/<id>.json`: the newest 50 finished runs (spec 7.5).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -15,7 +15,29 @@ pub fn save(dir: &Path, run: &TestRun) -> anyhow::Result<()> {
         dir.join(format!("{}.json", run.id)),
         serde_json::to_string(run)?,
     )?;
+    prune(dir);
     Ok(())
+}
+
+/// Runs kept: older files go when a run is saved.
+const KEEP: usize = 50;
+
+/// Only the newest `KEEP` runs stay. The id is the file name, so name order is age order.
+fn prune(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .collect();
+    files.sort_unstable_by(|a, b| b.cmp(a));
+    for path in files.iter().skip(KEEP) {
+        if let Err(err) = std::fs::remove_file(path) {
+            log::error!("old test run kept, {}: {err}", path.display());
+        }
+    }
 }
 
 pub fn load(dir: &Path, id: &str) -> anyhow::Result<TestRun> {
