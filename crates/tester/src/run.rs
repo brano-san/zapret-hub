@@ -235,6 +235,10 @@ fn run_strategies(
         log::warn!("TCP timestamps stay off for the tests: {err:#}");
     }
     warm_dns(work);
+    // One table for the run, gone when this returns or unwinds: before `run` restores the
+    // snapshot, whose service puts its own table back. Refused (pkexec denied): the run fails.
+    #[cfg(target_os = "linux")]
+    let _queue = engine::queue_table(engine2, &request.strategies)?;
     let total = request.strategies.len() as u32;
     let mut done: Vec<Vec<StrategyResult>> = vec![Vec::new(); request.strategies.len()];
     // N whole passes over the list, not N runs of one strategy back to back: the network drifts

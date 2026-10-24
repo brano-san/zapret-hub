@@ -54,6 +54,31 @@ pub fn translate(tail: &str) -> anyhow::Result<Translated> {
     })
 }
 
+/// One table for several strategies (a test run): every port any of them takes, merged; no
+/// arguments.
+pub fn union<'a>(all: impl IntoIterator<Item = &'a Translated>) -> anyhow::Result<Translated> {
+    let (mut tcp, mut udp) = (Vec::new(), Vec::new());
+    for t in all {
+        tcp.extend(
+            t.tcp
+                .split(',')
+                .filter(|p| !p.is_empty())
+                .map(str::to_owned),
+        );
+        udp.extend(
+            t.udp
+                .split(',')
+                .filter(|p| !p.is_empty())
+                .map(str::to_owned),
+        );
+    }
+    Ok(Translated {
+        args: String::new(),
+        tcp: merge_ports(&tcp)?,
+        udp: merge_ports(&udp)?,
+    })
+}
+
 /// Ports and ranges as one nftables set: sorted, overlapping and touching ranges joined (an
 /// anonymous set refuses overlapping intervals: `1024-65535` next to `50000-65535`).
 pub fn merge_ports(ports: &[String]) -> anyhow::Result<String> {
@@ -190,6 +215,19 @@ mod tests {
         .unwrap();
         assert_eq!(t.args, "--intercept=0 --new --lua-desync=fake --qnum=200");
         assert_eq!((t.tcp.as_str(), t.udp.as_str()), ("443", ""));
+    }
+
+    #[test]
+    fn a_union_takes_every_port_of_every_strategy_once() {
+        let a = translate("--wf-tcp-out=80,443 --wf-udp-out=443,50000-65535").unwrap();
+        let b = translate("--wf-tcp-out=443,1024-65535 --wf-udp-out=19294-19344").unwrap();
+        let c = translate("--lua-desync=fake").unwrap();
+        let u = union([&a, &b, &c]).unwrap();
+        assert_eq!(u.tcp, "80,443,1024-65535");
+        assert_eq!(u.udp, "443,19294-19344,50000-65535");
+        assert!(u.args.is_empty(), "{}", u.args);
+        let none = union([]).unwrap();
+        assert_eq!((none.tcp.as_str(), none.udp.as_str()), ("", ""));
     }
 
     #[test]

@@ -75,52 +75,64 @@ pub fn stop_engines() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A started engine, ready and settled. On Linux its nftables table goes when it is dropped.
-pub struct Running(Option<Winws>);
+/// A started engine, ready and settled.
+pub struct Running(Winws);
 
 /// Nothing else filters, the engine starts and reports ready, and has settled. The error is the
-/// launch error a run records. Linux: the queue's table comes first (the excluded ports stay in:
-/// a test measures the strategy by itself).
+/// launch error a run records. Linux: packets reach it only while a [`QueueTable`] stands.
 pub fn start(launch: &Launch) -> anyhow::Result<Running> {
     stop_engines()?;
-    #[cfg(target_os = "linux")]
-    zapret2::nft::apply(&launch.queue, &[]).map_err(|err| anyhow::anyhow!("nftables: {err:#}"))?;
-    // From here a failure drops it, and the table with it.
-    let mut running = Running(None);
-    let winws = Winws::start(&launch.exe, &launch.cwd, &launch.tail).map_err(|err| {
+    let mut winws = Winws::start(&launch.exe, &launch.cwd, &launch.tail).map_err(|err| {
         let image = launch
             .exe
             .file_name()
             .map_or_else(|| "winws".into(), |n| n.to_string_lossy());
         anyhow::anyhow!("{image} did not start: {err}")
     })?;
-    let winws = running.0.insert(winws);
     winws
         .wait_ready(READY)
         .map_err(|output| anyhow::anyhow!(output))?;
     #[cfg(windows)]
     std::thread::sleep(if launch.zapret2 { LUA_SETTLE } else { SETTLE });
-    Ok(running)
+    Ok(Running(winws))
 }
 
 impl Running {
     /// Ended on its own, with its status.
     pub fn exited(&mut self) -> Option<ExitStatus> {
-        self.0.as_mut()?.exited()
+        self.0.exited()
     }
 
     /// Stops it and returns its whole output.
-    pub fn stop(mut self) -> String {
-        self.0.take().map(Winws::stop).unwrap_or_default()
+    pub fn stop(self) -> String {
+        self.0.stop()
     }
 }
 
-/// Linux: the table goes after the engine. Root each time: with pkexec that is a dialog.
-// ponytail: apply and delete per strategy; one table across a run if the dialogs annoy.
+/// Linux: the nftables queue of a whole test run, removed when this is dropped. One table with
+/// every port of the strategies (`nft::union`): root twice per run, not twice per strategy
+/// (with pkexec each is a dialog). A strategy's queue sees the ports the others ask for too; the
+/// checks go to 80 and 443, which every strategy takes. The excluded ports stay in: a test
+/// measures the strategy by itself.
 #[cfg(target_os = "linux")]
-impl Drop for Running {
+pub struct QueueTable(());
+
+/// The table for `names`; a name that does not launch is left out (its run records why).
+#[cfg(target_os = "linux")]
+pub fn queue_table(engine2: Option<&Engine>, names: &[String]) -> anyhow::Result<QueueTable> {
+    let queues: Vec<_> = names
+        .iter()
+        .filter_map(|name| launch(engine2, name).ok())
+        .map(|launch| launch.queue)
+        .collect();
+    zapret2::nft::apply(&zapret2::nft::union(&queues)?, &[])
+        .map_err(|err| anyhow::anyhow!("nftables: {err:#}"))?;
+    Ok(QueueTable(()))
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for QueueTable {
     fn drop(&mut self) {
-        drop(self.0.take());
         zapret2::nft::clear();
     }
 }
