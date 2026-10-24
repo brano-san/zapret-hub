@@ -935,3 +935,26 @@ fn r1_a_proxied_domain_already_through_the_vpn_is_not_a_failure() {
     assert_eq!(verdict(p(None, false, None, false, true)), CLEAN);
     assert!(verdict(p(None, false, None, false, false)).contains("не работает"));
 }
+
+#[test]
+fn every_failed_system_check_is_an_explanation() {
+    use zapret::checks::{CheckId, CheckLevel, SystemCheck};
+    let check = |id, level, detail: &str| SystemCheck {
+        id,
+        level,
+        detail: detail.into(),
+        action: None,
+    };
+    let lines = diag::summary::check_lines(&[
+        check(CheckId::Bfe, CheckLevel::Ok, ""),
+        check(CheckId::Proxy, CheckLevel::Warn, "127.0.0.1:18082"),
+        check(CheckId::Conflicts, CheckLevel::Problem, "GoodbyeDPI"),
+    ]);
+    assert_eq!(
+        lines,
+        [
+            "системная проверка, внимание: включён системный прокси (127.0.0.1:18082)",
+            "системная проверка, проблема: установлены службы других обходов (GoodbyeDPI)",
+        ]
+    );
+}

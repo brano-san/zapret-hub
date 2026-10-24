@@ -577,13 +577,14 @@ pub async fn check_flowseal_update(handle: AppHandle) -> Answer<Option<String>> 
 #[tauri::command]
 #[specta::specta]
 pub async fn system_checks(handle: AppHandle) -> Answer<Vec<SystemCheck>> {
-    blocking(move || {
-        let state = app(&handle);
-        let mut checks = zapret::checks::run_all(&state.folder()?);
-        routing::hide_own_driver(&mut checks, &state.router.status().state);
-        Ok(checks)
-    })
-    .await
+    blocking(move || checks_now(&app(&handle))).await
+}
+
+/// The system checks as the page shows them; diagnostics take them too (read-only).
+pub fn checks_now(state: &AppState) -> anyhow::Result<Vec<SystemCheck>> {
+    let mut checks = zapret::checks::run_all(&state.folder()?);
+    routing::hide_own_driver(&mut checks, &state.router.status().state);
+    Ok(checks)
 }
 
 /// Removing WinDivert under the router's own handles: on a pause (router spec 11).

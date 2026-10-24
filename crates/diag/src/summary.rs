@@ -2,6 +2,7 @@
 
 use router::rules::{Protocol, Rule};
 use serde::{Deserialize, Serialize};
+use zapret::checks::{CheckId, CheckLevel, SystemCheck};
 use zapret::custom::quoted_tokens;
 
 use crate::circular_store::{Trick, is_filter};
@@ -70,6 +71,8 @@ pub struct Summary {
     pub budget_hit: bool,
     pub rollback_error: Option<String>,
     pub sources_missing: Vec<String>,
+    /// `commands::system_checks` at the start (read-only); empty without a zapret folder.
+    pub system_checks: Vec<SystemCheck>,
 }
 
 fn seen(f: &Fault) -> String {
@@ -483,7 +486,50 @@ pub fn summarize(
         budget_hit: outcome.budget_hit,
         rollback_error: outcome.rollback_error.clone(),
         sources_missing: vec![],
+        system_checks: vec![],
     }
+}
+
+/// What a failed system check means, in a word or two.
+fn check_text(id: CheckId) -> &'static str {
+    match id {
+        CheckId::Bfe => "служба Base Filtering Engine не запущена, без неё zapret не работает",
+        CheckId::Proxy => "включён системный прокси",
+        CheckId::TcpTimestamps => "TCP timestamps выключены, а стратегиям они нужны",
+        CheckId::Adguard => "запущен AdGuard, он может мешать Discord",
+        CheckId::Killer => "службы Killer конфликтуют с zapret",
+        CheckId::IntelConnectivity => "служба Intel Connectivity Network конфликтует с zapret",
+        CheckId::CheckPoint => "Check Point конфликтует с zapret",
+        CheckId::SmartByte => "SmartByte конфликтует с zapret",
+        CheckId::CyrillicPath => "в пути к zapret есть кириллица",
+        CheckId::OneDrive => "zapret лежит в папке OneDrive",
+        CheckId::WinDivertSys => "в папке bin нет WinDivert64.sys",
+        CheckId::Vpn => "найдены службы VPN, они могут конфликтовать с zapret",
+        CheckId::SecureDns => "безопасный DNS не настроен",
+        CheckId::HostsYoutube => "в hosts есть записи YouTube",
+        CheckId::WinDivertOrphan => "служба WinDivert работает без winws",
+        CheckId::Conflicts => "установлены службы других обходов",
+    }
+}
+
+/// An explanation line per check that is not `Ok`.
+pub fn check_lines(checks: &[SystemCheck]) -> Vec<String> {
+    checks
+        .iter()
+        .filter(|c| c.level != CheckLevel::Ok)
+        .map(|c| {
+            let level = match c.level {
+                CheckLevel::Problem => "проблема",
+                _ => "внимание",
+            };
+            let detail = if c.detail.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", c.detail)
+            };
+            format!("системная проверка, {level}: {}{detail}", check_text(c.id))
+        })
+        .collect()
 }
 
 /// Keys are `<profile>: <what is probed>` (or just the profile); one warning per regressed key.

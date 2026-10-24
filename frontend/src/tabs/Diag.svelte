@@ -231,6 +231,19 @@
       {#if report.sources_missing.length > 0}<p class="muted">{S.diag.sourcesMissing(report.sources_missing)}</p>{/if}
       {#each report.explanations as text, i (i)}<p>{text}</p>{/each}
 
+      {#if report.system_checks.length > 0}
+        {@const failed = report.system_checks.filter((check) => check.level !== "Ok")}
+        <h3>{S.checks.title}</h3>
+        {#if failed.length === 0}<p class="muted">{S.diag.checksOk}</p>{/if}
+        {#each failed as check (check.id)}
+          <p>
+            <strong>{S.checks.names[check.id]}</strong>
+            <span class="muted">— {S.checks.level[check.level]}{#if check.detail}: {check.detail}{/if}</span>
+            <br />{S.checks.hints[check.id]}
+          </p>
+        {/each}
+      {/if}
+
       {#if report.patterns.length > 0}
         <h3>{S.diag.patterns}</h3>
         {#each report.patterns as pattern, i (i)}<p>{patternTitle(pattern)}</p>{/each}

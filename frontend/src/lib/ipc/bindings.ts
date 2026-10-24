@@ -885,6 +885,8 @@ export type Summary = {
 	budget_hit: boolean,
 	rollback_error: string | null,
 	sources_missing: string[],
+	/**  `commands::system_checks` at the start (read-only); empty without a zapret folder. */
+	system_checks: SystemCheck[],
 };
 
 export type SvcState = "NotInstalled" | "Stopped" | "StartPending" | "StopPending" | "Running" | "Other";

@@ -288,6 +288,11 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
     let ctx = context(&state, folder.as_ref(), engine2.as_ref(), profile);
     let started = Instant::now();
     let marks = Marks::now(&settings);
+    // Read-only, before anything changes; no zapret folder, no checks.
+    let checks = crate::commands::checks_now(&state).unwrap_or_else(|err| {
+        log::info!("diagnostics without system checks: {err:#}");
+        Vec::new()
+    });
     // Watching changes nothing: no snapshot yet.
     let (flows, dns) = watch(app, &ctx.profile.apps, observe_secs, true)?;
     let verdict = culprits::verdict(&flows);
@@ -336,6 +341,8 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
         observe_secs,
     );
     summary.sources_missing = missing;
+    summary.explanations.extend(summary::check_lines(&checks));
+    summary.system_checks = checks;
     if !dns {
         summary.warnings.push(NO_DNS.into());
     }

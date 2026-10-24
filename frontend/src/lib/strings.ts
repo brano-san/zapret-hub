@@ -655,6 +655,7 @@ export const S = {
     best: "лучший",
     history: "История",
     noReports: "Отчётов ещё нет",
+    checksOk: "Все системные проверки в порядке",
     paths: {
       Current: "Как сейчас",
       Direct: "Напрямую мимо всего",
