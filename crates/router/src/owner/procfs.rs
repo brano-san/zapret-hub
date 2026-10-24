@@ -1,0 +1,186 @@
+//! The socket tables and process files of Linux `/proc`.
+
+use std::collections::HashMap;
+
+use crate::rules::Protocol;
+
+/// The IPv4 and IPv6 tables of one protocol (`Both` is TCP, as on Windows).
+fn net_files(protocol: Protocol) -> [&'static str; 2] {
+    match protocol {
+        Protocol::Udp => ["/proc/net/udp", "/proc/net/udp6"],
+        Protocol::Tcp | Protocol::Both => ["/proc/net/tcp", "/proc/net/tcp6"],
+    }
+}
+
+/// TCP's LISTEN in the `st` column.
+const LISTEN: &str = "0A";
+
+/// Socket inodes of the rows of a `/proc/net/{tcp,udp}[6]` table whose local port is `port`
+/// (`None`: any), only LISTEN rows when `listen_only`. Inode 0 (TIME_WAIT) is no socket.
+pub fn table_inodes(text: &str, port: Option<u16>, listen_only: bool) -> Vec<u64> {
+    text.lines()
+        .filter_map(|line| {
+            // `sl local_address rem_address st tx:rx tr:when retrnsmt uid timeout inode ...`
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            let local_port = fields.get(1)?.rsplit_once(':')?.1;
+            let local_port = u16::from_str_radix(local_port, 16).ok()?;
+            if port.is_some_and(|port| port != local_port)
+                || (listen_only && *fields.get(3)? != LISTEN)
+            {
+                return None;
+            }
+            fields.get(9)?.parse().ok().filter(|inode| *inode != 0)
+        })
+        .collect()
+}
+
+/// The inode of a `/proc/<pid>/fd/*` link that names a socket: `socket:[12345]`.
+pub fn socket_inode(link: &str) -> Option<u64> {
+    link.strip_prefix("socket:[")?
+        .strip_suffix(']')?
+        .parse()
+        .ok()
+}
+
+/// `starttime`, field 22 of `/proc/<pid>/stat`; `None` for a zombie.
+pub fn stat_start(stat: &str) -> Option<u64> {
+    // The name (field 2) may hold anything, `) ` too: count from its last `)`.
+    let mut fields = stat.rsplit_once(')')?.1.split_whitespace();
+    if fields.next()? == "Z" {
+        return None;
+    }
+    // Field 3 (the state) is taken: starttime is 19 further.
+    fields.nth(18)?.parse().ok()
+}
+
+fn inodes(protocol: Protocol, port: Option<u16>, listen_only: bool) -> Vec<u64> {
+    net_files(protocol)
+        .iter()
+        .filter_map(|file| std::fs::read_to_string(file).ok())
+        .flat_map(|text| table_inodes(&text, port, listen_only))
+        .collect()
+}
+
+/// Socket inode -> the lowest PID holding it. Other users' fds do not open without root: their
+/// sockets have no owner here.
+fn socket_pids() -> HashMap<u64, u32> {
+    let mut map = HashMap::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return map;
+    };
+    let mut pids: Vec<u32> = entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse().ok())
+        .collect();
+    pids.sort_unstable();
+    for pid in pids {
+        let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
+            continue;
+        };
+        for fd in fds.flatten() {
+            if let Some(inode) = std::fs::read_link(fd.path())
+                .ok()
+                .and_then(|link| socket_inode(link.to_str()?))
+            {
+                map.entry(inode).or_insert(pid);
+            }
+        }
+    }
+    map
+}
+
+/// The first PID holding one of `inodes`.
+// ponytail: walks every process's fds per lookup; cache the map if lookups get hot
+fn owner_of(inodes: &[u64]) -> Option<u32> {
+    if inodes.is_empty() {
+        return None;
+    }
+    let pids = socket_pids();
+    inodes.iter().find_map(|inode| pids.get(inode).copied())
+}
+
+/// PIDs owning UDP sockets now, IPv4 and IPv6 tables, sorted and without duplicates.
+pub fn udp_pids() -> Vec<u32> {
+    let pids = socket_pids();
+    let mut out: Vec<u32> = inodes(Protocol::Udp, None, false)
+        .iter()
+        .filter_map(|inode| pids.get(inode).copied())
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// PID of the process listening on the TCP `port`.
+pub fn listener_pid(port: u16) -> Option<u32> {
+    owner_of(&inodes(Protocol::Tcp, Some(port), true))
+}
+
+/// PID owning the local `local_port` per the socket tables, IPv4 then IPv6 (`Both` is TCP).
+pub fn table_pid(protocol: Protocol, local_port: u16) -> Option<u32> {
+    owner_of(&inodes(protocol, Some(local_port), false))
+}
+
+/// Start time (clock ticks since boot) of a running process; `None` if it is gone or a zombie.
+pub fn process_start(pid: u32) -> Option<u64> {
+    stat_start(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
+}
+
+/// Full path of the process image.
+pub fn image_path(pid: u32) -> Option<String> {
+    let path = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+    Some(path.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TCP: &str = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:0820 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 41236 1 0000000000000000 100 0 0 10 0
+   1: 0100007F:C350 0100007F:0820 01 00000000:00000000 00:00000000 00000000  1000        0 41240 1 0000000000000000 20 4 30 10 -1
+   2: 0100007F:0821 0100007F:9C40 06 00000000:00000000 03:00000F5A 00000000     0        0 0 3 0000000000000000
+";
+
+    #[test]
+    fn a_table_row_names_its_socket_by_local_port() {
+        // 0x0820 = 2080, 0xC350 = 50000.
+        assert_eq!(table_inodes(TCP, Some(2080), false), [41236]);
+        assert_eq!(table_inodes(TCP, Some(50000), false), [41240]);
+        assert_eq!(table_inodes(TCP, Some(50000), true), [] as [u64; 0]);
+        assert_eq!(table_inodes(TCP, Some(2080), true), [41236]);
+        assert_eq!(table_inodes(TCP, None, false), [41236, 41240]);
+        // A TIME_WAIT row has no socket.
+        assert_eq!(table_inodes(TCP, Some(2081), false), [] as [u64; 0]);
+        assert_eq!(
+            table_inodes("garbage\nmore garbage", None, false),
+            [] as [u64; 0]
+        );
+    }
+
+    #[test]
+    fn an_ipv6_row_has_the_port_after_the_last_colon() {
+        let tcp6 = "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000000000000000000001000000:1F90 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 52001 1 0000000000000000 100 0 0 10 0
+";
+        assert_eq!(table_inodes(tcp6, Some(8080), true), [52001]);
+    }
+
+    #[test]
+    fn only_socket_links_have_an_inode() {
+        assert_eq!(socket_inode("socket:[41236]"), Some(41236));
+        assert_eq!(socket_inode("pipe:[41236]"), None);
+        assert_eq!(socket_inode("/dev/null"), None);
+        assert_eq!(socket_inode("socket:[x]"), None);
+    }
+
+    #[test]
+    fn the_start_time_survives_a_name_with_parentheses() {
+        let stat =
+            "4242 (a) b (c) S 1 4242 4242 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 987654 1000 10";
+        assert_eq!(stat_start(stat), Some(987654));
+        let zombie = "4243 (gone) Z 1 4243 4243 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 1 0 987655 0 0";
+        assert_eq!(stat_start(zombie), None);
+        assert_eq!(stat_start("4244 (short) S 1"), None);
+    }
+}

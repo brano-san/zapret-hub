@@ -3,23 +3,14 @@
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 
-use crate::divert::{
-    self, DNS_FILTER, Dll, FLAG_RECV_ONLY, FLAG_SNIFF, Handle, Layer, MAX_FILTER_RANGES, MAX_PACKET,
-};
-use crate::dns::{self, Names};
+use crate::divert::{self, MAX_FILTER_RANGES};
 use crate::flows::{FlowRow, Via};
-use crate::owner::Images;
 use crate::packet::{ACK, RST, SYN, Tcp, parse_tcp, parse_udp};
-use crate::rules::{Protocol, norm_app, runs};
+use crate::rules::Protocol;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, specta::Type)]
 pub struct FlowCounters {
@@ -444,37 +435,10 @@ pub fn mark_routed(flows: &mut [FlowCounters], rows: &[FlowRow]) {
     }
 }
 
-/// Unlike `divert::SOCKET_FILTER`, loopback too: a program's connection to the system proxy is
-/// learnt from its loopback CONNECT.
-const SOCKET_FILTER: &str = "(udp or tcp) and (event == BIND or event == CONNECT)";
 /// Every SYN, SYN-ACK and ClientHello (first byte 22, handshake type 1) of the machine: a new
 /// connection's port joins the filter only after its socket event and a reopen, by when its
 /// first SYN and often its ClientHello have passed.
 const EARLY: &str = "tcp.Syn or (outbound and tcp.Payload[0] == 22 and tcp.Payload[5] == 1)";
-const POLL: Duration = Duration::from_millis(50);
-const REOPEN_GAP: Duration = Duration::from_secs(1);
-
-struct Shared {
-    stopped: AtomicBool,
-    tally: Mutex<Tally>,
-    names: Mutex<Names>,
-    /// The programs' sockets by protocol and local port; never removed during an observation
-    /// (late packets).
-    ports: Mutex<HashSet<(Protocol, u16)>>,
-    sockets: Handle,
-    /// `None` when WinDivert refused it (seen while the router holds its own DNS sniffer): names
-    /// then come from SNI and Host only.
-    dns: Option<Handle>,
-    sniff: Mutex<Option<Arc<Handle>>>,
-}
-
-/// Own passive WinDivert handles (independent of the router's): socket events pick the programs'
-/// ports, a DNS sniffer names addresses, and a network sniffer feeds a `Tally`.
-pub struct Observer {
-    shared: Arc<Shared>,
-    threads: Vec<JoinHandle<()>>,
-}
-
 /// The sniff handle's whole filter: `EARLY` and the programs' ports.
 pub fn sniff_text(ports: &[u16]) -> String {
     match sniff_filter(ports) {
@@ -482,32 +446,6 @@ pub fn sniff_text(ports: &[u16]) -> String {
         None => EARLY.into(),
     }
 }
-
-fn open_sniff(dll: &Dll, ports: &[u16]) -> std::io::Result<Arc<Handle>> {
-    Handle::open(
-        dll,
-        &sniff_text(ports),
-        Layer::Network,
-        FLAG_SNIFF | FLAG_RECV_ONLY,
-    )
-    .map(Arc::new)
-}
-
-fn read_sniff(shared: Arc<Shared>, handle: Arc<Handle>) -> JoinHandle<()> {
-    std::thread::spawn(move || {
-        let mut buf = vec![0u8; MAX_PACKET];
-        while let Ok((n, addr)) = handle.recv(&mut buf) {
-            let mut tally = shared.tally.lock().unwrap();
-            if addr.outbound() {
-                tally.outbound(&buf[..n], Instant::now());
-            } else {
-                tally.inbound(&buf[..n], Instant::now());
-            }
-        }
-    })
-}
-
-const IPPROTO_UDP: u8 = 17;
 
 /// The rows of the programs' sockets: a TCP and a UDP socket may share a port number.
 pub fn of_programs(
@@ -518,148 +456,34 @@ pub fn of_programs(
     rows
 }
 
+#[cfg(windows)]
+mod capture;
+#[cfg(windows)]
+pub use capture::Observer;
+
+/// Observation needs WinDivert: on Linux it never starts.
+#[cfg(not(windows))]
+pub enum Observer {}
+
+#[cfg(not(windows))]
 impl Observer {
-    /// `apps` as in routing rules (a file name or a full path).
-    pub fn start(dll: &Path, apps: Vec<String>, proxy_port: Option<u16>) -> Result<Observer> {
-        let dll = Dll::load(dll)?;
-        let passive = FLAG_SNIFF | FLAG_RECV_ONLY;
-        let sockets = Handle::open(&dll, SOCKET_FILTER, Layer::Socket, passive)
-            .map_err(|e| anyhow!("WinDivert refused the socket handle: {e}"))?;
-        let dns = Handle::open(&dll, DNS_FILTER, Layer::Network, passive)
-            .inspect_err(|e| {
-                log::warn!("observing without DNS names: WinDivert refused the handle: {e}")
-            })
-            .ok();
-        let sniff = open_sniff(&dll, &[])
-            .map_err(|e| anyhow!("WinDivert refused the sniff handle: {e}"))?;
-        let shared = Arc::new(Shared {
-            stopped: AtomicBool::new(false),
-            tally: Mutex::new(Tally::new(proxy_port)),
-            names: Mutex::new(Names::default()),
-            ports: Mutex::new(HashSet::new()),
-            sockets,
-            dns,
-            sniff: Mutex::new(Some(sniff.clone())),
-        });
-        let apps: Vec<String> = apps.iter().map(|a| norm_app(a)).collect();
-        let mut threads = Vec::new();
-
-        let s = shared.clone();
-        threads.push(std::thread::spawn(move || {
-            let images = Images::default();
-            // `SOCKET_FILTER` passes BIND and CONNECT only.
-            while let Ok((_, addr)) = s.sockets.recv(&mut []) {
-                if images
-                    .get(addr.socket_pid())
-                    .is_some_and(|exe| apps.iter().any(|a| runs(a, &exe)))
-                {
-                    let protocol = match addr.socket_protocol() {
-                        IPPROTO_UDP => Protocol::Udp,
-                        _ => Protocol::Tcp,
-                    };
-                    s.ports
-                        .lock()
-                        .unwrap()
-                        .insert((protocol, addr.socket_local_port()));
-                }
-            }
-        }));
-
-        let s = shared.clone();
-        threads.push(std::thread::spawn(move || {
-            let Some(dns) = &s.dns else { return };
-            let mut buf = vec![0u8; MAX_PACKET];
-            while let Ok((n, _)) = dns.recv(&mut buf) {
-                if let Some(answer) = parse_udp(&buf[..n]).and_then(|u| dns::parse(u.payload)) {
-                    s.names.lock().unwrap().record(&answer, Instant::now());
-                }
-            }
-        }));
-
-        // Ticks the UDP windows and reopens the sniff handle when the ports change: the old one
-        // stops and its reader drains first, so no packet is counted twice or out of order (a few
-        // may be missed in between).
-        let s = shared.clone();
-        threads.push(std::thread::spawn(move || {
-            let mut reader = Some(read_sniff(s.clone(), sniff));
-            let mut current: Vec<u16> = vec![];
-            let mut opened: Option<Instant> = None;
-            while !s.stopped.load(Ordering::SeqCst) {
-                std::thread::sleep(POLL);
-                s.tally.lock().unwrap().tick(Instant::now());
-                let mut wanted: Vec<u16> = s.ports.lock().unwrap().iter().map(|k| k.1).collect();
-                wanted.sort_unstable();
-                wanted.dedup();
-                if wanted == current || opened.is_some_and(|at| at.elapsed() < REOPEN_GAP) {
-                    continue;
-                }
-                if let Some(old) = s.sniff.lock().unwrap().take() {
-                    old.shutdown();
-                }
-                // Bounded: recv fails once the shut handle's queue is drained.
-                if let Some(r) = reader.take() {
-                    let _ = r.join();
-                }
-                match open_sniff(&dll, &wanted) {
-                    Ok(h) => {
-                        reader = Some(read_sniff(s.clone(), h.clone()));
-                        *s.sniff.lock().unwrap() = Some(h);
-                        current = wanted;
-                    }
-                    // Retried after the gap: the old handle is already shut.
-                    Err(e) => log::warn!("observe: WinDivert refused the sniff filter: {e}"),
-                }
-                opened = Some(Instant::now());
-            }
-            if let Some(h) = s.sniff.lock().unwrap().take() {
-                h.shutdown();
-            }
-            if let Some(r) = reader {
-                let _ = r.join();
-            }
-        }));
-        Ok(Observer { shared, threads })
+    pub fn start(
+        _dll: &std::path::Path,
+        _apps: Vec<String>,
+        _proxy_port: Option<u16>,
+    ) -> anyhow::Result<Observer> {
+        anyhow::bail!("flow observation is unavailable on Linux")
     }
 
-    /// The programs' flows so far, named from DNS where known.
     pub fn snapshot(&self) -> Vec<FlowCounters> {
-        let ports = self.shared.ports.lock().unwrap().clone();
-        let mut rows = of_programs(self.shared.tally.lock().unwrap().rows(), &ports);
-        let names = self.shared.names.lock().unwrap();
-        let now = Instant::now();
-        for r in &mut rows {
-            if let Ok(SocketAddr::V4(dst)) = r.dst.parse() {
-                r.domain = names.name_of(*dst.ip(), now).map(str::to_string);
-            }
-        }
-        rows
+        match *self {}
     }
 
-    /// False when WinDivert refused the DNS sniffer: flows then carry SNI or Host names only.
     pub fn has_dns(&self) -> bool {
-        self.shared.dns.is_some()
+        match *self {}
     }
 
-    pub fn stop(mut self) -> Vec<FlowCounters> {
-        self.halt();
-        self.shared.tally.lock().unwrap().finish(Instant::now());
-        self.snapshot()
-    }
-
-    fn halt(&mut self) {
-        self.shared.stopped.store(true, Ordering::SeqCst);
-        self.shared.sockets.shutdown();
-        if let Some(dns) = &self.shared.dns {
-            dns.shutdown();
-        }
-        for t in self.threads.drain(..) {
-            let _ = t.join();
-        }
-    }
-}
-
-impl Drop for Observer {
-    fn drop(&mut self) {
-        self.halt();
+    pub fn stop(self) -> Vec<FlowCounters> {
+        match self {}
     }
 }

@@ -9,11 +9,7 @@ use crate::packet::{ACK, FIN, RST, SYN, Tcp};
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddrV4, TcpStream};
-use std::os::windows::io::AsRawSocket;
 use std::time::{Duration, Instant};
-use windows::Win32::Networking::WinSock::{
-    LINGER as SockLinger, SO_LINGER, SOCKET, SOL_SOCKET, setsockopt,
-};
 
 pub const IDLE: Duration = Duration::from_secs(120);
 /// After FIN both ways or an RST, for the last ACK.
@@ -248,6 +244,18 @@ pub fn pipe(
 
 /// Closes `stream` with a zero linger, so the peer gets an RST.
 pub fn reset(stream: TcpStream) {
+    zero_linger(&stream);
+    drop(stream);
+}
+
+#[cfg(windows)]
+fn zero_linger(stream: &TcpStream) {
+    use std::os::windows::io::AsRawSocket as _;
+
+    use windows::Win32::Networking::WinSock::{
+        LINGER as SockLinger, SO_LINGER, SOCKET, SOL_SOCKET, setsockopt,
+    };
+
     let linger = SockLinger {
         l_onoff: 1,
         l_linger: 0,
@@ -265,5 +273,25 @@ pub fn reset(stream: TcpStream) {
             Some(bytes),
         );
     }
-    drop(stream);
+}
+
+#[cfg(unix)]
+fn zero_linger(stream: &TcpStream) {
+    use std::os::fd::AsRawFd as _;
+
+    let linger = libc::linger {
+        l_onoff: 1,
+        l_linger: 0,
+    };
+    // SAFETY: `stream` owns a live socket for the call; the pointer and size are those of
+    // `linger`, which outlives it. A failure only leaves the normal close.
+    unsafe {
+        libc::setsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_LINGER,
+            (&raw const linger).cast(),
+            size_of::<libc::linger>() as libc::socklen_t,
+        );
+    }
 }

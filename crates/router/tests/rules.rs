@@ -14,7 +14,12 @@ fn the_discord_voice_preset_is_the_spec() {
             protocol: Protocol::Udp,
             ports: vec!["19294-19344".into(), "50000-65535".into()],
             ips: vec!["104.29.0.0/16".into(), "35.217.0.0/16".into()],
-            domains: vec!["discord.media".into()],
+            domains: vec![
+                "discord.media".into(),
+                "discordcdn.com".into(),
+                "discord.dev".into(),
+                "discordstatus.com".into(),
+            ],
             apps: vec![],
         }
     );
@@ -123,7 +128,10 @@ fn the_whole_discord_preset_is_the_spec() {
             "discord.gg",
             "discordapp.com",
             "discordapp.net",
-            "discord.media"
+            "discord.media",
+            "discordcdn.com",
+            "discord.dev",
+            "discordstatus.com"
         ]
     );
     assert!(whole.ips.is_empty() && whole.ports.is_empty());
@@ -334,13 +342,21 @@ fn the_dbd_preset_is_the_spec() {
         ("Dead by Daylight", Protocol::Both)
     );
     assert_eq!(dbd.apps, ["DeadByDaylight-Win64-Shipping.exe"]);
-    assert_eq!(dbd.domains, ["bhvrdbd.com"]);
+    assert_eq!(
+        dbd.domains,
+        [
+            "bhvrdbd.com",
+            "steam.live.bhvrdbd.com",
+            "deadbydaylight.com",
+            "bhvronline.com"
+        ]
+    );
     assert!(dbd.ips.is_empty() && dbd.ports.is_empty());
     assert!(rules::check(&dbd).is_empty());
 }
 
 #[test]
-fn apps_are_exe_names_or_full_paths() {
+fn apps_are_exe_names_or_full_paths_and_on_linux_process_names() {
     let fields = |apps: &[&str]| {
         rules::check(&app_rule("a", Protocol::Udp, &[], apps))
             .into_iter()
@@ -358,16 +374,25 @@ fn apps_are_exe_names_or_full_paths() {
         .is_empty()
     );
     for bad in [
-        "Discord",
         "",
         " ",
+        " discord",
         r"Games\x.exe",
         "*.exe",
         "a?.exe",
         "x.exe:stream",
-        r"C:\Games\notes.txt",
     ] {
         assert_eq!(fields(&[bad]), ["apps"], "{bad:?}");
+    }
+    // A Linux program has no extension and lives under /usr/bin; on Windows that is a typo.
+    for app in [
+        "Discord",
+        "steam",
+        "/usr/bin/discord",
+        r"C:\Games\notes.txt",
+    ] {
+        let expected: &[&str] = if cfg!(windows) { &["apps"] } else { &[] };
+        assert_eq!(fields(&[app]), expected, "{app:?}");
     }
     assert_eq!(fields(&[]), ["ips"], "a rule needs ips, domains or apps");
 }
@@ -377,7 +402,7 @@ fn apps_parse_and_a_bad_one_names_its_line() {
     let ok = "[[rule]]\nname = \"a\"\nprotocol = \"udp\"\napps = [\"Discord.exe\"]\n";
     assert_eq!(rules::parse(ok).unwrap()[0].apps, ["Discord.exe"]);
     let bad =
-        "[[rule]]\nname = \"a\"\nprotocol = \"udp\"\nips = [\"1.1.1.1\"]\napps = [\"Discord\"]\n";
+        "[[rule]]\nname = \"a\"\nprotocol = \"udp\"\nips = [\"1.1.1.1\"]\napps = [\"a?.exe\"]\n";
     let err = rules::parse(bad).unwrap_err();
     assert_eq!((err.line, err.field.as_deref()), (Some(5), Some("apps")));
     let old = "[[rule]]\nname = \"a\"\nprotocol = \"udp\"\nips = [\"1.1.1.1\"]\n";
@@ -468,4 +493,130 @@ fn a_udp_app_rule_runs_while_its_program_runs() {
         !tcp.idle_apps() && !tcp.with_running(&[r"C:\x.exe"]).rules[0].running,
         "TCP needs only SYNs"
     );
+}
+
+#[test]
+fn the_new_presets_are_their_spec_and_valid() {
+    let cloudflare = rules::preset(Preset::Cloudflare);
+    assert_eq!(
+        (cloudflare.name.as_str(), cloudflare.protocol),
+        ("Cloudflare", Protocol::Both)
+    );
+    assert_eq!(
+        cloudflare.domains,
+        [
+            "cloudflare.com",
+            "cloudflare-dns.com",
+            "cloudflare.net",
+            "cloudflareclient.com",
+            "pages.dev",
+            "workers.dev",
+            "trycloudflare.com",
+            "cloudflareinsights.com",
+            "cfargotunnel.com",
+            "one.one.one.one"
+        ]
+    );
+    assert_eq!(cloudflare.ips, ["1.1.1.1"]);
+    assert!(rules::check(&cloudflare).is_empty());
+
+    let telegram = rules::preset(Preset::Telegram);
+    assert_eq!(
+        (telegram.name.as_str(), telegram.protocol),
+        ("Telegram", Protocol::Both)
+    );
+    assert_eq!(telegram.ports, ["443", "80", "5222"]);
+    assert_eq!(
+        telegram.ips,
+        [
+            "149.154.160.0/20",
+            "91.108.4.0/22",
+            "91.108.56.0/22",
+            "91.108.8.0/22",
+            "91.108.12.0/22",
+            "91.108.16.0/22",
+            "91.108.20.0/22",
+            "91.105.192.0/23",
+            "185.76.151.0/24"
+        ]
+    );
+    assert_eq!(
+        telegram.domains,
+        [
+            "telegram.org",
+            "t.me",
+            "telegra.ph",
+            "tdesktop.com",
+            "telesco.pe"
+        ]
+    );
+    assert!(rules::check(&telegram).is_empty());
+
+    let twitch = rules::preset(Preset::Twitch);
+    assert_eq!(
+        (twitch.name.as_str(), twitch.protocol),
+        ("Twitch", Protocol::Both)
+    );
+    assert_eq!(
+        twitch.domains,
+        [
+            "twitch.tv",
+            "twitchcdn.net",
+            "ext-twitch.tv",
+            "ttvnw.net",
+            "jtvnw.net"
+        ]
+    );
+    assert!(rules::check(&twitch).is_empty());
+}
+
+#[test]
+fn a_net_is_an_inclusive_range_without_host_bits() {
+    assert_eq!(
+        rules::parse_net("10.0.0.0/8"),
+        Some((0x0A00_0000, 0x0AFF_FFFF))
+    );
+    assert_eq!(
+        rules::parse_net("1.2.3.4/24"),
+        Some((0x0102_0300, 0x0102_03FF))
+    );
+    assert_eq!(
+        rules::parse_net("1.2.3.4"),
+        Some((0x0102_0304, 0x0102_0304))
+    );
+    assert_eq!(rules::parse_net("0.0.0.0/0"), Some((0, u32::MAX)));
+    for bad in ["1.2.3.4/33", "1.2.3", "example.com", "1.2.3.4/x", ""] {
+        assert_eq!(rules::parse_net(bad), None, "{bad:?}");
+    }
+}
+
+#[test]
+fn the_rule_for_a_name_or_an_address_is_the_first_that_covers_it() {
+    let table = Table::new(&[
+        rules::preset(Preset::Telegram),
+        rules::preset(Preset::Discord),
+        rules::preset(Preset::DiscordVoice),
+    ]);
+    assert_eq!(
+        table.rule_for("gateway.discord.gg", None),
+        Some("Discord целиком")
+    );
+    // `discord.media` is in both Discord rules: file order decides.
+    assert_eq!(
+        table.rule_for("x.discord.media", None),
+        Some("Discord целиком")
+    );
+    assert_eq!(
+        table.rule_for("unknown.example", Some("35.217.1.2".parse().unwrap())),
+        Some("Discord голос")
+    );
+    assert_eq!(
+        table.rule_for("", Some("149.154.167.51".parse().unwrap())),
+        Some("Telegram")
+    );
+    assert_eq!(
+        table.rule_for("example.com", Some("8.8.8.8".parse().unwrap())),
+        None
+    );
+    assert_eq!(table.rule_for("example.com", None), None);
 }

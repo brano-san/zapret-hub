@@ -34,6 +34,9 @@ pub enum Protocol {
 pub enum Preset {
     DiscordVoice,
     Discord,
+    Cloudflare,
+    Telegram,
+    Twitch,
     #[serde(rename = "dbd")]
     Dbd,
 }
@@ -73,7 +76,12 @@ pub fn preset(preset: Preset) -> Rule {
             protocol: Protocol::Udp,
             ports: vec!["19294-19344".into(), "50000-65535".into()],
             ips: vec!["104.29.0.0/16".into(), "35.217.0.0/16".into()],
-            domains: vec!["discord.media".into()],
+            domains: vec![
+                "discord.media".into(),
+                "discordcdn.com".into(),
+                "discord.dev".into(),
+                "discordstatus.com".into(),
+            ],
             apps: vec![],
         },
         Preset::Discord => Rule {
@@ -88,6 +96,77 @@ pub fn preset(preset: Preset) -> Rule {
                 "discordapp.com",
                 "discordapp.net",
                 "discord.media",
+                "discordcdn.com",
+                "discord.dev",
+                "discordstatus.com",
+            ]
+            .map(String::from)
+            .into(),
+            apps: vec![],
+        },
+        Preset::Cloudflare => Rule {
+            name: "Cloudflare".into(),
+            enabled: true,
+            protocol: Protocol::Both,
+            ports: vec![],
+            ips: vec!["1.1.1.1".into()],
+            domains: [
+                "cloudflare.com",
+                "cloudflare-dns.com",
+                "cloudflare.net",
+                "cloudflareclient.com",
+                "pages.dev",
+                "workers.dev",
+                "trycloudflare.com",
+                "cloudflareinsights.com",
+                "cfargotunnel.com",
+                "one.one.one.one",
+            ]
+            .map(String::from)
+            .into(),
+            apps: vec![],
+        },
+        Preset::Telegram => Rule {
+            name: "Telegram".into(),
+            enabled: true,
+            protocol: Protocol::Both,
+            ports: vec!["443".into(), "80".into(), "5222".into()],
+            ips: [
+                "149.154.160.0/20",
+                "91.108.4.0/22",
+                "91.108.56.0/22",
+                "91.108.8.0/22",
+                "91.108.12.0/22",
+                "91.108.16.0/22",
+                "91.108.20.0/22",
+                "91.105.192.0/23",
+                "185.76.151.0/24",
+            ]
+            .map(String::from)
+            .into(),
+            domains: [
+                "telegram.org",
+                "t.me",
+                "telegra.ph",
+                "tdesktop.com",
+                "telesco.pe",
+            ]
+            .map(String::from)
+            .into(),
+            apps: vec![],
+        },
+        Preset::Twitch => Rule {
+            name: "Twitch".into(),
+            enabled: true,
+            protocol: Protocol::Both,
+            ports: vec![],
+            ips: vec![],
+            domains: [
+                "twitch.tv",
+                "twitchcdn.net",
+                "ext-twitch.tv",
+                "ttvnw.net",
+                "jtvnw.net",
             ]
             .map(String::from)
             .into(),
@@ -99,7 +178,14 @@ pub fn preset(preset: Preset) -> Rule {
             protocol: Protocol::Both,
             ports: vec![],
             ips: vec![],
-            domains: vec!["bhvrdbd.com".into()],
+            domains: [
+                "bhvrdbd.com",
+                "steam.live.bhvrdbd.com",
+                "deadbydaylight.com",
+                "bhvronline.com",
+            ]
+            .map(String::from)
+            .into(),
             apps: vec!["DeadByDaylight-Win64-Shipping.exe".into()],
         },
     }
@@ -112,7 +198,7 @@ fn parse_port(s: &str) -> Option<(u16, u16)> {
 }
 
 /// `a.b.c.d` or `a.b.c.d/n` as an inclusive range; host bits are zeroed.
-fn parse_net(s: &str) -> Option<(u32, u32)> {
+pub fn parse_net(s: &str) -> Option<(u32, u32)> {
     let (ip, bits) = match s.split_once('/') {
         Some((ip, n)) => (ip, n.parse::<u32>().ok().filter(|n| *n <= 32)?),
         None => (s, 32),
@@ -172,13 +258,23 @@ pub fn covers(domain: &str, name: &str) -> bool {
             .is_some_and(|head| head.ends_with('.'))
 }
 
-/// A file name or an absolute path, either ending in .exe.
+/// Like `is_absolute`, but on Linux the Windows forms (`C:\`, `\\server`) count too: a rules file
+/// is written the same way on any OS.
+fn absolute_path(a: &str) -> bool {
+    Path::new(a).is_absolute()
+        || (cfg!(not(windows))
+            && (a.starts_with(r"\\") || (a.len() > 2 && a.as_bytes()[1] == b':')))
+}
+
+/// A file name or an absolute path ending in .exe; on Linux also a process name (`discord`) or
+/// its path (`/usr/bin/discord`).
 fn valid_app(a: &str) -> bool {
     let stem = a.len().checked_sub(4).filter(|&i| a.is_char_boundary(i));
-    let named = stem.is_some_and(|i| i > 0 && a[i..].eq_ignore_ascii_case(".exe"));
-    named
+    let exe = stem.is_some_and(|i| i > 0 && a[i..].eq_ignore_ascii_case(".exe"));
+    let process = cfg!(not(windows)) && !a.is_empty() && a.trim() == a;
+    (exe || process)
         && !a.contains(['*', '?', '"', '<', '>', '|'])
-        && (Path::new(a).is_absolute() || !a.contains(['\\', '/', ':']))
+        && (absolute_path(a) || !a.contains(['\\', '/', ':']))
 }
 
 /// Lowercase with backslash separators: how programs are compared.
@@ -236,9 +332,15 @@ pub fn check(rule: &Rule) -> Vec<FieldError> {
         if !valid_app(a) {
             out.push(err(
                 "apps",
-                format!(
-                    "\"{a}\" is not a program: write its file name like Discord.exe or its full path like C:\\Games\\Discord.exe"
-                ),
+                if cfg!(windows) {
+                    format!(
+                        "\"{a}\" is not a program: write its file name like Discord.exe or its full path like C:\\Games\\Discord.exe"
+                    )
+                } else {
+                    format!(
+                        "\"{a}\" is not a program: write its name like discord or its full path like /usr/bin/discord"
+                    )
+                },
             ));
         }
     }
@@ -636,6 +738,22 @@ impl Table {
         self.rules
             .iter()
             .any(|r| r.domains.iter().any(|d| covers(d, name)))
+    }
+
+    /// Name of the first rule (file order) whose domains cover `name` (lowercase) or whose
+    /// subnets hold `ip`.
+    pub fn rule_for(&self, name: &str, ip: Option<Ipv4Addr>) -> Option<&str> {
+        self.rules
+            .iter()
+            .find(|r| {
+                r.domains.iter().any(|d| covers(d, name))
+                    || ip.is_some_and(|ip| {
+                        r.ranges
+                            .iter()
+                            .any(|&(a, b)| (a..=b).contains(&u32::from(ip)))
+                    })
+            })
+            .map(|r| r.name.as_str())
     }
 
     /// Adds each resolved IP to the rules whose domains cover its name.

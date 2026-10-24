@@ -7,14 +7,17 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use super::{Live, spawn};
 use crate::divert::{Address, Handle, MAX_PACKET};
+use crate::dns;
+use crate::flows::ProxyState;
 use crate::flows::{self, DirectReason, FlowKey, QUEUE, Via};
 use crate::owner::{self, PID_WAIT};
 use crate::packet::{self, ACK, SYN, Tcp, parse_tcp, parse_udp, rewrite_tcp};
 use crate::rules::Protocol;
+use crate::rules::Table;
 use crate::socks::{self, OPEN_TIMEOUT, SocksError};
 use crate::tcp::{self, Verdict};
-use crate::{Live, ProxyState, Table, dns, spawn};
 
 impl Live {
     /// Through the handle that captured the packet (it still sends while draining after a stop),

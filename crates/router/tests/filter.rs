@@ -1,9 +1,8 @@
 use router::divert::{
-    FILTER_BUDGET, MAX_FILTER_RANGES, capture_filter, filter, pick_dll, refused, refused_for_good,
+    FILTER_BUDGET, MAX_FILTER_RANGES, capture_filter, filter, refused, refused_for_good,
 };
 use router::rules::{self, Preset, Protocol, Rule, Table};
 use std::net::Ipv4Addr;
-use std::path::{Path, PathBuf};
 
 fn rule(ports: &[&str], ips: &[&str]) -> Rule {
     Rule {
@@ -284,8 +283,12 @@ fn many_ports_still_fit_the_budget() {
     );
 }
 
+#[cfg(windows)]
 #[test]
 fn the_dll_comes_from_the_zapret2_folder() {
+    use router::divert::pick_dll;
+    use std::path::{Path, PathBuf};
+
     let winws2 = Path::new(r"D:\zapret2\binaries\windows-x86_64");
     let dll = PathBuf::from(r"D:\zapret2\binaries\windows-x86_64\WinDivert.dll");
     assert_eq!(pick_dll(Some(winws2), |_| true).unwrap(), dll);
@@ -297,6 +300,7 @@ fn the_dll_comes_from_the_zapret2_folder() {
     assert!(pick_dll(None, |_| true).is_err());
 }
 
+#[cfg(windows)]
 #[test]
 fn a_missing_dll_is_named_with_the_windows_error() {
     let dir = tempfile::tempdir().unwrap();

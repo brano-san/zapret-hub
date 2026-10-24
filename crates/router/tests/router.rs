@@ -16,6 +16,13 @@ fn a_new_router_is_off_and_pause_stop_resume_are_harmless() {
     assert!(r.flows(true).is_empty());
 }
 
+/// Why a start fails here: no WinDivert.dll in a temporary folder, or no routing at all.
+const UNAVAILABLE: &str = if cfg!(windows) {
+    "WinDivert.dll"
+} else {
+    "routing is not supported on Linux yet"
+};
+
 #[test]
 fn a_missing_dll_makes_it_unavailable_with_the_reason() {
     let dir = tempfile::tempdir().unwrap();
@@ -27,7 +34,7 @@ fn a_missing_dll_makes_it_unavailable_with_the_reason() {
     assert!(r.start(setup).is_err());
     match r.status().state {
         RouterState::Unavailable { reason } => {
-            assert!(reason.contains("WinDivert.dll"), "{reason}")
+            assert!(reason.contains(UNAVAILABLE), "{reason}")
         }
         other => panic!("{other:?}"),
     }
@@ -159,7 +166,7 @@ fn a_start_during_a_pause_waits_for_resume() {
     );
     r.resume();
     assert!(
-        matches!(r.status().state, RouterState::Unavailable { reason } if reason.contains("WinDivert.dll"))
+        matches!(r.status().state, RouterState::Unavailable { reason } if reason.contains(UNAVAILABLE))
     );
 }
 
@@ -223,7 +230,7 @@ fn a_domain_rule_is_saved_and_its_names_are_wanted() {
         rules::load(&dir.path().join("routes.toml")).unwrap()[0]
             .domains
             .len(),
-        5
+        8
     );
 }
 

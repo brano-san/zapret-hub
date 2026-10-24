@@ -1,4 +1,5 @@
 //! Opens WinDivert: every test needs an elevated terminal and `WINDIVERT_DLL=<path to WinDivert.dll>`.
+#![cfg(windows)]
 use router::divert::{Dll, FLAG_RECV_ONLY, FLAG_SNIFF, Handle, Layer, MAX_PACKET, SOCKET_FILTER};
 use router::packet::parse_udp;
 use std::net::UdpSocket;
