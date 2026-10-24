@@ -341,34 +341,18 @@ fn pattern_texts(patterns: &[Pattern], explanations: &mut Vec<String>, fixes: &m
             }
             Pattern::R4DnsSpoofed { domain } => spoofed.push(domain.as_str()),
             Pattern::R5Whitelist => {}
-            Pattern::R6DaveStalled {
-                alone,
-                direct,
-                ..
-            } => {
-                if *alone {
-                    explanations.push(
-                        "вы один в канале, а Discord не создал группу шифрования: сбой на нашей стороне"
-                            .into(),
-                    );
-                    push(
-                        fixes,
-                        Fix::Manual {
-                            text: "проверьте служебный канал голоса (*.discord.media) напрямую и через VPN".into(),
-                        },
-                    );
-                } else {
-                    explanations.push(
-                        "сеть в порядке: соединение с голосовым сервером есть, но собеседник не прислал ключи шифрования"
-                            .into(),
-                    );
-                    push(
-                        fixes,
-                        Fix::Manual {
-                            text: "пусть собеседник перезайдёт или перезапустит Discord; проверить себя — зайти в канал одному".into(),
-                        },
-                    );
-                }
+            // `alone` is never set now: alone, DAVE waits for a peer (`judge`).
+            Pattern::R6DaveStalled { direct, .. } => {
+                explanations.push(
+                    "сеть в порядке: соединение с голосовым сервером есть, но собеседник не прислал ключи шифрования"
+                        .into(),
+                );
+                push(
+                    fixes,
+                    Fix::Manual {
+                        text: "пусть собеседник перезайдёт или перезапустит Discord; проверить себя — зайти в канал одному".into(),
+                    },
+                );
                 if *direct {
                     push(
                         fixes,

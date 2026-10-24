@@ -345,7 +345,8 @@ fn r6_with_peer_blames_peer() {
 }
 
 #[test]
-fn r6_alone_blames_us() {
+fn r6_alone_is_not_a_fault() {
+    // Alone, DAVE waits for a second participant: normal (domain review, 3 local sessions).
     let mut e = evidence();
     e.voice = Some(voice(vec![], 20));
     e.neko = Some(vec![Conn {
@@ -356,20 +357,9 @@ fn r6_alone_blames_us() {
         from_port: None,
     }]);
     let p = detect(&e, &empty(), &ctx());
-    assert_eq!(
-        p,
-        vec![Pattern::R6DaveStalled {
-            alone: true,
-            control_route: Some("напрямую".into()),
-            direct: true,
-        }]
-    );
+    assert!(p.is_empty(), "{p:?}");
     let s = summarize(&Verdict::Clean, &empty(), &p, &ctx(), ID.into(), 30);
-    assert!(!s.explanations.iter().any(|x| x.contains("собеседник")));
-    assert!(s.fixes.contains(&Fix::Manual {
-        text: "Настройки → Маршрутизация → Basic: убрать discord.media из Direct, добавить в Proxy"
-            .into()
-    }));
+    assert!(s.fixes.is_empty());
 }
 
 #[test]
