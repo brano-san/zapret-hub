@@ -212,6 +212,7 @@ pub const ROUTER_ON: &str = "Маршрутизация: вкл";
 pub const ROUTER_OFF: &str = "Маршрутизация: выкл";
 pub const ROUTER_FAILED: &str = "Маршрутизация не включилась";
 
+#[cfg(target_os = "linux")]
 pub const SERVICE_RAISE_FAILED: &str = "Служба zapret2 не запустилась после загрузки";
 
 pub const TG_WS_RAISE_FAILED: &str = "TG WS Proxy не запустился";

@@ -8,7 +8,9 @@ use tauri::AppHandle;
 use tauri_specta::Event as _;
 use tester::model::{Suite, TestRun};
 use tester::run::{Progress, Request};
-use zapret::service::{QuickCheck, SvcState, active};
+#[cfg(target_os = "linux")]
+use zapret::service::active;
+use zapret::service::{QuickCheck, SvcState};
 use zapret::snapshot::{Snapshot, pending_path};
 
 use crate::actions::{self, state};
@@ -206,18 +208,21 @@ fn startup(app: &AppHandle, flowseal: Option<PathBuf>) {
 /// turns the tray green. Windows' service manager does this itself. TG WS Proxy comes up on
 /// both when it is on (Windows: it is the app's own child).
 fn raise_services(app: &AppHandle) {
-    let (name, _) = active();
-    let down = cfg!(target_os = "linux")
-        && zapret::service::strategy().is_some()
-        && zapret::service::config(name).is_some_and(|config| config.auto_start)
-        && zapret::service::state(name) != SvcState::Running;
-    if down && let Err(err) = state(app).in_turn(|| zapret::service::start(name)) {
-        actions::notice(
-            app,
-            NoticeLevel::Error,
-            texts::SERVICE_RAISE_FAILED,
-            format!("{err:#}"),
-        );
+    // Never a polkit dialog nobody asked for at login: without `sudo -n` the notice says so.
+    #[cfg(target_os = "linux")]
+    {
+        let (name, _) = active();
+        let down = zapret::service::strategy().is_some()
+            && zapret::service::config(name).is_some_and(|config| config.auto_start)
+            && zapret::service::state(name) != SvcState::Running;
+        if down && let Err(err) = state(app).in_turn(|| zapret::service::start_unprompted(name)) {
+            actions::notice(
+                app,
+                NoticeLevel::Error,
+                texts::SERVICE_RAISE_FAILED,
+                format!("{err:#}"),
+            );
+        }
     }
     if let Err(err) = crate::tgws::raise(app) {
         actions::notice(

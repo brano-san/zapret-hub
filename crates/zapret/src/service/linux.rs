@@ -345,6 +345,20 @@ pub fn start(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `start` without a polkit dialog (root or `sudo -n` only): for what the hub does on its own.
+pub fn start_unprompted(name: &str) -> anyhow::Result<()> {
+    let unit = unit_name(name);
+    crate::root::run_unprompted("systemctl", &["start", &unit])
+        .with_context(|| {
+            format!(
+                "{unit} is enabled but down and was not started: that needs root without a \
+                 password (sudo -n); start it in Tools or apply the strategy again"
+            )
+        })?
+        .check()?;
+    Ok(())
+}
+
 pub fn stop(name: &str) -> anyhow::Result<()> {
     if matches!(
         state(name),
@@ -370,7 +384,8 @@ pub fn logs(name: &str) -> anyhow::Result<String> {
         .or_else(|| crate::root::run_unprompted("journalctl", &args).and_then(lines))
         .with_context(|| {
             format!(
-                "the journal of {unit} is empty or unreadable for this user:                  run `journalctl -u {unit}` as root or join the systemd-journal group"
+                "the journal of {unit} is empty or unreadable for this user: \
+                 run `journalctl -u {unit}` as root or join the systemd-journal group"
             )
         })
 }
