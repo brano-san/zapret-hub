@@ -31,9 +31,15 @@ const UNAVAILABLE: u8 = 3;
 /// `tests wait`, `tests run --wait` or `diag run --wait` reached `--timeout`.
 const TIMED_OUT: u8 = 4;
 
-const ERROR_FILE_NOT_FOUND: i32 = 2;
-const ERROR_ACCESS_DENIED: i32 = 5;
+/// Windows: every instance of the pipe stayed taken.
 const ERROR_PIPE_BUSY: i32 = 231;
+
+/// The app's program, as the user knows it.
+const APP: &str = if cfg!(windows) {
+    "zapret-hub.exe"
+} else {
+    "zapret-hub"
+};
 
 /// How long a busy pipe is tried again (spec 7).
 const BUSY: Duration = Duration::from_secs(10);
@@ -490,7 +496,7 @@ fn main() -> ExitCode {
 }
 
 fn send(request: &Request) -> io::Result<Vec<u8>> {
-    cli::pipe::request(cli::pipe::NAME, cli::encode(request).as_bytes(), BUSY)
+    cli::pipe::request(&cli::pipe::name(), cli::encode(request).as_bytes(), BUSY)
 }
 
 /// Prints the outcome and turns it into the exit code (spec 7).
@@ -525,16 +531,23 @@ fn answer(line: io::Result<Vec<u8>>) -> Result<Value, Fail> {
 fn unavailable(err: &io::Error) -> String {
     match err.raw_os_error() {
         // Also an app whose pipe stopped: `start` would only show its window.
-        Some(ERROR_FILE_NOT_FOUND) => {
-            "Zapret Hub is not running: start it with `zapret-hub-cli start` or run zapret-hub.exe \
+        _ if err.kind() == io::ErrorKind::NotFound => format!(
+            "Zapret Hub is not running: start it with `zapret-hub-cli start` or run {APP} \
              (if it is in the tray, its CLI pipe is closed: quit it from the tray and start it again)"
+        ),
+        _ if err.kind() == io::ErrorKind::PermissionDenied && cfg!(windows) => {
+            "Zapret Hub's pipe did not let this program in: it answers only the Windows user who \
+             started Zapret Hub, outside sandboxes"
                 .to_owned()
         }
-        Some(ERROR_ACCESS_DENIED) => "Zapret Hub's pipe did not let this program in: it answers \
-                                       only the Windows user who started Zapret Hub, outside \
-                                       sandboxes"
-            .to_owned(),
-        Some(ERROR_PIPE_BUSY) => "Zapret Hub's pipe stayed busy for 10 s: try again".to_owned(),
+        _ if err.kind() == io::ErrorKind::PermissionDenied => {
+            "Zapret Hub's socket did not let this program in: it answers only the user who \
+             started Zapret Hub, and root"
+                .to_owned()
+        }
+        Some(ERROR_PIPE_BUSY) if cfg!(windows) => {
+            "Zapret Hub's pipe stayed busy for 10 s: try again".to_owned()
+        }
         // `pipe::request` had sent the whole line: the app may have run it before it stopped.
         None if err.kind() == io::ErrorKind::UnexpectedEof => {
             "Zapret Hub closed the connection without a full answer, so the command may have run: \
@@ -1248,24 +1261,7 @@ fn start() -> Result<Done, Fail> {
     if let Some(version) = running()? {
         return Ok(started(version));
     }
-    let ran = exec::run(
-        Process::new("schtasks.exe").args(["/Run", "/TN", cli::AUTOSTART_TASK]),
-        START_WAIT,
-        None,
-    );
-    if let Err(err) = ran
-        .map_err(anyhow::Error::from)
-        .and_then(exec::Output::check)
-    {
-        return Err(Fail::new(
-            UNAVAILABLE,
-            format!(
-                "the autostart task «{}» did not run: start zapret-hub.exe yourself or turn \
-                 autostart on in its Settings\n\n{err:#}",
-                cli::AUTOSTART_TASK
-            ),
-        ));
-    }
+    launch()?;
     let deadline = Instant::now() + START_WAIT;
     while Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(500));
@@ -1279,10 +1275,59 @@ fn start() -> Result<Done, Fail> {
     ))
 }
 
+/// Runs the app's autostart task: the app as the user set it up, elevated if it asked to be.
+#[cfg(windows)]
+fn launch() -> Result<(), Fail> {
+    exec::run(
+        Process::new("schtasks.exe").args(["/Run", "/TN", cli::AUTOSTART_TASK]),
+        START_WAIT,
+        None,
+    )
+    .map_err(anyhow::Error::from)
+    .and_then(exec::Output::check)
+    .map(drop)
+    .map_err(|err| {
+        Fail::new(
+            UNAVAILABLE,
+            format!(
+                "the autostart task «{}» did not run: start {APP} yourself or turn autostart on                  in its Settings
+
+{err:#}",
+                cli::AUTOSTART_TASK
+            ),
+        )
+    })
+}
+
+/// Starts the app from this CLI's folder, on its own: it outlives the CLI, so not through `exec`.
+#[cfg(not(windows))]
+fn launch() -> Result<(), Fail> {
+    use std::os::unix::process::CommandExt as _;
+    use std::process::Stdio;
+    let app = std::env::current_exe()
+        .ok()
+        .and_then(|cli| Some(cli.parent()?.join(APP)))
+        .unwrap_or_else(|| PathBuf::from(APP));
+    Process::new(&app)
+        .arg("--autostart")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map(drop)
+        .map_err(|err| {
+            Fail::new(
+                UNAVAILABLE,
+                format!("{} did not start: {err}", app.display()),
+            )
+        })
+}
+
 /// The app's version; `None` while there is no pipe.
 fn running() -> Result<Option<Value>, Fail> {
     match send(&Request::AppVersion) {
-        Err(err) if err.raw_os_error() == Some(ERROR_FILE_NOT_FOUND) => Ok(None),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
         exchanged => answer(exchanged).map(Some),
     }
 }
@@ -1571,7 +1616,7 @@ mod tests {
             Err(Fail::new(UNAVAILABLE, "the CLI is off"))
         );
         assert_eq!(code(answer(line("<html>")).map(Done::Json)), UNAVAILABLE);
-        let absent = answer(Err(io::Error::from_raw_os_error(ERROR_FILE_NOT_FOUND))).unwrap_err();
+        let absent = answer(Err(io::ErrorKind::NotFound.into())).unwrap_err();
         assert_eq!(absent.code, UNAVAILABLE);
         assert!(absent.error.contains("not running"), "{}", absent.error);
         // An app whose pipe stopped is not running for the CLI, and `start` only shows its window.
@@ -1580,11 +1625,13 @@ mod tests {
             "{}",
             absent.error
         );
-        let busy = answer(Err(io::Error::from_raw_os_error(ERROR_PIPE_BUSY))).unwrap_err();
-        assert!(busy.error.contains("busy"), "{}", busy.error);
-        let denied = answer(Err(io::Error::from_raw_os_error(ERROR_ACCESS_DENIED))).unwrap_err();
+        if cfg!(windows) {
+            let busy = answer(Err(io::Error::from_raw_os_error(ERROR_PIPE_BUSY))).unwrap_err();
+            assert!(busy.error.contains("busy"), "{}", busy.error);
+        }
+        let denied = answer(Err(io::ErrorKind::PermissionDenied.into())).unwrap_err();
         assert_eq!(denied.code, UNAVAILABLE);
-        assert!(denied.error.contains("Windows user"), "{}", denied.error);
+        assert!(denied.error.contains("user who"), "{}", denied.error);
         // The pipe's "closed without a full answer" is no os error, and the app may have run the
         // command by then: the text says how to find out.
         let closed = answer(Err(io::ErrorKind::UnexpectedEof.into())).unwrap_err();

@@ -1,6 +1,7 @@
 //! The pipe in one process, without elevation: a pipe made by the current user changes nothing
 //! in the system and goes away with the test.
 
+#[cfg(windows)]
 use std::os::windows::io::AsRawHandle as _;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -12,11 +13,29 @@ const BUSY: Duration = Duration::from_secs(10);
 /// Tests run in parallel: a name each.
 fn unique() -> String {
     static NEXT: AtomicU32 = AtomicU32::new(0);
+    let folder = if cfg!(windows) {
+        r"\\.\pipe".to_owned()
+    } else {
+        std::env::temp_dir().to_string_lossy().into_owned()
+    };
+    let separator = std::path::MAIN_SEPARATOR;
     format!(
-        r"\\.\pipe\zapret-hub-cli-test-{}-{}",
+        "{folder}{separator}zapret-hub-cli-test-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::SeqCst)
     )
+}
+
+/// A client that only writes: no line protocol, no waiting for an answer.
+fn raw(name: &str) -> impl std::io::Write {
+    #[cfg(windows)]
+    return std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(name)
+        .unwrap();
+    #[cfg(not(windows))]
+    return std::os::unix::net::UnixStream::connect(name).unwrap();
 }
 
 fn serve(name: &str, handler: impl Fn(&[u8]) -> String + Send + Sync + 'static) {
@@ -41,15 +60,19 @@ fn a_second_server_cannot_take_the_name() {
     let name = unique();
     let _first = Server::bind(&name).unwrap();
     let Err(second) = Server::bind(&name) else {
-        panic!("FILE_FLAG_FIRST_PIPE_INSTANCE let a second server in");
+        panic!("a second server got in");
     };
-    assert_eq!(second.raw_os_error(), Some(5), "{second}");
+    assert_eq!(
+        second.kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "{second}"
+    );
 }
 
 #[test]
-fn no_server_means_file_not_found() {
+fn no_server_means_not_found() {
     let err = pipe::request(&unique(), b"{}", BUSY).unwrap_err();
-    assert_eq!(err.raw_os_error(), Some(2), "{err}");
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound, "{err}");
 }
 
 #[test]
@@ -85,11 +108,7 @@ fn a_client_that_leaves_before_its_answer_does_not_stop_the_server() {
         std::thread::sleep(Duration::from_millis(300));
         String::from_utf8_lossy(line).into_owned()
     });
-    let mut gone = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&name)
-        .unwrap();
+    let mut gone = raw(&name);
     gone.write_all(b"bye\n").unwrap();
     drop(gone);
     std::thread::sleep(Duration::from_millis(500));
@@ -112,11 +131,7 @@ fn a_line_its_client_never_finished_reaches_no_handler() {
     });
     // The server waits in ConnectNamedPipe by now, so it does read what the client wrote.
     std::thread::sleep(Duration::from_millis(300));
-    let mut gone = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&name)
-        .unwrap();
+    let mut gone = raw(&name);
     gone.write_all(b"x").unwrap();
     drop(gone);
     assert_eq!(
@@ -147,6 +162,7 @@ fn an_oversized_line_is_cut_and_still_answered() {
     );
 }
 
+#[cfg(windows)]
 #[test]
 fn the_descriptor_names_this_user() {
     let sid = pipe::current_user_sid().unwrap();
@@ -157,6 +173,7 @@ fn the_descriptor_names_this_user() {
     );
 }
 
+#[cfg(windows)]
 #[test]
 fn the_pipe_lets_in_system_administrators_and_this_user_only() {
     use windows::Win32::Foundation::{HANDLE, HLOCAL, LocalFree};
@@ -219,6 +236,7 @@ fn the_pipe_lets_in_system_administrators_and_this_user_only() {
     assert!(sddl.contains("(ML;;NWNR;;;ME)"), "{sddl}");
 }
 
+#[cfg(windows)]
 #[test]
 fn the_app_can_identify_the_cli_but_not_act_as_it() {
     use std::fs::File;
@@ -290,4 +308,43 @@ fn the_app_can_identify_the_cli_but_not_act_as_it() {
     });
     pipe::request(&name, b"who", BUSY).unwrap();
     assert_eq!(app.join().unwrap(), SecurityIdentification);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_socket_lives_in_the_runtime_folder_else_in_tmp_per_user() {
+    use std::ffi::OsStr;
+    use std::path::Path;
+
+    let path = pipe::socket_path(Some(OsStr::new("/run/user/1000")), 1000);
+    assert_eq!(path, Path::new("/run/user/1000/zapret-hub.sock"));
+    let fallback = Path::new("/tmp/zapret-hub-1000.sock");
+    assert_eq!(pipe::socket_path(None, 1000), fallback);
+    // An empty or relative XDG_RUNTIME_DIR is invalid by the spec.
+    assert_eq!(pipe::socket_path(Some(OsStr::new("")), 1000), fallback);
+    assert_eq!(pipe::socket_path(Some(OsStr::new("run")), 1000), fallback);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn only_its_user_may_open_the_socket() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let name = unique();
+    let _server = Server::bind(&name).unwrap();
+    let mode = std::fs::metadata(&name).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_socket_left_by_a_crashed_server_is_taken_over() {
+    let name = unique();
+    // A dead server: its socket file stays, its lock went with the process.
+    drop(std::os::unix::net::UnixListener::bind(&name).unwrap());
+    assert!(std::path::Path::new(&name).exists());
+    let err = pipe::request(&name, b"{}", BUSY).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound, "{err}");
+    serve(&name, |line| String::from_utf8_lossy(line).into_owned());
+    assert_eq!(pipe::request(&name, b"back", BUSY).unwrap(), b"back");
 }

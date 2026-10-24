@@ -2,7 +2,7 @@
 //! request run by the same `commands::*` the window calls, so the queue, the snapshots, `changed()`
 //! and the error texts are the window's.
 
-use ::cli::pipe::{NAME, Server};
+use ::cli::pipe::{Server, name};
 use ::cli::{Request, Response};
 use serde_json::Value;
 use tauri::async_runtime::block_on;
@@ -14,26 +14,25 @@ use crate::dto::NoticeLevel;
 use crate::state::AppState;
 use crate::texts;
 
-/// ERROR_ACCESS_DENIED from the first instance: another program holds the name.
-const NAME_TAKEN: i32 = 5;
-
 /// Called once from `setup`. The pipe is open even while the CLI is off: every request is checked
 /// against the setting, so the switch works without a restart (spec 12, decision 3).
 pub fn start(app: &AppHandle) {
-    let server = match Server::bind(NAME) {
+    let name = name();
+    let server = match Server::bind(&name) {
         Ok(server) => server,
         Err(err) => {
-            log::error!("cli: {NAME} is not open: {err}");
-            let title = if err.raw_os_error() == Some(NAME_TAKEN) {
+            log::error!("cli: {name} is not open: {err}");
+            // Another program holds the name.
+            let title = if err.kind() == std::io::ErrorKind::PermissionDenied {
                 texts::CLI_PIPE_BUSY
             } else {
                 texts::CLI_PIPE_FAILED
             };
-            actions::notice(app, NoticeLevel::Error, title, format!("{NAME}: {err}"));
+            actions::notice(app, NoticeLevel::Error, title, format!("{name}: {err}"));
             return;
         }
     };
-    log::info!("cli: listening on {NAME}");
+    log::info!("cli: listening on {name}");
     let app = app.clone();
     std::thread::spawn(move || {
         let clients = app.clone();
@@ -41,12 +40,12 @@ pub fn start(app: &AppHandle) {
             serde_json::to_string(&handle(&clients, line)).expect("an answer is plain data")
         });
         // No instance is left: zapret-hub-cli now takes the app for not running.
-        log::error!("cli: {NAME} stopped: {err}");
+        log::error!("cli: {name} stopped: {err}");
         actions::notice(
             &app,
             NoticeLevel::Error,
             texts::CLI_PIPE_STOPPED,
-            format!("{NAME}: {err}"),
+            format!("{name}: {err}"),
         );
     });
 }
