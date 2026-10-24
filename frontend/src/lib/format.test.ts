@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Fix, Rule, StrategyResult } from "./ipc/bindings";
-import { copyStem, faultText, fixApplies, fixText, fixWarnings, pathLabel, patternTitle, scoreWorks, defaultTestable, blockSummary, bytes, programName, proxyLabel, routeDraft, routeSummary, viaLabel, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
+import { copyStem, hostGroup, optionalHost, faultText, fixApplies, fixText, fixWarnings, pathLabel, patternTitle, scoreWorks, defaultTestable, blockSummary, bytes, programName, proxyLabel, routeDraft, routeSummary, viaLabel, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
 import { S } from "./strings";
 
 describe("blockSummary", () => {
@@ -272,5 +272,20 @@ describe("diagnostics", () => {
     expect(fixWarnings(add, fixes, [...warnings, taken])).toEqual([warnings[2], taken]);
     expect(fixWarnings(alt, fixes, [taken])).toEqual([]);
     expect(fixWarnings({ kind: "Manual", text: "x" }, fixes, warnings)).toEqual([]);
+  });
+});
+
+describe("hostGroup", () => {
+  it("names the hosts with a column of their own", () => {
+    expect(hostGroup("https://store.steampowered.com")).toBe("steam");
+    expect(hostGroup("https://api.epicgames.dev")).toBe("epic");
+    expect(hostGroup("https://steam.live.bhvrdbd.com")).toBe("dbd");
+    expect(hostGroup("https://discord.com")).toBeNull();
+    expect(hostGroup(null)).toBeNull();
+  });
+  it("hides Epic and DbD behind the games checkbox, not Steam", () => {
+    expect(optionalHost("https://api.epicgames.dev")).toBe(true);
+    expect(optionalHost("https://steam.live.bhvrdbd.com")).toBe(true);
+    expect(optionalHost("https://store.steampowered.com")).toBe(false);
   });
 });

@@ -79,6 +79,20 @@ export function estimateMinutes(count: number, suite: Suite, repeats = 1): numbe
 /** The choices of «Повторов» (`tester::run::MAX_REPEATS`). */
 export const REPEATS = [1, 2, 3, 4, 5] as const;
 
+/** The hosts with a results column of their own: Steam's store, Epic Online Services and the DbD game server (`tester::rank`). */
+export function hostGroup(url: string | null): "steam" | "epic" | "dbd" | null {
+  if (url?.includes("store.steampowered.com")) return "steam";
+  if (url?.includes("api.epicgames.dev")) return "epic";
+  if (url?.includes("steam.live.bhvrdbd.com")) return "dbd";
+  return null;
+}
+
+/** Whether a target's rows hide behind the «Доп. игры (Epic, DbD)» checkbox. */
+export function optionalHost(url: string | null): boolean {
+  const group = hostGroup(url);
+  return group === "epic" || group === "dbd";
+}
+
 /** The lowest and highest of the passes' median latencies; `null` unless two passes had one. */
 export function latencySpread(result: StrategyResult): { min: number; max: number } | null {
   const values = (result.passes ?? []).map((pass) => pass.score.median_ms).filter((value) => value !== null);
