@@ -1,4 +1,9 @@
-use zapret::hosts::{merge, needs_update, plan};
+use zapret::hosts::{NL, merge, needs_update, plan};
+
+/// The expected text with the platform's line break.
+fn nl(text: &str) -> String {
+    text.replace("\r\n", NL)
+}
 
 #[test]
 fn needs_update_compares_the_first_and_the_last_line() {
@@ -16,16 +21,20 @@ fn merge_replaces_only_its_own_block() {
     let first = merge("127.0.0.1 localhost\r\n", "1.2.3.4 a.com");
     assert_eq!(
         first,
-        "127.0.0.1 localhost\r\n\r\n# zapret-hub begin\r\n1.2.3.4 a.com\r\n# zapret-hub end\r\n"
+        nl(
+            "127.0.0.1 localhost\r\n\r\n# zapret-hub begin\r\n1.2.3.4 a.com\r\n# zapret-hub end\r\n"
+        )
     );
     let second = merge(&first, "5.6.7.8 b.com\r\n");
     assert_eq!(
         second,
-        "127.0.0.1 localhost\r\n\r\n# zapret-hub begin\r\n5.6.7.8 b.com\r\n# zapret-hub end\r\n"
+        nl(
+            "127.0.0.1 localhost\r\n\r\n# zapret-hub begin\r\n5.6.7.8 b.com\r\n# zapret-hub end\r\n"
+        )
     );
     assert_eq!(
         merge("", "x"),
-        "# zapret-hub begin\r\nx\r\n# zapret-hub end\r\n"
+        nl("# zapret-hub begin\r\nx\r\n# zapret-hub end\r\n")
     );
 }
 
@@ -44,7 +53,9 @@ fn merge_keeps_the_lines_after_an_unterminated_begin() {
     let merged = merge(current, "5.6.7.8 b.com");
     assert_eq!(
         merged,
-        "127.0.0.1 localhost\r\n1.2.3.4 mine.com\r\n\r\n# zapret-hub begin\r\n5.6.7.8 b.com\r\n# zapret-hub end\r\n"
+        nl(
+            "127.0.0.1 localhost\r\n1.2.3.4 mine.com\r\n\r\n# zapret-hub begin\r\n5.6.7.8 b.com\r\n# zapret-hub end\r\n"
+        )
     );
     assert_eq!(
         merge(&merged, "5.6.7.8 b.com"),
@@ -57,7 +68,7 @@ fn merge_keeps_the_lines_after_an_unterminated_begin() {
         "a\r\n# zapret-hub begin\r\nx\r\n# zapret-hub begin\r\nold\r\n# zapret-hub end\r\ny\r\n";
     assert_eq!(
         merge(current, "new"),
-        "a\r\nx\r\ny\r\n\r\n# zapret-hub begin\r\nnew\r\n# zapret-hub end\r\n"
+        nl("a\r\nx\r\ny\r\n\r\n# zapret-hub begin\r\nnew\r\n# zapret-hub end\r\n")
     );
 }
 

@@ -1,7 +1,8 @@
-//! Running processes: finding `winws.exe` and its arguments, stopping it, starting it again,
-//! and the winws the tests run themselves.
+//! Running processes: finding the engine and its arguments, stopping it, starting it again,
+//! and the engine the tests run themselves.
 
 use std::io::Read;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -50,6 +51,7 @@ pub fn is_running(image: &str) -> bool {
     !find(image).is_empty()
 }
 
+#[cfg(windows)]
 /// `taskkill /IM <image> /F`, when one runs. A process that ends between the check and taskkill
 /// makes taskkill fail: with none left that is done; otherwise the error carries taskkill's output.
 /// taskkill returns once termination is asked for, not done: this waits until the processes are
@@ -79,6 +81,38 @@ pub fn kill_all(image: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// SIGKILL to every process named `image` but this one, then waits until the name is gone, so
+/// their queue and sockets are closed before what comes next starts.
+#[cfg(target_os = "linux")]
+pub fn kill_all(image: &str) -> anyhow::Result<()> {
+    use sysinfo::Pid;
+    let started = Instant::now();
+    loop {
+        let alive: Vec<Pid> = find(image)
+            .into_iter()
+            .filter(|proc| proc.pid != std::process::id())
+            .map(|proc| Pid::from_u32(proc.pid))
+            .collect();
+        if alive.is_empty() {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            started.elapsed() < Duration::from_secs(10),
+            "{image} is still running 10 s after SIGKILL ({alive:?}): it may be root's, stop its service"
+        );
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&alive),
+            true,
+            ProcessRefreshKind::nothing(),
+        );
+        for proc in system.processes().values() {
+            proc.kill();
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// Starts a process from a snapshot again, without a window, not waiting for it. It gets no
 /// standard handles: a long-lived winws must not hold a pipe of ours open.
 pub fn spawn_detached(proc: &Proc) -> anyhow::Result<()> {
@@ -90,8 +124,9 @@ pub fn spawn_detached(proc: &Proc) -> anyhow::Result<()> {
     cmd.args(&proc.args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(exec::CREATE_NO_WINDOW);
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    cmd.creation_flags(exec::CREATE_NO_WINDOW);
     if let Some(dir) = exe.parent() {
         cmd.current_dir(dir);
     }
@@ -111,16 +146,19 @@ pub struct Winws {
 }
 
 impl Winws {
-    /// `"<exe>" <tail>` in `cwd`, no window: Flowseal's `bin\winws.exe` from `bin`, zapret2's
-    /// `winws2.exe` from its root.
+    /// `"<exe>" <tail>` in `cwd`, no window: the engine from zapret2's root. Windows passes
+    /// `tail` as it is; Linux splits it as a command line (quotes group, then go).
     pub fn start(exe: &Path, cwd: &Path, tail: &str) -> std::io::Result<Self> {
-        let mut child = Command::new(exe)
-            .raw_arg(tail)
+        let mut command = Command::new(exe);
+        #[cfg(windows)]
+        command.raw_arg(tail).creation_flags(exec::CREATE_NO_WINDOW);
+        #[cfg(target_os = "linux")]
+        command.args(crate::spawn_tokens(tail));
+        let mut child = command
             .current_dir(cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .creation_flags(exec::CREATE_NO_WINDOW)
             .spawn()?;
         let output = Arc::new(Mutex::new(Vec::new()));
         let mut readers = Vec::new();
@@ -159,28 +197,45 @@ impl Winws {
         })
     }
 
-    /// Waits until winws reports capture started (winws2: `windivert initialized. capture is
-    /// started.`), exits, or `max` passes. One that exited is a launch error: `Err` carries its exit
-    /// status and output.
+    /// Waits until the engine is ready, exits, or `max` passes. Windows: winws2 reports capture
+    /// started (`windivert initialized. capture is started.`). Linux: nfqws2 says nothing a pipe
+    /// shows in time, so ready is its queue bound in `/proc/net/netfilter/nfnetlink_queue`, which
+    /// happens after its Lua init, plus a short settle. One that exited is a launch error: `Err`
+    /// carries its exit status and output.
     pub fn wait_ready(&mut self, max: Duration) -> Result<(), String> {
         let started = Instant::now();
         loop {
-            if let Ok(Some(status)) = self.child.try_wait() {
-                // The pipes close with the process: once the readers end, the output is whole.
-                for reader in self.readers.drain(..) {
-                    let _ = reader.join();
-                }
-                return Err(format!(
-                    "{} exited ({status}):\n{}",
-                    self.image,
-                    self.output_text()
-                ));
+            if let Some(error) = self.exited_error() {
+                return Err(error);
             }
-            if self.output_text().contains("capture is started") || started.elapsed() >= max {
+            if started.elapsed() >= max {
                 return Ok(());
             }
-            std::thread::sleep(Duration::from_millis(50));
+            #[cfg(windows)]
+            if self.output_text().contains("capture is started") {
+                return Ok(());
+            }
+            #[cfg(target_os = "linux")]
+            if queue::bound(queue::QNUM) {
+                std::thread::sleep(queue::SETTLE);
+                return self.exited_error().map_or(Ok(()), Err);
+            }
+            std::thread::sleep(Duration::from_millis(25));
         }
+    }
+
+    /// The status and whole output of an engine that ended by itself: the pipes close with the
+    /// process, so once the readers end the output is whole.
+    fn exited_error(&mut self) -> Option<String> {
+        let status = self.child.try_wait().ok().flatten()?;
+        for reader in self.readers.drain(..) {
+            let _ = reader.join();
+        }
+        Some(format!(
+            "{} exited ({status}):\n{}",
+            self.image,
+            self.output_text()
+        ))
     }
 
     pub fn output_text(&self) -> String {
@@ -212,5 +267,60 @@ impl Drop for Winws {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+/// The kernel's NFQUEUE list, where nfqws2 shows it is ready.
+#[cfg(target_os = "linux")]
+pub mod queue {
+    use std::time::Duration;
+
+    /// The queue the nftables table fills and `nfqws2 --qnum=` binds (`zapret2::nft`).
+    pub const QNUM: u32 = 200;
+    pub const FILE: &str = "/proc/net/netfilter/nfnetlink_queue";
+    /// After the queue is bound: the last of the init reaching the pipes.
+    pub const SETTLE: Duration = Duration::from_millis(150);
+
+    /// The queue file: read directly, else through `sudo -n` (the kernel makes it `0440 root`).
+    /// Never pkexec: this is polled, a dialog per poll is not an option. `None` when neither works.
+    pub fn text() -> Option<String> {
+        std::fs::read_to_string(FILE).ok().or_else(|| {
+            crate::root::run_unprompted("cat", &[FILE])
+                .filter(exec::Output::success)
+                .map(|out| out.stdout)
+        })
+    }
+
+    /// Queue `qnum` held by a live listener: its line, then a `peer_portid` other than 0.
+    pub fn bound(qnum: u32) -> bool {
+        text()
+            .and_then(|text| parse(&text, qnum))
+            .is_some_and(|(portid, _)| portid != 0)
+    }
+
+    /// `(peer_portid, queue_total)` of queue `qnum`. The kernel writes, in order: the queue
+    /// number, the listener's netlink port, the packets waiting, then counters
+    /// (`  200  159031     0 2 65531 0 0 254  1`).
+    pub fn parse(text: &str, qnum: u32) -> Option<(u32, u32)> {
+        text.lines().find_map(|line| {
+            let mut fields = line.split_whitespace();
+            (fields.next()?.parse::<u32>().ok()? == qnum).then_some(())?;
+            Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn a_queue_line_yields_the_port_and_the_packets() {
+            let text = "  100 1 0 2 65531 0 0 1 1\n  200  159031     0 2 65531 0 0 254  1\n";
+            assert_eq!(parse(text, 200), Some((159031, 0)));
+            assert_eq!(parse("200 0 3 2 65531", 200), Some((0, 3)));
+            assert_eq!(parse("300 1 2", 200), None);
+            assert_eq!(parse("2000 1 2", 200), None);
+            assert_eq!(parse("", 200), None);
+        }
     }
 }

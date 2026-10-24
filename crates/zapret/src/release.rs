@@ -1,4 +1,4 @@
-//! The latest GitHub release of bol-van/zapret2, downloaded with `curl.exe` and unpacked into a new
+//! The latest GitHub release of bol-van/zapret2, downloaded with `curl` and unpacked into a new
 //! folder. Only this repository and its asset names: nothing the page or the pipe sends becomes a
 //! URL.
 
@@ -9,8 +9,18 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 
-/// Part of every error where an antivirus removed or blocked a file; the page explains it.
-pub const DEFENDER: &str = "blocked or removed by Windows Defender or another antivirus";
+/// Part of every error where a file was removed or could not be written; the page explains it.
+#[cfg(windows)]
+pub const BLOCKED: &str = "blocked or removed by Windows Defender or another antivirus";
+#[cfg(target_os = "linux")]
+pub const BLOCKED: &str = "missing or not writable: check the folder's permissions and free space";
+
+/// The engine binaries of this system in a release.
+#[cfg(windows)]
+const PLATFORM_BINARIES: &str = "binaries/windows-x86_64/";
+// ponytail: x86_64 only; other architectures need their `binaries/linux-*` folder here.
+#[cfg(target_os = "linux")]
+const PLATFORM_BINARIES: &str = "binaries/linux-x86_64/";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub enum Engine {
@@ -109,9 +119,19 @@ pub fn select(engine: Engine, json: &str) -> anyhow::Result<Release> {
     })
 }
 
+/// Where a release goes unless the user picks another folder: `~/.local/share` (XDG), created
+/// here, as `target` wants an existing folder.
+#[cfg(target_os = "linux")]
+pub fn default_parent() -> PathBuf {
+    let dir = crate::data_home();
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 /// Where a release goes unless the user picks another folder: next to the app's folder, or the
 /// system drive's root when that path has spaces or non-ASCII letters (winws2, a Cygwin program,
 /// does not carry them).
+#[cfg(windows)]
 pub fn default_parent() -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -123,6 +143,7 @@ pub fn default_parent() -> PathBuf {
         })
 }
 
+#[cfg(windows)]
 fn plain_path(dir: &Path) -> bool {
     dir.to_str()
         .is_some_and(|s| s.is_ascii() && !s.contains(' '))
@@ -160,10 +181,10 @@ pub fn parse_sums(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The part of a listed path under the release root, for the files that run: the Windows
+/// The part of a listed path under the release root, for the files that run: this system's
 /// binaries and the Lua. The release's own top folder, when listed, is skipped.
 fn checked_path(path: &str) -> Option<&str> {
-    let wanted = |p: &str| p.starts_with("binaries/windows-x86_64/") || p.starts_with("lua/");
+    let wanted = |p: &str| p.starts_with(PLATFORM_BINARIES) || p.starts_with("lua/");
     if wanted(path) {
         return Some(path);
     }
@@ -172,7 +193,7 @@ fn checked_path(path: &str) -> Option<&str> {
         .filter(|p| wanted(p))
 }
 
-/// Checks every Windows binary and Lua file `sums` lists under `root`; how many were checked.
+/// Checks every binary of this system and Lua file `sums` lists under `root`; how many were checked.
 pub fn verify(root: &Path, sums: &str) -> anyhow::Result<usize> {
     let mut checked = 0;
     for (hash, path) in parse_sums(sums) {
@@ -190,7 +211,7 @@ pub fn verify(root: &Path, sums: &str) -> anyhow::Result<usize> {
     }
     anyhow::ensure!(
         checked > 0,
-        "sha256sum.txt lists no Windows binaries or Lua files"
+        "sha256sum.txt lists no {PLATFORM_BINARIES} or Lua files"
     );
     Ok(checked)
 }
@@ -201,15 +222,22 @@ fn hash_file(file: &Path) -> anyhow::Result<String> {
         .map_err(|err| io_error(file, &err))
 }
 
-/// ERROR_VIRUS_INFECTED, ERROR_VIRUS_DELETED, or a file gone: the antivirus took it.
+/// Windows: ERROR_VIRUS_INFECTED, ERROR_VIRUS_DELETED, or a file gone: the antivirus took it.
+/// Linux: a file gone or a folder closed to this user.
 fn io_error(file: &Path, err: &std::io::Error) -> anyhow::Error {
-    if matches!(err.raw_os_error(), Some(225 | 226)) || err.kind() == std::io::ErrorKind::NotFound {
-        anyhow::anyhow!("{}: {DEFENDER} ({err})", file.display())
+    let blocked = if cfg!(windows) {
+        matches!(err.raw_os_error(), Some(225 | 226))
+    } else {
+        err.kind() == std::io::ErrorKind::PermissionDenied
+    };
+    if blocked || err.kind() == std::io::ErrorKind::NotFound {
+        anyhow::anyhow!("{}: {BLOCKED} ({err})", file.display())
     } else {
         anyhow::anyhow!("{}: {err}", file.display())
     }
 }
 
+#[cfg(windows)]
 fn mentions_virus(text: &str) -> bool {
     let text = text.to_lowercase();
     ["virus", "вирус", "нежелательное"]
@@ -218,8 +246,9 @@ fn mentions_virus(text: &str) -> bool {
 }
 
 /// Downloads and unpacks the latest release into a new folder under `parent`. `progress` gets the
-/// bytes so far and the zip's size. On failure or cancel nothing is left but, after an antivirus
-/// block, the empty folder: the user adds it to the exclusions and tries again.
+/// bytes so far and the zip's size. On failure or cancel nothing is left but, after a block, the
+/// empty folder: the user adds it to the antivirus exclusions (Windows) or fixes its permissions
+/// (Linux) and tries again.
 pub fn install(
     engine: Engine,
     parent: &Path,
@@ -238,14 +267,16 @@ pub fn install(
         }
         Err(err) => {
             let _ = std::fs::remove_dir_all(&dir);
-            if !format!("{err:#}").contains(DEFENDER) {
+            if !format!("{err:#}").contains(BLOCKED) {
                 return Err(err);
             }
             let _ = std::fs::create_dir_all(&dir);
-            return Err(err.context(format!(
-                "add the folder {} to the antivirus exclusions and download again",
-                dir.display()
-            )));
+            let dir = dir.display();
+            return Err(err.context(if cfg!(windows) {
+                format!("add the folder {dir} to the antivirus exclusions and download again")
+            } else {
+                format!("make the folder {dir} writable for this user and download again")
+            }));
         }
     };
     log::info!(
@@ -299,7 +330,30 @@ fn unpack(
     let root = content_root(&raw)?;
     verify(&root, sums)?;
     move_up(&root, dir)?;
+    #[cfg(target_os = "linux")]
+    prepare_nfqws(dir);
     Ok(sha256)
+}
+
+/// `nfqws2` executable again (an unpack may drop the mode), and given the network capabilities
+/// its queue needs, so the checks and tests can run it as this user. Best effort: without them
+/// the system checks say what to run.
+#[cfg(target_os = "linux")]
+fn prepare_nfqws(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let nfqws = dir.join(PLATFORM_BINARIES).join("nfqws2");
+    if !nfqws.is_file() {
+        return;
+    }
+    if let Err(err) = std::fs::set_permissions(&nfqws, std::fs::Permissions::from_mode(0o755)) {
+        log::warn!("{} did not become executable: {err}", nfqws.display());
+    }
+    let shown = nfqws.display().to_string();
+    match crate::root::run("setcap", &["cap_net_admin,cap_net_raw=eip", &shown]) {
+        Ok(out) if out.success() => {}
+        Ok(out) => log::warn!("{shown} did not get its capabilities:\n{}", out.describe()),
+        Err(err) => log::warn!("{shown} did not get its capabilities: {err:#}"),
+    }
 }
 
 fn download(
@@ -324,8 +378,12 @@ fn download(
         anyhow::bail!("canceled");
     }
     // 23: curl could not write the file, which an antivirus does to a file it does not like.
-    if out.code == Some(23) || mentions_virus(&out.stderr) {
-        anyhow::bail!("{}: {DEFENDER}\n\n{}", dest.display(), out.describe());
+    #[cfg(windows)]
+    let blocked = out.code == Some(23) || mentions_virus(&out.stderr);
+    #[cfg(target_os = "linux")]
+    let blocked = out.code == Some(23);
+    if blocked {
+        anyhow::bail!("{}: {BLOCKED}\n\n{}", dest.display(), out.describe());
     }
     out.check()?;
     let size = std::fs::metadata(dest)
@@ -335,7 +393,28 @@ fn download(
     Ok(())
 }
 
+/// `bsdtar` (libarchive), else `unzip`: whichever the system has.
+#[cfg(target_os = "linux")]
+fn expand(zip: &Path, dest: &Path, cancel: &AtomicBool) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dest).with_context(|| format!("cannot create {}", dest.display()))?;
+    let mut bsdtar = Command::new("bsdtar");
+    bsdtar.arg("-xf").arg(zip).arg("-C").arg(dest);
+    let mut unzip = Command::new("unzip");
+    unzip.arg("-q").arg(zip).arg("-d").arg(dest);
+    for cmd in [&mut bsdtar, &mut unzip] {
+        let out = match exec::run(cmd, Duration::from_secs(300), Some(cancel)) {
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            out => out?,
+        };
+        anyhow::ensure!(!out.canceled, "canceled");
+        out.check()?;
+        return Ok(());
+    }
+    anyhow::bail!("neither bsdtar nor unzip was found: install one of them to unpack the release")
+}
+
 /// `Expand-Archive` of Windows PowerShell 5.1.
+#[cfg(windows)]
 fn expand(zip: &Path, dest: &Path, cancel: &AtomicBool) -> anyhow::Result<()> {
     let quote = |path: &Path| format!("'{}'", path.display().to_string().replace('\'', "''"));
     let script = format!(
@@ -351,7 +430,7 @@ fn expand(zip: &Path, dest: &Path, cancel: &AtomicBool) -> anyhow::Result<()> {
         anyhow::bail!("canceled");
     }
     if !out.success() && mentions_virus(&format!("{}{}", out.stdout, out.stderr)) {
-        anyhow::bail!("{}: {DEFENDER}\n\n{}", zip.display(), out.describe());
+        anyhow::bail!("{}: {BLOCKED}\n\n{}", zip.display(), out.describe());
     }
     out.check()?;
     Ok(())
@@ -451,19 +530,29 @@ mod tests {
         assert!(target(Path::new("relative"), Engine::Zapret2, "v1.0").is_err());
     }
 
+    /// This system's engine and the other's, as a release lists them.
+    #[cfg(windows)]
+    const MINE: &str = "binaries/windows-x86_64/winws2.exe";
+    #[cfg(windows)]
+    const OTHER: &str = "binaries/linux-x86_64/nfqws2";
+    #[cfg(target_os = "linux")]
+    const MINE: &str = "binaries/linux-x86_64/nfqws2";
+    #[cfg(target_os = "linux")]
+    const OTHER: &str = "binaries/windows-x86_64/winws2.exe";
+
     #[test]
     fn checks_the_binaries_and_lua_against_sha256sum() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        let exe = root.join(r"binaries\windows-x86_64\winws2.exe");
+        let exe = root.join(MINE);
         std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
         std::fs::create_dir_all(root.join("lua")).unwrap();
         std::fs::write(&exe, "exe").unwrap();
-        std::fs::write(root.join(r"lua\zapret-lib.lua"), "lua").unwrap();
+        std::fs::write(root.join("lua").join("zapret-lib.lua"), "lua").unwrap();
         let sums = format!(
-            "{}  ./zapret2-v0.9.4/binaries/windows-x86_64/winws2.exe\n\
+            "{}  ./zapret2-v0.9.4/{MINE}\n\
              {} *lua/zapret-lib.lua\n\
-             {}  binaries/linux-x86_64/nfqws2\n",
+             {}  {OTHER}\n",
             crate::sha256_hex(b"exe"),
             crate::sha256_hex(b"lua"),
             crate::sha256_hex(b"elsewhere"),
@@ -471,7 +560,7 @@ mod tests {
         assert_eq!(
             verify(root, &sums).unwrap(),
             2,
-            "the linux binary is not checked"
+            "the other system's binary is not checked"
         );
 
         std::fs::write(&exe, "tampered").unwrap();
@@ -480,18 +569,13 @@ mod tests {
 
         std::fs::remove_file(&exe).unwrap();
         let err = verify(root, &sums).unwrap_err().to_string();
-        assert!(
-            err.contains(DEFENDER),
-            "a vanished file is the antivirus: {err}"
-        );
+        assert!(err.contains(BLOCKED), "a vanished file is blocked: {err}");
 
-        let none = format!(
-            "{}  binaries/linux-x86_64/nfqws2\n",
-            crate::sha256_hex(b"x")
-        );
+        let none = format!("{}  {OTHER}\n", crate::sha256_hex(b"x"));
         assert!(verify(root, &none).is_err(), "nothing checked is a failure");
     }
 
+    #[cfg(windows)]
     #[test]
     fn only_a_plain_path_is_a_default() {
         assert!(plain_path(Path::new(r"D:\Tools")));

@@ -172,7 +172,17 @@ fn engine(
     let config = service::config(name);
     anyhow::ensure!(
         status.is_none() || config.is_some(),
-        "the {name} service exists, but its ImagePath could not be read from the registry, so \"{operation}\" did not start; remove the service with `sc delete {name}` if it is broken"
+        "the {name} service exists, but {}, so \"{operation}\" did not start; {}",
+        if cfg!(windows) {
+            "its ImagePath could not be read from the registry"
+        } else {
+            "its ExecStart could not be read (systemctl cat)"
+        },
+        if cfg!(windows) {
+            format!("remove the service with `sc delete {name}` if it is broken")
+        } else {
+            format!("fix or remove the unit {name}.service if it is broken")
+        }
     );
     let snap = config.map(|config| ServiceSnap {
         image_path: config.image_path,

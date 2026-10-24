@@ -5121,6 +5121,7 @@ version = "0.8.0"
 dependencies = [
  "anyhow",
  "exec",
+ "libc",
  "log",
  "probe",
  "serde",

@@ -7,6 +7,18 @@ use anyhow::Context as _;
 pub const BEGIN: &str = "# zapret-hub begin";
 pub const END: &str = "# zapret-hub end";
 
+/// The hosts file's line break: CRLF on Windows, LF on Linux (a CR there would end up in a name).
+#[cfg(windows)]
+pub const NL: &str = "\r\n";
+#[cfg(target_os = "linux")]
+pub const NL: &str = "\n";
+
+#[cfg(target_os = "linux")]
+pub fn path() -> PathBuf {
+    PathBuf::from("/etc/hosts")
+}
+
+#[cfg(windows)]
 pub fn path() -> PathBuf {
     let windows = std::env::var_os("SystemRoot")
         .map(PathBuf::from)
@@ -62,18 +74,19 @@ pub fn merge(current: &str, block: &str) -> String {
     while kept.last().is_some_and(|line| line.trim().is_empty()) {
         kept.pop();
     }
-    let mut out = kept.join("\r\n");
+    let mut out = kept.join(NL);
     if !out.is_empty() {
-        out.push_str("\r\n\r\n");
+        out.push_str(NL);
+        out.push_str(NL);
     }
     out.push_str(BEGIN);
-    out.push_str("\r\n");
+    out.push_str(NL);
     for line in block.lines() {
         out.push_str(line);
-        out.push_str("\r\n");
+        out.push_str(NL);
     }
     out.push_str(END);
-    out.push_str("\r\n");
+    out.push_str(NL);
     out
 }
 
@@ -126,15 +139,95 @@ fn read_at(path: &Path) -> anyhow::Result<String> {
     }
 }
 
-/// Writes `block` into hosts; the text it replaces is kept as `hosts.zapret-hub.bak`.
+/// Writes `block` into hosts (as root on Linux); the text it replaces is kept as
+/// `hosts.zapret-hub.bak`. The DNS cache is flushed after; a flush that fails is only a warning.
 pub fn apply(block: &str) -> anyhow::Result<()> {
-    apply_at(&path(), block)?;
-    let _ = exec::run(
+    #[cfg(windows)]
+    apply_at(&path(), block, plain_write)?;
+    #[cfg(target_os = "linux")]
+    apply_at(&path(), block, crate::root::write)?;
+    if let Err(err) = flush_dns() {
+        log::warn!(target: "exec", "the DNS cache was not flushed: {err:#}");
+    }
+    Ok(())
+}
+
+/// `ipconfig /flushdns`.
+#[cfg(windows)]
+pub fn flush_dns() -> anyhow::Result<()> {
+    exec::run(
         std::process::Command::new("ipconfig").arg("/flushdns"),
         std::time::Duration::from_secs(15),
         None,
+    )?
+    .check()?;
+    Ok(())
+}
+
+/// What may cache lookups on Linux, in the order tried: systemd-resolved (two spellings),
+/// NetworkManager, nscd, dnsmasq. The first that succeeds is enough.
+#[cfg(target_os = "linux")]
+pub const FLUSHERS: [(&str, &[&str]); 5] = [
+    ("resolvectl", &["flush-caches"]),
+    ("systemd-resolve", &["--flush-caches"]),
+    ("nmcli", &["general", "reload", "dns-full"]),
+    ("nscd", &["-i", "hosts"]),
+    ("pkill", &["-HUP", "dnsmasq"]),
+];
+
+/// Each of `FLUSHERS` that is installed, as the user and then as root; nscd and dnsmasq only
+/// while they run. Nothing worked and `/etc/resolv.conf` points at no local stub: there is no
+/// cache to flush, which is success too.
+#[cfg(target_os = "linux")]
+pub fn flush_dns() -> anyhow::Result<()> {
+    use std::time::Duration;
+    let mut tried = Vec::new();
+    for (prog, args) in FLUSHERS {
+        let daemon = match prog {
+            "nscd" => Some("nscd"),
+            "pkill" => Some("dnsmasq"),
+            _ => None,
+        };
+        if daemon.is_some_and(|daemon| !crate::procs::is_running(daemon)) {
+            continue;
+        }
+        let mut cmd = std::process::Command::new(prog);
+        cmd.args(args);
+        match exec::run(&mut cmd, Duration::from_secs(15), None) {
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Ok(out) if out.success() => return Ok(()),
+            _ => {}
+        }
+        match crate::root::run(prog, args) {
+            Ok(out) if out.success() => return Ok(()),
+            Ok(out) => tried.push(out.describe()),
+            Err(err) => tried.push(format!("{err:#}")),
+        }
+    }
+    let stub = std::fs::read_to_string("/etc/resolv.conf").is_ok_and(|text| local_stub(&text));
+    anyhow::ensure!(
+        !stub,
+        "the DNS cache was not flushed: none of systemd-resolved, NetworkManager, nscd, dnsmasq \
+         answered\n\n{}",
+        tried.join("\n\n")
     );
     Ok(())
+}
+
+/// `/etc/resolv.conf` sends lookups to a local stub (127.0.0.53 of systemd-resolved, 127.0.0.1
+/// of dnsmasq): something caches them.
+#[cfg(target_os = "linux")]
+fn local_stub(resolv_conf: &str) -> bool {
+    resolv_conf.lines().any(|line| {
+        let mut words = line.split_whitespace();
+        words.next() == Some("nameserver") && words.next().is_some_and(|ip| ip.starts_with("127."))
+    })
+}
+
+/// A plain file write: Windows, and the tests.
+#[cfg(any(windows, test))]
+fn plain_write(path: &Path, text: &str) -> anyhow::Result<()> {
+    std::fs::write(path, text).with_context(|| format!("cannot write {}", path.display()))
 }
 
 /// Flowseal's hosts file for Discord and the rest: the block the hub keeps in hosts.
@@ -162,18 +255,21 @@ pub fn download_and_apply(socks5: Option<&str>) -> anyhow::Result<()> {
     apply(&flowseal_hosts(socks5)?)
 }
 
-/// `apply` on the hosts file at `path`, without the DNS flush (tests run it on a temp file).
-fn apply_at(path: &Path, block: &str) -> anyhow::Result<()> {
+/// `apply` on the hosts file at `path` through `write`, without the DNS flush (tests run it on a
+/// temp file).
+fn apply_at(
+    path: &Path,
+    block: &str,
+    write: impl Fn(&Path, &str) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
     let current = read_at(path)?;
     if path.is_file() {
         // Written from the text just read, not copied: a copy of the file takes over its read-only
         // attribute, and the next backup would then fail on the read-only copy.
         let bak = path.with_file_name("hosts.zapret-hub.bak");
-        std::fs::write(&bak, current.as_bytes())
-            .with_context(|| format!("cannot write the backup {}", bak.display()))?;
+        write(&bak, &current).context("cannot write the backup")?;
     }
-    std::fs::write(path, merge(&current, block))
-        .with_context(|| format!("cannot write {}", path.display()))?;
+    write(path, &merge(&current, block))?;
     log::info!(target: "exec", "hosts: zapret-hub block written, {} lines", block.lines().count());
     Ok(())
 }
@@ -184,6 +280,20 @@ mod tests {
     use std::fs;
 
     const OLD: &str = "127.0.0.1 localhost\r\n";
+
+    fn apply_at(path: &Path, block: &str) -> anyhow::Result<()> {
+        super::apply_at(path, block, plain_write)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_loopback_nameserver_is_a_local_stub() {
+        assert!(local_stub(
+            "# generated\nnameserver 127.0.0.53\noptions edns0\n"
+        ));
+        assert!(!local_stub("#nameserver 127.0.0.1\nnameserver 1.1.1.1\n"));
+        assert!(!local_stub(""));
+    }
 
     /// Windows only, so the Unix caveat of the lint (a world-writable file) does not apply.
     #[allow(clippy::permissions_set_readonly_false)]

@@ -1,16 +1,34 @@
-//! Windows utilities of the hub: the services, the processes, hosts, releases, the snapshot and
-//! the system checks.
+//! Platform utilities of the hub: the services, root rights (Linux), the processes, hosts,
+//! releases, the snapshot and the system checks.
 
 pub mod checks;
 pub mod discord_cache;
 pub mod hosts;
 pub mod procs;
 pub mod release;
+#[cfg(target_os = "linux")]
+pub mod root;
 pub mod service;
 pub mod snapshot;
 pub mod targets;
 
 use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
+
+/// `$XDG_DATA_HOME` when set and absolute, else `~/.local/share` (empty when `HOME` is unset).
+#[cfg(target_os = "linux")]
+pub fn data_home() -> PathBuf {
+    data_home_of(std::env::var_os("XDG_DATA_HOME"), std::env::var_os("HOME"))
+}
+
+#[cfg(target_os = "linux")]
+fn data_home_of(xdg: Option<std::ffi::OsString>, home: Option<std::ffi::OsString>) -> PathBuf {
+    xdg.map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .or_else(|| home.map(|home| PathBuf::from(home).join(".local/share")))
+        .unwrap_or_default()
+}
 
 /// A text file: UTF-8, where broken bytes become U+FFFD, or UTF-16LE when it starts with the BOM
 /// `FF FE`, as PowerShell 5.1's `>` and Notepad's "Unicode" write it (decoded without the BOM).
@@ -79,6 +97,17 @@ pub fn quoted_tokens(text: &str) -> Vec<String> {
     tokens
 }
 
+/// The arguments of a command line for `Command::args`: tokens as `quoted_tokens` splits them,
+/// their quotes dropped (Linux has no `raw_arg`).
+#[cfg(target_os = "linux")]
+pub fn spawn_tokens(text: &str) -> Vec<String> {
+    quoted_tokens(text)
+        .into_iter()
+        .map(|token| token.replace('"', ""))
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
 /// 1-40 characters: Latin letters, digits, space, `-`, `_`, `.`; a letter or digit first; not a
 /// Windows device name (the name becomes a file).
 pub fn validate_name(name: &str) -> anyhow::Result<String> {
@@ -142,6 +171,30 @@ fn flush_digits(key: &mut String, digits: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn spawn_tokens_drop_the_quotes_of_a_command_line() {
+        assert_eq!(
+            spawn_tokens(r#"--chdir="/a b" --x """#),
+            ["--chdir=/a b", "--x"]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn data_home_prefers_an_absolute_xdg_then_home() {
+        let some = |s: &str| Some(std::ffi::OsString::from(s));
+        assert_eq!(
+            data_home_of(some("/data"), some("/home/me")),
+            PathBuf::from("/data")
+        );
+        assert_eq!(
+            data_home_of(some("rel"), some("/home/me")),
+            PathBuf::from("/home/me/.local/share")
+        );
+        assert_eq!(data_home_of(None, None), PathBuf::new());
+    }
 
     fn read(bytes: &[u8]) -> String {
         let dir = tempfile::tempdir().unwrap();

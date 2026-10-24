@@ -1,15 +1,28 @@
 //! `:clear_discord_cache`: close each Discord build, delete `Cache`, `Code Cache`, `GPUCache`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// Process image, the name the report shows, the folder under `%APPDATA%`.
+/// Process image, the name the report shows, the folder under `%APPDATA%` (Windows) or
+/// `~/.config` (Linux).
+#[cfg(windows)]
 pub const INSTALLS: [(&str, &str, &str); 4] = [
     ("Discord.exe", "Discord", "discord"),
     ("DiscordPTB.exe", "Discord PTB", "discordptb"),
     ("DiscordCanary.exe", "Discord Canary", "discordcanary"),
     (
         "DiscordDevelopment.exe",
+        "Discord Development",
+        "discorddevelopment",
+    ),
+];
+#[cfg(target_os = "linux")]
+pub const INSTALLS: [(&str, &str, &str); 4] = [
+    ("Discord", "Discord", "discord"),
+    ("DiscordPTB", "Discord PTB", "discordptb"),
+    ("DiscordCanary", "Discord Canary", "discordcanary"),
+    (
+        "DiscordDevelopment",
         "Discord Development",
         "discorddevelopment",
     ),
@@ -39,11 +52,26 @@ pub struct CacheReport {
     pub dirs: Vec<CacheDir>,
 }
 
-/// Every build installed under `%APPDATA%`; empty when none is.
+#[cfg(windows)]
+fn config_dir() -> anyhow::Result<PathBuf> {
+    std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("APPDATA is not set"))
+}
+
+/// `$XDG_CONFIG_HOME` when set and absolute, else `~/.config`.
+#[cfg(target_os = "linux")]
+fn config_dir() -> anyhow::Result<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .or_else(|| std::env::home_dir().map(|home| home.join(".config")))
+        .ok_or_else(|| anyhow::anyhow!("neither XDG_CONFIG_HOME nor HOME is set"))
+}
+
+/// Every build installed in the user's config folder; empty when none is.
 pub fn clear() -> anyhow::Result<Vec<CacheReport>> {
-    let appdata =
-        std::env::var_os("APPDATA").ok_or_else(|| anyhow::anyhow!("APPDATA is not set"))?;
-    Ok(clear_in(Path::new(&appdata), |image| {
+    Ok(clear_in(&config_dir()?, |image| {
         let closed = crate::procs::is_running(image) && crate::procs::kill_all(image).is_ok();
         if closed {
             std::thread::sleep(Duration::from_secs(1)); // let it release its files
@@ -53,16 +81,16 @@ pub fn clear() -> anyhow::Result<Vec<CacheReport>> {
 }
 
 /// `close(image)` stops a running build and says whether it did.
-pub fn clear_in(appdata: &Path, mut close: impl FnMut(&str) -> bool) -> Vec<CacheReport> {
+pub fn clear_in(config: &Path, mut close: impl FnMut(&str) -> bool) -> Vec<CacheReport> {
     INSTALLS
         .iter()
-        .filter(|(_, _, dir)| appdata.join(dir).is_dir())
+        .filter(|(_, _, dir)| config.join(dir).is_dir())
         .map(|&(image, name, dir)| {
             let closed = close(image);
             let dirs = CACHE_DIRS
                 .iter()
                 .map(|sub| {
-                    let path = appdata.join(dir).join(sub);
+                    let path = config.join(dir).join(sub);
                     let (outcome, error) = if !path.is_dir() {
                         (CacheOutcome::Missing, None)
                     } else {
