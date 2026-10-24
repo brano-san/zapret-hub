@@ -17,7 +17,7 @@ fn launch_unknown_name_errors() {
 fn engine(dir: &std::path::Path) -> zapret2::Engine {
     let root = dir;
     for file in [
-        "winws2.exe",
+        zapret2::EXE,
         "cygwin1.dll",
         "WinDivert.dll",
         "WinDivert64.sys",
@@ -50,10 +50,21 @@ fn launch_text_rejects_bad_args() {
 fn launch_text_starts_winws2_in_its_folder() {
     let dir = tempfile::tempdir().unwrap();
     let engine = engine(dir.path());
-    let launch = launch_text(&engine, "--filter-tcp=443 --lua-desync=fake").unwrap();
+    let text = "--wf-tcp-out=443 --filter-tcp=443 --lua-desync=fake";
+    let launch = launch_text(&engine, text).unwrap();
     assert!(launch.zapret2);
     assert_eq!(launch.exe, engine.exe());
     assert_eq!(launch.cwd, engine.root());
     assert!(launch.tail.contains("--lua-desync=fake"), "{}", launch.tail);
-    assert_eq!(launch.sha256, zapret::sha256_hex(launch.tail.as_bytes()));
+    // The hash «Стратегии» compares: of the tail before any Linux translation.
+    let tail = zapret2::strategies::tail(&engine, text).unwrap();
+    assert_eq!(launch.sha256, zapret::sha256_hex(tail.as_bytes()));
+    #[cfg(windows)]
+    assert_eq!(launch.tail, tail);
+    #[cfg(target_os = "linux")]
+    {
+        assert!(!launch.tail.contains("--wf-"), "{}", launch.tail);
+        assert!(launch.tail.ends_with("--qnum=200"), "{}", launch.tail);
+        assert_eq!(launch.queue.tcp, "443");
+    }
 }

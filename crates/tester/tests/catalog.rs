@@ -6,7 +6,7 @@ fn fake_zapret2() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     for file in [
-        "winws2.exe",
+        zapret2::EXE,
         "cygwin1.dll",
         "WinDivert.dll",
         "WinDivert64.sys",
