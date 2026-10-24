@@ -30,7 +30,10 @@ fn prune(dir: &Path) {
     let mut files: Vec<PathBuf> = entries
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .filter(|path| {
+            path.extension().is_some_and(|ext| ext == "json")
+                && path.file_stem().and_then(|s| s.to_str()).is_some_and(is_id)
+        })
         .collect();
     files.sort_unstable_by(|a, b| b.cmp(a));
     for path in files.iter().skip(KEEP) {
@@ -40,14 +43,16 @@ fn prune(dir: &Path) {
     }
 }
 
+/// `2026-10-10_05-03-34`: digits, `-` and `_`.
+fn is_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '-' || c == '_')
+}
+
 pub fn load(dir: &Path, id: &str) -> anyhow::Result<TestRun> {
-    anyhow::ensure!(
-        !id.is_empty()
-            && id
-                .chars()
-                .all(|c| c.is_ascii_digit() || c == '-' || c == '_'),
-        "not a run id: {id}"
-    );
+    anyhow::ensure!(is_id(id), "not a run id: {id}");
     let path = dir.join(format!("{id}.json"));
     let text =
         std::fs::read_to_string(&path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;

@@ -176,7 +176,9 @@ fn saving_keeps_the_newest_50_runs() {
         )
         .unwrap();
     }
-    std::fs::write(dir.path().join("notes.txt"), "").unwrap();
+    for other in ["notes.txt", "foo.json", "00-backup.json"] {
+        std::fs::write(dir.path().join(other), "").unwrap();
+    }
     history::save(
         dir.path(),
         &run("2026-10-09_10-00-00", Suite::Standard, false, Vec::new()),
@@ -185,11 +187,13 @@ fn saving_keeps_the_newest_50_runs() {
     let mut json: Vec<String> = std::fs::read_dir(dir.path())
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|name| name.ends_with(".json"))
+        .filter(|name| name.starts_with("2026"))
         .collect();
     json.sort();
     assert_eq!(json.len(), 50);
     assert_eq!(json[0], "2026-01-01_00-00-07.json");
     assert_eq!(json[49], "2026-10-09_10-00-00.json");
-    assert!(dir.path().join("notes.txt").exists());
+    for other in ["notes.txt", "foo.json", "00-backup.json"] {
+        assert!(dir.path().join(other).exists(), "{other}");
+    }
 }
