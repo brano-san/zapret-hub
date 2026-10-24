@@ -332,10 +332,10 @@ export const S = {
     ping: "Пинг ICMP",
     discord: "Discord",
     youtube: "YouTube",
-    dbd: "DbD/Steam",
+    dbd: "DbD",
     dbdHint:
-      "Медиана времени HTTPS-проверок (HTTP, TLS 1.2, TLS 1.3) трёх хостов: steam.live.bhvrdbd.com, api.epicgames.dev, store.steampowered.com. Красное число со знаком минус — сколько из этих проверок не прошло.",
-    dbdFailed: (failed: number, total: number) => `Не прошло ${failed} из ${total} проверок игровых хостов`,
+      "Медиана времени проверок HTTP и TLS 1.2 игрового сервера Dead by Daylight (steam.live.bhvrdbd.com; TLS 1.3 и пинг он не принимает). Красное число со знаком минус — сколько из этих проверок не прошло. В прогонах до 0.9.0 сюда входили и Steam, и Epic.",
+    dbdFailed: (failed: number, total: number) => `Не прошло ${failed} из ${total} проверок сервера DbD`,
     blocked: "Блок",
     fail: "Сбои",
     ok: "OK",
