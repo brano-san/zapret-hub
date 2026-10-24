@@ -109,6 +109,14 @@ pub fn fill_defaults(report: &mut Value) -> anyhow::Result<()> {
             && serde_json::from_value::<VerdictCode>(verdict.clone()).is_err()
         {
             *verdict = serde_json::to_value(VerdictCode::Inconclusive)?;
+            // As `judge` gives it: an inconclusive verdict is low confidence, and says so.
+            let confidence = &mut agent["confidence"];
+            confidence["level"] = Value::String("low".into());
+            if let Some(Value::Array(why)) = confidence.get_mut("why") {
+                why.push(Value::String("inconclusive".into()));
+            } else {
+                confidence["why"] = serde_json::json!(["inconclusive"]);
+            }
         }
     }
     // Patterns 0.9.1 dropped (`R1ViaSystemProxy`, `R3SlowProxyDns`) are left out.
@@ -168,6 +176,7 @@ mod tests {
         })
         .unwrap();
         value["agent"]["verdict"] = Value::String("proxy_broken".into());
+        value["agent"]["confidence"] = serde_json::json!({"level": "medium", "why": []});
         value["patterns"] = serde_json::json!([
             {"id": "R1ViaSystemProxy", "domain": "a.example", "direct_ok": false, "proxy_ok": true,
              "route": null, "direct": true, "rule": null},
@@ -177,6 +186,8 @@ mod tests {
         std::fs::write(dir.path().join(format!("{id}.json")), value.to_string()).unwrap();
         let summary = load(dir.path(), id).unwrap();
         assert_eq!(summary.agent.verdict, VerdictCode::Inconclusive);
+        assert_eq!(summary.agent.confidence.level, crate::agent::Level::Low);
+        assert_eq!(summary.agent.confidence.why, ["inconclusive"]);
         assert_eq!(summary.patterns, [Pattern::R6DaveStalled { alone: false }]);
     }
 }
