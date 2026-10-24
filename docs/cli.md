@@ -113,16 +113,16 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `tests report <id>` | прогон текстом в формате `test zapret.ps1` | `run_report` |
 | `hosts plan` | что изменит запись блока в `hosts`; ничего не пишет | `hosts_plan` |
 | `hosts apply --yes` | пишет блок zapret-hub в `hosts` | `apply_hosts` |
-| `checks` | диагностика `service.bat` Flowseal: конфликты, WinDivert, TCP timestamps и т. п. | `system_checks` |
+| `checks` | системные проверки zapret2: конфликтующие службы, WinDivert, TCP timestamps и т. п.; на Linux ещё nfqws2 и его права, очередь, таблица nftables, посторонние движки и таблицы | `system_checks` |
 | `checks fix <action>` | исправление: `enable-tcp-timestamps`, `grant-capabilities` (Linux: chmod и setcap для nfqws2); `remove-windivert` и `remove-conflicts` — с `--yes` | `fix_check` |
 | `discord clear-cache --yes` | закрывает Discord и чистит его кэш | `clear_discord_cache` |
-| `service remove --yes` | удаляет службу zapret2 (и службу zapret Flowseal, если осталась) и WinDivert | `remove_service` |
+| `service remove --yes` | удаляет службу zapret2; в Windows ещё службу zapret Flowseal, если осталась, и WinDivert (юнит `zapret` bol-van/zapret на Linux не трогает) | `remove_service` |
 | `service start|stop|restart` | запускает, останавливает или перезапускает службу zapret2 как есть, без быстрой проверки; автозапуск службы не меняется | `start_service`, `stop_service`, `restart_service` |
 | `service logs` | Linux: последние 100 строк журнала юнита `zapret2` текстом (`journalctl` от пользователя, иначе `sudo -n`); в Windows — код 1, журнала у службы нет | `service_logs` |
 | `nft` | Linux: таблица nftables `inet zapret_hub`, через которую движок получает пакеты, текстом; в Windows — код 1 | `nft_rules` |
 | `dns-flush` | сбрасывает кэш DNS системы (Windows: `ipconfig /flushdns`; Linux: resolvectl, nmcli, nscd, dnsmasq — что запущено) | `flush_dns` |
 | `exclusions show` | исключения: домены, адреса и порты (раздел «Исключения») | `get_exclusions` |
-| `exclusions add|remove domains|ips|ports <value>` | добавляет или убирает одно исключение и ставит активную стратегию заново | `get_exclusions`, `save_exclusions` |
+| `exclusions add|remove domains|ips|ports <value>` | добавляет или убирает одно исключение; если списки или порты изменились, ставит активную стратегию заново | `get_exclusions`, `save_exclusions` |
 | `exclusions reset --yes` | очищает все три списка | `save_exclusions` |
 | `tg-ws status` | TG WS Proxy: скачан ли, версия, включён ли, работает ли, порт, секрет, ссылка `tg://proxy`, последние строки журнала (раздел «TG WS Proxy») | `tg_ws_status` |
 | `tg-ws install` | скачивает последний релиз tg-ws-proxy-rs; включённый прокси перезапускается с ним | `install_tg_ws` |
@@ -351,8 +351,8 @@ Flowseal (`flowseal_copy: true`); с именами
 порты хранятся, но не применяются. Порты лежат в настройках (`excluded_ports`), `settings set` их не меняет.
 
 Сохранение не трогает файл, записи которого не изменились; в изменённом комментарии, пустые строки и оставшиеся
-записи остаются на своих местах, удалённые записи убираются, новые дописываются в конец. Если стратегия zapret2 стоит службой,
-ставит её заново: движок читает списки при старте, а таблица nftables берёт порты. CLI проверяет значение до
+записи остаются на своих местах, удалённые записи убираются, новые дописываются в конец. Если списки или порты изменились и
+стратегия zapret2 стоит службой, ставит её заново: движок читает списки при старте, а таблица nftables берёт порты. CLI проверяет значение до
 запроса: домен из двух и более меток, адрес или подсеть `a.b.c.d/n`, порт 1–65535 или диапазон по возрастанию —
 иначе код 2. `add` уже имеющегося и `remove` отсутствующего — код 1, ничего не пишется.
 
@@ -418,7 +418,8 @@ Zapret Hub работает только на zapret2: Flowseal больше н�
 её аргументы указывали на списки и фейки в папке Flowseal. Если стоит только служба Flowseal, вместо неё ставится та же
 стратегия из встроенных (`general (ALT11)` → `zapret2:general (ALT11)`, неизвестная — `zapret2:general`). Итог — одно
 уведомление и строка журнала. Служба `zapret` Flowseal, оставшаяся после этого, — находка `checks` с
-исправлением `remove-conflicts`.
+исправлением `remove-conflicts`. Рейтинг тестов 0.8.0 с именами Flowseal `apply-best` и трей читают так же:
+каждое имя — его копия в zapret2.
 
 `zapret2 info` печатает папку, версию движка и совместимость Lua (`compat`) или ошибку (`error`).
 

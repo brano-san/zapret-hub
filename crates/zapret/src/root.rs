@@ -149,7 +149,8 @@ pub fn tool(name: &str) -> String {
 
 /// Several root steps as one shell script, so they cost one `sudo -n`/pkexec (one dialog). Files
 /// to write are staged in private temp files (created with `O_EXCL`, mode 0600: nobody else can
-/// swap their text before root copies them) that live as long as the batch.
+/// swap their text before root copies them) that live as long as the batch. A process of this same
+/// user still can: same-uid code is outside the threat model here, as for the engine folder.
 #[derive(Default)]
 pub struct Batch {
     lines: Vec<String>,
