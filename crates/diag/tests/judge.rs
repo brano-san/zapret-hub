@@ -3,7 +3,6 @@ use diag::culprits::{Fault, Group};
 use diag::evaluate::{Answer, Score};
 use diag::judge::fill;
 use diag::logs::discord::{Dave, Voice};
-use diag::logs::neko_routes::Routes;
 use diag::paths::{Ctx, NO_TRICKS_FOR_SYN, PathKind};
 use diag::patterns::{Evidence, Pattern};
 use diag::profiles::{ProbeKind, ProbeSpec, Profile};
@@ -126,7 +125,7 @@ fn no_media_session_in_the_log_is_not_reproduced() {
     fill(
         &mut s,
         &[tcp_ok()],
-        &neko_seen(),
+        &Evidence::default(),
         &ctx(&[ProbeKind::DiscordIpDiscovery]),
         30,
     );
@@ -145,7 +144,7 @@ fn a_stuck_stage_makes_a_quiet_watch_inconclusive() {
     fill(
         &mut s,
         &[tcp_ok()],
-        &neko_seen(),
+        &Evidence::default(),
         &ctx(&[ProbeKind::DiscordIpDiscovery]),
         30,
     );
@@ -165,7 +164,7 @@ fn without_the_discord_log_the_flows_decide() {
     fill(
         &mut s,
         &[],
-        &neko_seen(),
+        &Evidence::default(),
         &ctx(&[ProbeKind::DiscordIpDiscovery]),
         30,
     );
@@ -174,14 +173,6 @@ fn without_the_discord_log_the_flows_decide() {
 
 fn codes(facts: &[diag::agent::Fact]) -> Vec<&str> {
     facts.iter().map(|f| f.code.as_str()).collect()
-}
-
-fn neko_seen() -> Evidence {
-    Evidence {
-        neko: Some(vec![]),
-        neko_routes: Some(Routes::default()),
-        ..Evidence::default()
-    }
 }
 
 #[test]
@@ -196,24 +187,23 @@ fn no_flows() {
 #[test]
 fn clean_when_everything_was_seen() {
     let mut s = Summary::default();
-    let flows = [tcp_ok(), proxied(), voice_flow(10)];
+    let flows = [tcp_ok(), voice_flow(10)];
     let c = ctx(&[ProbeKind::DiscordIpDiscovery]);
-    run(&mut s, &flows, &neko_seen(), &c);
+    run(&mut s, &flows, &Evidence::default(), &c);
     assert_eq!(s.agent.verdict, VerdictCode::Clean);
     assert_eq!(s.agent.confidence.level, Level::High);
     assert!(s.agent.confidence.why.is_empty());
     let o = &s.agent.observed;
     assert_eq!(
         (o.flows, o.tcp, o.udp, o.via_router, o.via_system_proxy),
-        (3, 2, 1, 0, 1)
+        (2, 1, 1, 0, 0)
     );
     assert_eq!(s.agent.context.proxy_udp, Some(false));
 }
 
 #[test]
-fn proxied_flows_without_nekobox_logs_are_inconclusive() {
+fn proxied_flows_are_inconclusive() {
     let mut s = Summary {
-        sources_missing: vec!["журнал NekoBox".into()],
         verdict_text: "соединения программы проходят; если проблема есть, она не в сети".into(),
         ..Summary::default()
     };
@@ -225,33 +215,12 @@ fn proxied_flows_without_nekobox_logs_are_inconclusive() {
     );
     assert_eq!(s.agent.verdict, VerdictCode::Inconclusive);
     assert_eq!(s.agent.confidence.level, Level::Low);
-    assert_eq!(
-        s.agent.confidence.why,
-        ["source_missing:neko_log", "inconclusive"]
-    );
-    assert_eq!(
-        codes(&s.agent.not_checked),
-        ["source_missing:neko_log", "proxy_unseen"]
-    );
+    assert_eq!(s.agent.confidence.why, ["inconclusive"]);
+    assert_eq!(codes(&s.agent.not_checked), ["proxy_unseen"]);
     assert!(
         s.verdict_text.contains("не разобраны"),
         "{}",
         s.verdict_text
-    );
-}
-
-#[test]
-fn a_missing_nekobox_log_does_not_matter_without_proxied_flows() {
-    let mut s = Summary {
-        sources_missing: vec!["журнал NekoBox".into(), "маршруты NekoBox".into()],
-        ..Summary::default()
-    };
-    run(&mut s, &[tcp_ok()], &Evidence::default(), &https());
-    assert_eq!(s.agent.verdict, VerdictCode::Clean);
-    assert!(s.agent.confidence.why.is_empty());
-    assert_eq!(
-        codes(&s.agent.not_checked),
-        ["source_missing:neko_log", "source_missing:neko_routes"]
     );
 }
 
@@ -373,40 +342,19 @@ fn live_only() {
 }
 
 #[test]
-fn whitelist_proxy_broken_peer_side() {
+fn whitelist_and_peer_side() {
     let with = |patterns: Vec<Pattern>, flows: &[FlowCounters]| {
         let mut s = Summary {
             patterns,
             ..Summary::default()
         };
-        run(&mut s, flows, &neko_seen(), &https());
+        run(&mut s, flows, &Evidence::default(), &https());
         s.agent
     };
     let a = with(vec![Pattern::R5Whitelist], &[voice_flow(0)]);
     assert_eq!(a.verdict, VerdictCode::Whitelist);
     assert_eq!(codes(&a.evidence), ["pattern:r5_whitelist"]);
-    let r1 = |direct_ok| Pattern::R1ViaSystemProxy {
-        domain: "a.example".into(),
-        direct_ok,
-        proxy_ok: false,
-        route: Some("напрямую".into()),
-        direct: true,
-        rule: None,
-    };
-    assert_eq!(
-        with(vec![r1(false)], &[tcp_ok(), proxied()]).verdict,
-        VerdictCode::ProxyBroken
-    );
-    // Sent direct, and direct works: NekoBox's way passes.
-    assert_eq!(
-        with(vec![r1(true)], &[tcp_ok(), proxied()]).verdict,
-        VerdictCode::Clean
-    );
-    let r6 = Pattern::R6DaveStalled {
-        alone: false,
-        control_route: None,
-        direct: false,
-    };
+    let r6 = Pattern::R6DaveStalled { alone: false };
     let a = with(vec![r6], &[tcp_ok()]);
     assert_eq!(
         (a.verdict, a.confidence.level),
@@ -447,50 +395,32 @@ fn a_fact_per_pattern() {
             has: Protocol::Tcp,
             needs: Protocol::Udp,
         },
-        Pattern::R1ViaSystemProxy {
-            domain: "a.example".into(),
-            direct_ok: false,
-            proxy_ok: true,
-            route: None,
-            direct: false,
-            rule: None,
-        },
         Pattern::R2VoiceUdp {
             server: "203.0.113.0/24".into(),
             via_vpn: false,
-        },
-        Pattern::R3SlowProxyDns {
-            median_ms: 900,
-            direct_dns: "203.0.113.53".into(),
         },
         Pattern::R4DnsSpoofed {
             domain: "a.example".into(),
         },
         Pattern::R5Whitelist,
-        Pattern::R6DaveStalled {
-            alone: false,
-            control_route: Some("через VPN".into()),
-            direct: false,
-        },
+        Pattern::R6DaveStalled { alone: false },
     ];
     let mut s = Summary {
         patterns,
         ..Summary::default()
     };
-    run(&mut s, &[tcp_ok()], &neko_seen(), &https());
+    run(&mut s, &[tcp_ok()], &Evidence::default(), &https());
     assert_eq!(
         codes(&s.agent.evidence),
         [
             "pattern:r1_rule_misses_protocol",
-            "pattern:r1_via_system_proxy",
             "pattern:r2_voice_udp",
-            "pattern:r3_slow_proxy_dns",
             "pattern:r4_dns_spoofed",
             "pattern:r5_whitelist",
             "pattern:r6_dave_stalled",
         ]
     );
-    assert_eq!(s.agent.evidence[2].args, ["203.0.113.0/24", "false"]);
+    assert_eq!(s.agent.evidence[1].args, ["203.0.113.0/24", "false"]);
     assert!(
         s.agent.evidence.iter().all(|f| !f.text.is_empty()),
         "{:?}",
@@ -510,7 +440,7 @@ fn alone_dave_waits_without_a_fault() {
             no_voice_state: false,
             ws_closed: vec![],
         }),
-        ..neko_seen()
+        ..Evidence::default()
     };
     let mut s = Summary::default();
     let c = ctx(&[ProbeKind::DiscordIpDiscovery]);
@@ -587,7 +517,7 @@ fn unobserved_on_linux_is_at_most_inconclusive_and_says_why() {
     fill(
         &mut s,
         &[],
-        &neko_seen(),
+        &Evidence::default(),
         &ctx(&[ProbeKind::DiscordIpDiscovery]),
         0,
     );

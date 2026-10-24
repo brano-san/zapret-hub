@@ -318,7 +318,7 @@ export type ClientState = {
 
 export type Confidence = {
 	level: Level,
-	/**  Codes, e.g. `stopped`, `budget_hit`, `source_missing:neko_log`, `no_voice_flow`. */
+	/**  Codes, e.g. `stopped`, `budget_hit`, `source_missing:discord_log`, `no_voice_flow`. */
 	why: string[],
 };
 
@@ -741,22 +741,7 @@ export type Pass = {
 
 export type PathKind = { kind: "Current" } | { kind: "Direct" } | { kind: "ProxyPoint"; rule: Rule } | { kind: "ProxyNoZapret"; rule: Rule } | { kind: "Strategy"; name: string } | { kind: "Trick"; candidate: Candidate } | { kind: "ExtendRule"; rule: string; protocol: Protocol };
 
-export type Pattern = { id: "R1RuleMissesProtocol"; rule: string; has: Protocol; needs: Protocol } | 
-/**
- *  A domain the program sent through the system proxy fails directly or via the proxy (spec 6,
- *  8, 16 Р1).
- */
-{ id: "R1ViaSystemProxy"; domain: string; direct_ok: boolean; proxy_ok: boolean; 
-/**  Where NekoBox sent it (`neko.log`). */
-route: string | null; 
-/**  NekoBox sends it direct, by its log or else by its rules. */
-direct: boolean; 
-/**  The `routes_box` rule line that applies to it. */
-rule: string | null } | { id: "R2VoiceUdp"; server: string; via_vpn: boolean } | { id: "R3SlowProxyDns"; median_ms: number; direct_dns: string } | { id: "R4DnsSpoofed"; domain: string } | { id: "R5Whitelist" } | { id: "R6DaveStalled"; alone: boolean; 
-/**  Where NekoBox sent the voice control channel (`*.discord.media`). */
-control_route: string | null; 
-/**  The control channel went direct (not through the VPN). */
-direct: boolean };
+export type Pattern = { id: "R1RuleMissesProtocol"; rule: string; has: Protocol; needs: Protocol } | { id: "R2VoiceUdp"; server: string; via_vpn: boolean } | { id: "R4DnsSpoofed"; domain: string } | { id: "R5Whitelist" } | { id: "R6DaveStalled"; alone: boolean };
 
 /**  The system the app runs on: the page hides what the other one has. */
 export type Platform = "windows" | "linux";
@@ -1146,8 +1131,6 @@ export type VerdictCode =
 "culprits_partial" | 
 /**  Culprits, none fixed. */
 "culprits_unfixed" | 
-/**  Direct flows pass; what goes through the system proxy fails the way NekoBox sends it (Р1). */
-"proxy_broken" | 
 /**  The problem is on the other side (a peer, the service). */
 "peer_side" | 
 /**  A whitelist network (Р5). */

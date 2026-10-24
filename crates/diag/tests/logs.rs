@@ -1,4 +1,4 @@
-use diag::logs::{discord, neko, neko_routes, size, tail_from, tail_since};
+use diag::logs::{discord, size, tail_from, tail_since};
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -10,65 +10,6 @@ fn fx(name: &str) -> PathBuf {
 
 fn lines(name: &str) -> Vec<String> {
     tail_since(&fx(name), 8 << 20, |_| true).unwrap().unwrap()
-}
-
-#[test]
-fn neko_pairs_inbound_with_outbound() {
-    let conns = neko::parse(&lines("neko.log"));
-    assert_eq!(conns.len(), 2);
-    let c = &conns[0];
-    assert_eq!(
-        (c.host.as_str(), c.port, &c.route),
-        ("c-arn08-a4ab867f.discord.media", 2096, &neko::Route::Direct)
-    );
-    assert_eq!(c.outbound_ms, Some(12));
-    assert_eq!(conns[1].route, neko::Route::Proxy);
-    assert_eq!(conns[1].outbound_ms, Some(166));
-    // the later connection wins, as after a rule edit
-    assert_eq!(
-        neko::route_of(&conns, "discord.media"),
-        Some(neko::Route::Proxy)
-    );
-    assert_eq!(neko::route_of(&conns, "example.org"), None);
-}
-
-#[test]
-fn neko_keeps_the_client_port() {
-    let log: Vec<String> = [
-        "INFO[1] [7 0ms] inbound/mixed[mixed-in]: inbound connection from 127.0.0.1:63510",
-        "INFO[1] [7 0ms] inbound/mixed[mixed-in]: inbound connection to steam.live.bhvrdbd.com:443",
-        "INFO[1] [7 2ms] outbound/direct[bypass]: outbound connection to steam.live.bhvrdbd.com:443",
-        "INFO[2] [8 0ms] inbound/mixed[mixed-in]: inbound connection to other.example.com:443",
-        "INFO[2] [8 2ms] outbound/vless[proxy]: outbound connection to other.example.com:443",
-    ]
-    .map(String::from)
-    .to_vec();
-    let conns = neko::parse(&log);
-    assert_eq!(conns[0].from_port, Some(63510));
-    assert_eq!(conns[1].from_port, None);
-}
-
-#[test]
-fn neko_slow_dns() {
-    let slow = neko::parse(&lines("neko-slow-dns.log"));
-    assert_eq!(slow.len(), 6);
-    assert!(neko::slow_dns(&slow));
-    assert!(!neko::slow_dns(&neko::parse(&lines("neko.log"))));
-}
-
-#[test]
-fn routes_box_rule_for_discord_media() {
-    let r = neko_routes::read(&fx("routes_box.json")).unwrap();
-    assert_eq!(r.remote_dns, "https://dns.google/dns-query");
-    assert_eq!(
-        neko_routes::rule_for(&r, "c-arn08-a4ab867f.discord.media"),
-        Some((neko::Route::Direct, "discord.media".to_owned()))
-    );
-    assert_eq!(
-        neko_routes::rule_for(&r, "claude.ai").unwrap().0,
-        neko::Route::Proxy
-    );
-    assert_eq!(neko_routes::rule_for(&r, "notdiscord.media"), None);
 }
 
 #[test]
@@ -161,7 +102,7 @@ fn tail_limits_bytes() {
 #[test]
 fn tail_from_reads_new_lines_and_survives_rotation() {
     let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("neko.log");
+    let p = dir.path().join("proxy.log");
     std::fs::write(
         &p, "a
 b
@@ -189,42 +130,6 @@ e
             .unwrap()
             .is_none()
     );
-}
-
-#[test]
-fn rule_forms() {
-    let mk = |d: &[&str]| neko_routes::Routes {
-        direct: d.iter().map(|s| s.to_string()).collect(),
-        ..Default::default()
-    };
-    let hit = |rule: &str, host: &str| neko_routes::rule_for(&mk(&[rule]), host).map(|x| x.1);
-    assert_eq!(hit("full:a.com", "A.com").as_deref(), Some("full:a.com"));
-    assert_eq!(hit("full:a.com", "x.a.com"), None);
-    assert!(hit("domain:a.com", "x.a.com").is_some());
-    assert!(hit("domain:a.com", "xa.com").is_none());
-    assert!(hit(".a.com", "x.A.com").is_some());
-    assert!(hit("A.com", "a.com").is_some());
-    assert!(hit("keyword:disc", "c1.discord.media").is_some());
-    assert!(hit("regexp:.*", "a.com").is_none());
-    assert!(hit("geosite:ru", "a.ru").is_none());
-}
-
-#[test]
-fn neko_reads_long_go_durations_and_other_outbounds() {
-    let log: Vec<String> = [
-        "INFO[1] [7 0ms] inbound/mixed[mixed-in]: inbound connection to a.example.com:443",
-        "INFO[1] [7 0ms] outbound/block[block]: outbound connection to a.example.com:443",
-        "INFO[1] [7 1m5.25s] outbound/block[block]: outbound connection to a.example.com:443",
-        "INFO[2] [8 0ms] inbound/mixed[mixed-in]: inbound connection to b.example.com:443",
-        "INFO[2] [8 0ms] outbound/direct[bypass]: outbound connection to b.example.com:443",
-        "INFO[2] [8 900µs] outbound/direct[bypass]: outbound connection to b.example.com:443",
-    ]
-    .map(String::from)
-    .to_vec();
-    let conns = neko::parse(&log);
-    assert_eq!(conns[0].route, neko::Route::Other("block[block]".into()));
-    assert_eq!(conns[0].outbound_ms, Some(65_250));
-    assert_eq!(conns[1].outbound_ms, Some(0));
 }
 
 fn voice_of(lines: &[&str]) -> discord::Voice {

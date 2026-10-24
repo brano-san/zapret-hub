@@ -59,11 +59,6 @@ pub fn steps(s: &Summary, profile: &Profile) -> Vec<String> {
         ) {
             out.push(format!("ask_user: {}", profile.hint));
             out.push(again.clone());
-        } else if v == VerdictCode::Inconclusive
-            && s.sources_missing.iter().any(|m| m.contains("NekoBox"))
-        {
-            out.push("zapret-hub-cli settings set nekobox_dir <path>".into());
-            out.push(again.clone());
         }
     }
     for c in s.system_checks.iter().filter(|c| c.level != CheckLevel::Ok) {
@@ -143,16 +138,6 @@ mod tests {
         let out = steps(&summary(VerdictCode::NoFlows), &profile());
         assert_eq!(out[0], "ask_user: Зайдите в голосовой канал");
         assert!(out[1].contains("diag run --profile discord"));
-    }
-
-    #[test]
-    fn inconclusive_without_nekobox_sets_its_folder() {
-        let mut s = summary(VerdictCode::Inconclusive);
-        s.sources_missing = vec!["журнал NekoBox".into()];
-        assert_eq!(
-            steps(&s, &profile())[0],
-            "zapret-hub-cli settings set nekobox_dir <path>"
-        );
     }
 
     #[test]

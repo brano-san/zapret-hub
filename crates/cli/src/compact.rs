@@ -53,8 +53,6 @@ fn minus_default<T: Serialize + Default>(v: &T) -> Value {
 
 fn source_code(name: &str) -> String {
     match name {
-        "журнал NekoBox" => "neko_log".into(),
-        "маршруты NekoBox" => "neko_routes".into(),
         "журнал Discord" => "discord_log".into(),
         other => other.into(),
     }
@@ -269,7 +267,7 @@ mod tests {
         let out = compact(&load(include_str!("../tests/fixtures/diag-clean.json")));
         assert_eq!(out["checks"].as_array().unwrap().len(), 1);
         assert_eq!(out["checks"][0]["id"], "Proxy");
-        assert_eq!(out["missing"], json!(["neko_log", "neko_routes"]));
+        assert_eq!(out["missing"], json!(["discord_log"]));
         // An old report has an empty agent part: nothing of it is printed.
         assert!(out.get("client").is_none() && out.get("context").is_none());
         assert!(out.get("evidence").is_none() && out.get("next_steps").is_none());

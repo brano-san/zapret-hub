@@ -295,33 +295,6 @@ pub(crate) fn pattern_texts(
                 protocol_text(*has),
                 protocol_text(*needs)
             )),
-            Pattern::R1ViaSystemProxy {
-                domain,
-                direct_ok,
-                proxy_ok,
-                route,
-                direct,
-                rule,
-            } => {
-                let ok = |b: bool| if b { "работает" } else { "не отвечает" };
-                explanations.push(format!(
-                    "{domain} идёт через системный прокси: напрямую {}, через прокси {}; NekoBox отправляет его {}",
-                    ok(*direct_ok),
-                    ok(*proxy_ok),
-                    route.as_deref().unwrap_or("неизвестно куда: в журнале NekoBox его нет")
-                ));
-                if !direct_ok && *proxy_ok && *direct {
-                    let what = rule.as_deref().unwrap_or(domain);
-                    push(
-                        fixes,
-                        Fix::Manual {
-                            text: format!(
-                                "NekoBox: Настройки → Маршрутизация → Basic: убрать «{what}» из Direct, добавить «{domain}» в Proxy; затем «Проверить снова»"
-                            ),
-                        },
-                    );
-                }
-            }
             Pattern::R2VoiceUdp { server, via_vpn } => explanations.push(if *via_vpn {
                 format!("голос Discord ({server}) идёт через VPN: медиасервер видит адрес прокси")
             } else {
@@ -329,24 +302,10 @@ pub(crate) fn pattern_texts(
                     "голосовой UDP Discord до {server} напрямую не проходит; путь — прокси точечно (готовое правило «Discord голос»)"
                 )
             }),
-            Pattern::R3SlowProxyDns { median_ms, direct_dns } => {
-                explanations.push(
-                    "NekoBox долго ищет адреса через свой прямой DNS; каждое соединение ждёт"
-                        .into(),
-                );
-                push(
-                    fixes,
-                    Fix::Manual {
-                        text: format!(
-                            "соединения NekoBox ждут {median_ms} мс: смените в NekoBox прямой DNS ({direct_dns}) на рабочий, например https://common.dot.dns.yandex.net/dns-query"
-                        ),
-                    },
-                );
-            }
             Pattern::R4DnsSpoofed { domain } => spoofed.push(domain.as_str()),
             Pattern::R5Whitelist => {}
             // `alone` is never set now: alone, DAVE waits for a peer (`judge`).
-            Pattern::R6DaveStalled { direct, .. } => {
+            Pattern::R6DaveStalled { .. } => {
                 explanations.push(
                     "сеть в порядке: соединение с голосовым сервером есть, но собеседник не прислал ключи шифрования"
                         .into(),
@@ -357,14 +316,6 @@ pub(crate) fn pattern_texts(
                         text: "пусть собеседник перезайдёт или перезапустит Discord; проверить себя — зайти в канал одному".into(),
                     },
                 );
-                if *direct {
-                    push(
-                        fixes,
-                        Fix::Manual {
-                            text: "Настройки → Маршрутизация → Basic: убрать discord.media из Direct, добавить в Proxy".into(),
-                        },
-                    );
-                }
             }
         }
     }
@@ -424,30 +375,6 @@ pub fn summarize(
         explanations.push(LIVE_ONLY.into());
     }
     let explanations = unique(explanations);
-    // What fails the way NekoBox sends it now: direct, through the VPN, or (not known) both.
-    let proxied_broken: Vec<&str> = patterns
-        .iter()
-        .filter_map(|p| match p {
-            Pattern::R1ViaSystemProxy {
-                domain,
-                direct_ok,
-                proxy_ok,
-                route,
-                direct,
-                rule,
-            } => {
-                let fails = if *direct {
-                    !direct_ok
-                } else if route.is_some() || rule.is_some() {
-                    !proxy_ok
-                } else {
-                    !direct_ok && !proxy_ok
-                };
-                fails.then_some(domain.as_str())
-            }
-            _ => None,
-        })
-        .collect();
     let verdict_text = match verdict {
         _ if whitelist => WHITELIST.into(),
         Verdict::NoFlows => {
@@ -456,10 +383,6 @@ pub fn summarize(
                 "программа не открывала новых соединений за {observe_secs} с: запустите её и повторите проблему во время наблюдения"
             )
         }
-        Verdict::Clean if !proxied_broken.is_empty() => format!(
-            "напрямую соединения программы проходят; через системный прокси не работает: {}",
-            proxied_broken.join(", ")
-        ),
         Verdict::Clean => "соединения программы проходят; если проблема есть, она не в сети".into(),
         Verdict::Culprits(g) => format!(
             "проблемные адреса: {}",

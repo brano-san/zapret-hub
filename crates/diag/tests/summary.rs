@@ -2,9 +2,8 @@ use diag::candidates::Candidate;
 use diag::culprits::{Fault, Group, Verdict};
 use diag::evaluate::Score;
 use diag::logs::discord::{Dave, Voice};
-use diag::logs::neko::{Conn, Route};
 use diag::paths::{Ctx, PathKind};
-use diag::patterns::{Evidence, Pattern, Proxied, detect, proxied_domains};
+use diag::patterns::{Evidence, Pattern, detect};
 use diag::profiles::{ProbeKind, ProbeSpec, Profile};
 use diag::report;
 use diag::run::{GroupResult, Outcome};
@@ -126,14 +125,11 @@ fn outcome(group: Group, results: Vec<(PathKind, Score)>) -> Outcome {
 fn evidence() -> Evidence {
     Evidence {
         flows: vec![],
-        neko: None,
-        neko_routes: None,
         voice: None,
         proxy_ip: None,
         dns_mismatch: vec![],
         ru_ok: None,
         foreign_syn_dead: None,
-        proxied: vec![],
     }
 }
 
@@ -233,43 +229,6 @@ fn r2_voice_via_vpn() {
 }
 
 #[test]
-fn r3_slow_dns() {
-    let conn = |ms| Conn {
-        host: "discord.com".into(),
-        port: 443,
-        route: Route::Proxy,
-        outbound_ms: Some(ms),
-        from_port: None,
-    };
-    let mut e = evidence();
-    e.neko = Some(vec![
-        conn(5000),
-        conn(6000),
-        conn(7000),
-        conn(100),
-        conn(8000),
-    ]);
-    e.neko_routes = Some(diag::logs::neko_routes::Routes {
-        direct_dns: "https://doh.pub/dns-query".into(),
-        ..Default::default()
-    });
-    let p = detect(&e, &empty(), &ctx());
-    assert_eq!(
-        p,
-        vec![Pattern::R3SlowProxyDns {
-            median_ms: 6000,
-            direct_dns: "https://doh.pub/dns-query".into()
-        }]
-    );
-    let s = summarize(&Verdict::Clean, &empty(), &p, &ctx(), ID.into(), 30);
-    assert!(s.explanations.iter().any(|x| x
-        == "NekoBox долго ищет адреса через свой прямой DNS; каждое соединение ждёт"));
-    assert!(
-        matches!(&s.fixes[..], [Fix::Manual { text }] if text.contains("https://doh.pub/dns-query"))
-    );
-}
-
-#[test]
 fn r4_mismatch() {
     let mut e = evidence();
     e.dns_mismatch = vec!["youtube.com".into(), "googlevideo.com".into()];
@@ -316,22 +275,8 @@ fn r5_whitelist_skips_paths() {
 fn r6_with_peer_blames_peer() {
     let mut e = evidence();
     e.voice = Some(voice(vec![42], 20));
-    e.neko = Some(vec![Conn {
-        host: "c-fra.discord.media".into(),
-        port: 2096,
-        route: Route::Proxy,
-        outbound_ms: Some(100),
-        from_port: None,
-    }]);
     let p = detect(&e, &empty(), &ctx());
-    assert_eq!(
-        p,
-        vec![Pattern::R6DaveStalled {
-            alone: false,
-            control_route: Some("через VPN".into()),
-            direct: false,
-        }]
-    );
+    assert_eq!(p, vec![Pattern::R6DaveStalled { alone: false }]);
     let s = summarize(&Verdict::Clean, &empty(), &p, &ctx(), ID.into(), 30);
     assert!(s.explanations.iter().any(|x| x
         == "сеть в порядке: соединение с голосовым сервером есть, но собеседник не прислал ключи шифрования"));
@@ -351,13 +296,6 @@ fn r6_alone_is_not_a_fault() {
     // Alone, DAVE waits for a second participant: normal (domain review, 3 local sessions).
     let mut e = evidence();
     e.voice = Some(voice(vec![], 20));
-    e.neko = Some(vec![Conn {
-        host: "c-fra.discord.media".into(),
-        port: 2096,
-        route: Route::Direct,
-        outbound_ms: Some(100),
-        from_port: None,
-    }]);
     let p = detect(&e, &empty(), &ctx());
     assert!(p.is_empty(), "{p:?}");
     let s = summarize(&Verdict::Clean, &empty(), &p, &ctx(), ID.into(), 30);
@@ -818,116 +756,6 @@ fn apply_unites_with_the_rule_of_that_name() {
         },
     );
     assert_eq!(list.len(), 2);
-}
-
-#[test]
-fn r1_a_proxied_domain_sent_direct() {
-    const DBD_API: &str = "steam.live.bhvrdbd.com";
-    let conn = |host: &str, from_port| Conn {
-        host: host.into(),
-        port: 443,
-        route: Route::Direct,
-        outbound_ms: Some(20),
-        from_port,
-    };
-    let conns = vec![
-        conn(DBD_API, Some(63510)),
-        conn(DBD_API, Some(63511)),
-        conn("1.2.3.4", Some(63511)),
-        conn("other.example.com", Some(1)),
-        conn("other.example.com", None),
-    ];
-    let proxied = |port| FlowCounters {
-        local_port: port,
-        via_system_proxy: true,
-        via_router: false,
-        ..flow(Protocol::Tcp, "127.0.0.1:18082")
-    };
-    let mut flows = vec![proxied(63510), proxied(63511)];
-    flows.push(flow(Protocol::Tcp, "1.1.1.1:443"));
-    assert_eq!(proxied_domains(&flows, &conns), [DBD_API]);
-    let many: Vec<Conn> = (0..9)
-        .map(|i| conn(&format!("h{i}.example.com"), Some(63510)))
-        .collect();
-    assert_eq!(proxied_domains(&flows, &many).len(), 5);
-
-    let mut e = evidence();
-    e.neko = Some(conns);
-    e.neko_routes = Some(diag::logs::neko_routes::Routes {
-        direct: vec!["domain:bhvrdbd.com".into()],
-        ..Default::default()
-    });
-    e.proxied = vec![
-        Proxied {
-            domain: DBD_API.into(),
-            direct_ok: false,
-            proxy_ok: true,
-        },
-        Proxied {
-            domain: "fine.example.com".into(),
-            direct_ok: true,
-            proxy_ok: true,
-        },
-    ];
-    let p = detect(&e, &empty(), &ctx());
-    assert_eq!(
-        p,
-        [Pattern::R1ViaSystemProxy {
-            domain: DBD_API.into(),
-            direct_ok: false,
-            proxy_ok: true,
-            route: Some("напрямую".into()),
-            direct: true,
-            rule: Some("domain:bhvrdbd.com".into()),
-        }]
-    );
-    let s = summarize(&Verdict::Clean, &empty(), &p, &ctx(), ID.into(), 30);
-    assert!(s.verdict_text.contains(DBD_API), "{}", s.verdict_text);
-    assert!(
-        matches!(&s.fixes[..], [Fix::Manual { text }] if text.contains("убрать «domain:bhvrdbd.com» из Direct")),
-        "{:?}",
-        s.fixes
-    );
-    // Via the proxy it fails too: nothing to move in NekoBox.
-    e.proxied[0].proxy_ok = false;
-    let p = detect(&e, &empty(), &ctx());
-    let s = summarize(&Verdict::Clean, &empty(), &p, &ctx(), ID.into(), 30);
-    assert!(s.fixes.is_empty());
-    assert_eq!(s.explanations.len(), 1, "{:?}", s.explanations);
-}
-
-#[test]
-fn r1_a_proxied_domain_already_through_the_vpn_is_not_a_failure() {
-    let p = |route: Option<&str>, direct, rule: Option<&str>, direct_ok, proxy_ok| {
-        Pattern::R1ViaSystemProxy {
-            domain: "steam.live.bhvrdbd.com".into(),
-            direct_ok,
-            proxy_ok,
-            route: route.map(str::to_owned),
-            direct,
-            rule: rule.map(str::to_owned),
-        }
-    };
-    let verdict = |pattern| {
-        summarize(&Verdict::Clean, &empty(), &[pattern], &ctx(), ID.into(), 30).verdict_text
-    };
-    const CLEAN: &str = "соединения программы проходят; если проблема есть, она не в сети";
-    // Direct fails, the VPN works, and NekoBox already sends it through the VPN.
-    assert_eq!(
-        verdict(p(Some("через VPN"), false, None, false, true)),
-        CLEAN
-    );
-    assert_eq!(
-        verdict(p(None, false, Some("domain:bhvrdbd.com"), false, true)),
-        CLEAN,
-        "the proxy list"
-    );
-    // The way it goes now fails: named.
-    assert!(verdict(p(Some("напрямую"), true, None, false, true)).contains("не работает"));
-    assert!(verdict(p(Some("через VPN"), false, None, true, false)).contains("не работает"));
-    // Not known where it goes: only when both fail.
-    assert_eq!(verdict(p(None, false, None, false, true)), CLEAN);
-    assert!(verdict(p(None, false, None, false, false)).contains("не работает"));
 }
 
 #[test]

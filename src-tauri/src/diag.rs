@@ -293,7 +293,7 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
     }
     diag::paths::current_first(&mut ctx, zapret::service::strategy().as_deref());
     let started = Instant::now();
-    let marks = Marks::now(&settings);
+    let marks = Marks::now();
     // Read-only, before anything changes; no zapret folder, no checks.
     let checks = crate::commands::checks_now(&state).unwrap_or_else(|err| {
         log::info!("diagnostics without system checks: {err:#}");

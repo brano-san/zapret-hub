@@ -8,7 +8,9 @@ use serde_json::Value;
 
 use router::observe::FlowCounters;
 
+use crate::agent::VerdictCode;
 use crate::culprits::Group;
+use crate::patterns::Pattern;
 use crate::summary::{GroupSummary, Summary};
 
 const KEEP: usize = 20;
@@ -102,6 +104,16 @@ pub fn fill_defaults(report: &mut Value) -> anyhow::Result<()> {
             agent,
             serde_json::to_value(crate::agent::AgentView::default())?,
         );
+        // A verdict code 0.9.1 dropped (`proxy_broken`): its text stays, the code says less.
+        if let Some(verdict) = agent.get_mut("verdict")
+            && serde_json::from_value::<VerdictCode>(verdict.clone()).is_err()
+        {
+            *verdict = serde_json::to_value(VerdictCode::Inconclusive)?;
+        }
+    }
+    // Patterns 0.9.1 dropped (`R1ViaSystemProxy`, `R3SlowProxyDns`) are left out.
+    if let Some(Value::Array(patterns)) = report.get_mut("patterns") {
+        patterns.retain(|p| serde_json::from_value::<Pattern>(p.clone()).is_ok());
     }
     let summary = serde_json::to_value(GroupSummary::default())?;
     let group = serde_json::to_value(Group::default())?;
@@ -144,5 +156,27 @@ mod tests {
         std::fs::write(dir.path().join(format!("{id}.json")), value.to_string()).unwrap();
         let summary = load(dir.path(), id).unwrap();
         assert_eq!(summary.id, id);
+    }
+
+    #[test]
+    fn a_report_with_the_dropped_proxy_patterns_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = "2026-10-21_10-00-00";
+        let mut value = serde_json::to_value(Summary {
+            id: id.into(),
+            ..Summary::default()
+        })
+        .unwrap();
+        value["agent"]["verdict"] = Value::String("proxy_broken".into());
+        value["patterns"] = serde_json::json!([
+            {"id": "R1ViaSystemProxy", "domain": "a.example", "direct_ok": false, "proxy_ok": true,
+             "route": null, "direct": true, "rule": null},
+            {"id": "R3SlowProxyDns", "median_ms": 5000, "direct_dns": "x"},
+            {"id": "R6DaveStalled", "alone": false, "control_route": null, "direct": true},
+        ]);
+        std::fs::write(dir.path().join(format!("{id}.json")), value.to_string()).unwrap();
+        let summary = load(dir.path(), id).unwrap();
+        assert_eq!(summary.agent.verdict, VerdictCode::Inconclusive);
+        assert_eq!(summary.patterns, [Pattern::R6DaveStalled { alone: false }]);
     }
 }

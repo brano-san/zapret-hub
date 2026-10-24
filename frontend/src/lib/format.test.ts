@@ -234,12 +234,11 @@ describe("diagnostics", () => {
     const titles = [
       patternTitle({ id: "R1RuleMissesProtocol", rule: "DBD Process", has: "udp", needs: "tcp" }),
       patternTitle({ id: "R2VoiceUdp", server: "104.29.1.1", via_vpn: false }),
-      patternTitle({ id: "R3SlowProxyDns", median_ms: 5000, direct_dns: "doh.pub" }),
       patternTitle({ id: "R4DnsSpoofed", domain: "youtube.com" }),
       patternTitle({ id: "R5Whitelist" }),
-      patternTitle({ id: "R6DaveStalled", alone: false, control_route: null, direct: true }),
+      patternTitle({ id: "R6DaveStalled", alone: false }),
     ];
-    expect(titles.map((title) => title.slice(0, 3))).toEqual(["Р1.", "Р2.", "Р3.", "Р4.", "Р5.", "Р6."]);
+    expect(titles.map((title) => title.slice(0, 3))).toEqual(["Р1.", "Р2.", "Р4.", "Р5.", "Р6."]);
     expect(titles[0]).toBe("Р1. Правило программы не покрывает протокол");
   });
 

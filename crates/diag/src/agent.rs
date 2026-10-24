@@ -23,8 +23,6 @@ pub enum VerdictCode {
     CulpritsPartial,
     /// Culprits, none fixed.
     CulpritsUnfixed,
-    /// Direct flows pass; what goes through the system proxy fails the way NekoBox sends it (Р1).
-    ProxyBroken,
     /// The problem is on the other side (a peer, the service).
     PeerSide,
     /// A whitelist network (Р5).
@@ -45,7 +43,7 @@ pub enum Level {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, specta::Type)]
 pub struct Confidence {
     pub level: Level,
-    /// Codes, e.g. `stopped`, `budget_hit`, `source_missing:neko_log`, `no_voice_flow`.
+    /// Codes, e.g. `stopped`, `budget_hit`, `source_missing:discord_log`, `no_voice_flow`.
     pub why: Vec<String>,
 }
 

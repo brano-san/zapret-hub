@@ -8,7 +8,7 @@ use diag::culprits::Fault;
 use diag::evaluate::works;
 use diag::logs;
 use diag::paths::Ctx;
-use diag::patterns::{self, Evidence, Proxied};
+use diag::patterns::Evidence;
 use diag::run::Outcome;
 use probe::curl::{CheckStatus, Via};
 use router::observe::FlowCounters;
@@ -23,20 +23,14 @@ const PLAIN_DNS: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 
 
 /// The sizes of the logs when watching began: only what they get after it is read.
 pub(super) struct Marks {
-    neko: Option<PathBuf>,
-    neko_at: u64,
     discord: Vec<(PathBuf, u64)>,
     /// `discord-webrtc_0` and `_1` of each Discord; a file not there yet is marked at 0.
     pub(super) webrtc: Vec<(PathBuf, u64)>,
 }
 
 impl Marks {
-    pub(super) fn now(settings: &crate::settings::Settings) -> Self {
-        let neko = nekobox_dir(settings.nekobox_dir.as_deref(), settings.socks5.as_deref());
-        let log = neko.as_deref().map(neko_log);
+    pub(super) fn now() -> Self {
         Marks {
-            neko_at: log.as_deref().and_then(logs::size).unwrap_or(0),
-            neko,
             discord: logs::discord_log_paths()
                 .into_iter()
                 .map(|p| {
@@ -47,48 +41,6 @@ impl Marks {
             webrtc: super::client::webrtc_marks(),
         }
     }
-}
-
-/// The setting, else the folder of a running `nekobox.exe` or `nekobox_core.exe`, else NekoBox's
-/// folder of whatever listens on the proxy's port (Throne, nekoray, other builds).
-fn nekobox_dir(setting: Option<&str>, socks5: Option<&str>) -> Option<PathBuf> {
-    if let Some(dir) = setting {
-        return Some(PathBuf::from(dir));
-    }
-    ["nekobox.exe", "nekobox_core.exe"]
-        .into_iter()
-        .flat_map(zapret::procs::find)
-        .find_map(|p| p.exe?.parent().map(Path::to_path_buf))
-        .or_else(|| {
-            let port = router::parse_proxy(socks5).ok()?.port();
-            let pid = router::owner::listener_pid(port)?;
-            neko_root(Path::new(&router::owner::image_path(pid)?))
-        })
-}
-
-/// The folder of `exe` or its parent, whichever has NekoBox's `config` (a core may sit one deeper).
-fn neko_root(exe: &Path) -> Option<PathBuf> {
-    exe.ancestors()
-        .skip(1)
-        .take(2)
-        .find(|dir| dir.join("config").join("groups").is_dir())
-        .map(Path::to_path_buf)
-}
-
-fn neko_log(dir: &Path) -> PathBuf {
-    dir.join("config").join("neko.log")
-}
-
-/// `config\routes_box\<the routing NekoBox uses>`.
-fn neko_routes(dir: &Path) -> PathBuf {
-    let config = dir.join("config");
-    let active = std::fs::read_to_string(config.join("groups").join("nekobox.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|v| v["active_routing"].as_str().map(str::to_owned))
-        .filter(|name| !name.is_empty() && !name.contains(['\\', '/']))
-        .unwrap_or_else(|| "Default".into());
-    config.join("routes_box").join(active)
 }
 
 /// Seconds since local midnight, as Discord stamps its log.
@@ -152,24 +104,6 @@ pub(super) fn evidence(
     let socks5 = state.socks5();
     let mut missing = Vec::new();
     let read = |path: &Path, at: u64| logs::tail_from(path, at, LOG_BYTES).ok().flatten();
-    let neko = marks
-        .neko
-        .as_deref()
-        .and_then(|dir| read(&neko_log(dir), marks.neko_at))
-        .map(|lines| logs::neko::parse(&lines));
-    let neko_routes = marks
-        .neko
-        .as_deref()
-        .and_then(|dir| logs::neko_routes::read(&neko_routes(dir)).ok());
-    // Only a hub with a proxy expects NekoBox.
-    if socks5.is_some() {
-        if neko.is_none() {
-            missing.push("журнал NekoBox".to_owned());
-        }
-        if neko_routes.is_none() {
-            missing.push("маршруты NekoBox".to_owned());
-        }
-    }
     let voices: Vec<logs::discord::Voice> = marks
         .discord
         .iter()
@@ -207,64 +141,18 @@ pub(super) fn evidence(
             .filter_map(|(d, check)| check.join().unwrap_or(false).then(|| d.clone()))
             .collect()
     });
-    // Spec 6: the program's domains through the system proxy, directly and via the proxy.
-    let domains = match (&neko, &socks5) {
-        (Some(conns), Some(_)) if !state.diag_canceled() => patterns::proxied_domains(flows, conns),
-        _ => Vec::new(),
-    };
-    let proxied = std::thread::scope(|scope| {
-        let checks: Vec<_> = domains
-            .iter()
-            .map(|domain| {
-                let ok = |via: Via| {
-                    scope.spawn(move || {
-                        probe::curl::https_via(domain, None, &via, None).status == CheckStatus::Ok
-                    })
-                };
-                let proxy = Via::Socks5(socks5.clone().unwrap_or_default());
-                (domain, ok(Via::Direct), ok(proxy))
-            })
-            .collect();
-        checks
-            .into_iter()
-            .map(|(domain, direct, proxy)| Proxied {
-                domain: domain.clone(),
-                direct_ok: direct.join().unwrap_or(false),
-                proxy_ok: proxy.join().unwrap_or(false),
-            })
-            .collect()
-    });
     let ru_ok = network.then(|| {
         probe::curl::https_via("ya.ru", None, &Via::Direct, None).status == CheckStatus::Ok
     });
     (
         Evidence {
             flows: flows.to_vec(),
-            neko,
-            neko_routes,
             voice,
             proxy_ip,
             dns_mismatch,
             ru_ok,
             foreign_syn_dead: foreign_syn_dead(outcome),
-            proxied,
         },
         missing,
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::neko_root;
-
-    #[test]
-    fn nekobox_folder_from_the_listener_image() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("config").join("groups")).unwrap();
-        let root = dir.path().to_path_buf();
-        assert_eq!(neko_root(&root.join("Throne.exe")), Some(root.clone()));
-        assert_eq!(neko_root(&root.join("core").join("Core.exe")), Some(root));
-        let other = tempfile::tempdir().unwrap();
-        assert_eq!(neko_root(&other.path().join("app.exe")), None);
-    }
 }

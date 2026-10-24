@@ -1,9 +1,7 @@
-//! Read-only readers of the proxy and Discord logs.
+//! Read-only readers of the client logs (Discord, Steam).
 
 pub mod discord;
 pub mod discord_client;
-pub mod neko;
-pub mod neko_routes;
 pub mod steam;
 pub mod webrtc;
 

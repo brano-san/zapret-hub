@@ -764,9 +764,7 @@ export const S = {
     },
     patternTitles: {
       R1RuleMissesProtocol: "Р1. Правило программы не покрывает протокол",
-      R1ViaSystemProxy: "Р1. Домен через системный прокси не работает",
       R2VoiceUdp: "Р2. Голосовой UDP Discord",
-      R3SlowProxyDns: "Р3. Прокси «не работает»: сломан прямой DNS NekoBox",
       R4DnsSpoofed: "Р4. Подмена DNS провайдером",
       R5Whitelist: "Р5. Режим белых списков у провайдера",
       R6DaveStalled: "Р6. Голос подключён, но шифрование DAVE не завершается",

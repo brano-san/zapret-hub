@@ -16,7 +16,7 @@ use crate::summary::{Summary, WHITELIST, pattern_texts};
 const DAVE_ALONE: &str =
     "вы один в канале: Discord ждёт второго участника, чтобы начать шифрование (DAVE); это не сбой";
 const PROXY_UNSEEN: &str =
-    "соединения через системный прокси не разобраны: нет журнала или маршрутов NekoBox";
+    "соединения через системный прокси не разобраны: хаб не видит, куда прокси их отправляет";
 const NO_VOICE_FLOW: &str =
     "голосового UDP-потока не было: зайдите в голосовой канал во время наблюдения";
 
@@ -32,22 +32,15 @@ fn port_of(f: &FlowCounters) -> Option<u16> {
 /// A stable code for a `sources_missing` entry (evidence.rs words them).
 fn source_code(what: &str) -> &'static str {
     match what {
-        "журнал NekoBox" => "neko_log",
-        "маршруты NekoBox" => "neko_routes",
         "журнал Discord" => "discord_log",
         _ => "other",
     }
 }
 
 /// What a clean run did not see, as codes with their text.
-fn unseen(
-    flows: &[FlowCounters],
-    evidence: &Evidence,
-    ctx: &Ctx,
-) -> Vec<(&'static str, &'static str)> {
+fn unseen(flows: &[FlowCounters], ctx: &Ctx) -> Vec<(&'static str, &'static str)> {
     let mut out = vec![];
-    let neko_missing = evidence.neko.is_none() || evidence.neko_routes.is_none();
-    if neko_missing && flows.iter().any(|f| f.via_system_proxy) {
+    if flows.iter().any(|f| f.via_system_proxy) {
         out.push(("proxy_unseen", PROXY_UNSEEN));
     }
     let voice_probe = ctx
@@ -62,29 +55,6 @@ fn unseen(
         out.push(("no_voice_flow", NO_VOICE_FLOW));
     }
     out
-}
-
-/// Fails the way NekoBox sends it now (as `summarize` words its verdict).
-fn proxied_fails(p: &Pattern) -> bool {
-    match p {
-        Pattern::R1ViaSystemProxy {
-            direct_ok,
-            proxy_ok,
-            route,
-            direct,
-            rule,
-            ..
-        } => {
-            if *direct {
-                !direct_ok
-            } else if route.is_some() || rule.is_some() {
-                !proxy_ok
-            } else {
-                !direct_ok && !proxy_ok
-            }
-        }
-        _ => false,
-    }
 }
 
 fn observed(flows: &[FlowCounters]) -> Observed {
@@ -151,10 +121,9 @@ fn stage_code(stage: VoiceStage) -> &'static str {
 pub fn judge(
     summary: &Summary,
     flows: &[FlowCounters],
-    evidence: &Evidence,
     ctx: &Ctx,
 ) -> (VerdictCode, Confidence, Observed) {
-    let unseen = unseen(flows, evidence, ctx);
+    let unseen = unseen(flows, ctx);
     let live_only = !ctx.profile.probes.is_empty()
         && ctx.profile.probes.iter().all(|p| p.kind == ProbeKind::Live)
         && !summary.groups.is_empty()
@@ -168,9 +137,6 @@ pub fn judge(
     } else {
         match culprits::verdict(flows) {
             Verdict::NoFlows => VerdictCode::NoFlows,
-            Verdict::Clean if summary.patterns.iter().any(proxied_fails) => {
-                VerdictCode::ProxyBroken
-            }
             Verdict::Clean
                 if summary
                     .patterns
@@ -204,13 +170,8 @@ pub fn judge(
             why.push(code.into());
         }
     }
-    // NekoBox's logs matter only for what went through the system proxy.
-    let proxied = flows.iter().any(|f| f.via_system_proxy);
     for what in &summary.sources_missing {
-        let source = source_code(what);
-        if proxied || !source.starts_with("neko") {
-            why.push(format!("source_missing:{source}"));
-        }
+        why.push(format!("source_missing:{}", source_code(what)));
     }
     let at_floor = summary.groups.iter().any(|g| {
         g.best
@@ -267,27 +228,12 @@ fn pattern_fact(p: &Pattern) -> Fact {
             "r1_rule_misses_protocol",
             vec![rule.clone(), format!("{has:?}"), format!("{needs:?}")],
         ),
-        Pattern::R1ViaSystemProxy {
-            domain,
-            direct_ok,
-            proxy_ok,
-            ..
-        } => (
-            "r1_via_system_proxy",
-            vec![domain.clone(), s(direct_ok), s(proxy_ok)],
-        ),
         Pattern::R2VoiceUdp { server, via_vpn } => {
             ("r2_voice_udp", vec![server.clone(), s(via_vpn)])
         }
-        Pattern::R3SlowProxyDns {
-            median_ms,
-            direct_dns,
-        } => ("r3_slow_proxy_dns", vec![s(median_ms), direct_dns.clone()]),
         Pattern::R4DnsSpoofed { domain } => ("r4_dns_spoofed", vec![domain.clone()]),
         Pattern::R5Whitelist => ("r5_whitelist", vec![]),
-        Pattern::R6DaveStalled { control_route, .. } => {
-            ("r6_dave_stalled", control_route.iter().cloned().collect())
-        }
+        Pattern::R6DaveStalled { .. } => ("r6_dave_stalled", vec![]),
     };
     let mut texts = vec![];
     pattern_texts(std::slice::from_ref(p), &mut texts, &mut vec![]);
@@ -322,7 +268,7 @@ pub fn fill(
     ctx: &Ctx,
     observe_secs: u32,
 ) {
-    let (verdict, confidence, mut seen) = judge(summary, flows, evidence, ctx);
+    let (verdict, confidence, mut seen) = judge(summary, flows, ctx);
     seen.secs = observe_secs;
     let mut facts: Vec<Fact> = summary
         .groups
@@ -369,7 +315,7 @@ pub fn fill(
             }
         }
     }
-    let unseen = unseen(flows, evidence, ctx);
+    let unseen = unseen(flows, ctx);
     not_checked.extend(unseen.iter().map(|(code, text)| Fact {
         code: (*code).into(),
         args: vec![],

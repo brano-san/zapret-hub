@@ -1,8 +1,0 @@
-INFO[0570] [2681560365 0ms] inbound/mixed[mixed-in]: inbound connection to c-arn08-a4ab867f.discord.media:2096
-INFO[0570] [2681560365 0ms] outbound/direct[bypass]: outbound connection to c-arn08-a4ab867f.discord.media:2096
-INFO[0570] [2681560365 12ms] outbound/direct[bypass]: outbound connection to c-arn08-a4ab867f.discord.media:2096
-INFO[0581] dns: exchanged latency.discord.media AAAA latency.discord.media. 300 IN AAAA 2606:4700:7::a29f:89ea
-INFO[0002] [1432714261 0ms] inbound/mixed[mixed-in]: inbound connection to c-arn08-a4ab867f.discord.media:2096
-INFO[0002] [1432714261 0ms] outbound/vless[proxy]: outbound connection to c-arn08-a4ab867f.discord.media:2096
-INFO[0002] [1432714261 166ms] outbound/vless[proxy]: outbound connection to c-arn08-a4ab867f.discord.media:2096
-ERROR[0342] [1860170548 8.85s] inbound/mixed[mixed-in]: process connection from 127.0.0.1:49548: download: write tcp 203.0.113.10:443: broken pipe

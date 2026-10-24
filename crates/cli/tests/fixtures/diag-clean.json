@@ -11,8 +11,7 @@
   "profile": "Discord",
   "rollback_error": null,
   "sources_missing": [
-    "журнал NekoBox",
-    "маршруты NekoBox"
+    "журнал Discord"
   ],
   "stopped": false,
   "system_checks": [

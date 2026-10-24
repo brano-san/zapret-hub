@@ -1,1 +1,0 @@
-{"custom": "{\"rules\": []}", "def_outbound": "proxy", "direct_dns": "https://common.dot.dns.yandex.net/dns-query", "direct_domain": "yandex.ru\nya.ru\ndiscord.com\ndiscord.media", "proxy_domain": "claude.ai\nstatsig.com", "remote_dns": "https://dns.google/dns-query", "dns_routing": true}
