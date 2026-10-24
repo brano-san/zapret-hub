@@ -282,12 +282,21 @@ pub mod queue {
     pub const SETTLE: Duration = Duration::from_millis(150);
 
     /// The queue file: read directly, else through `sudo -n` (the kernel makes it `0440 root`).
-    /// Never pkexec: this is polled, a dialog per poll is not an option. `None` when neither works.
+    /// Never pkexec: this is polled, a dialog per poll is not an option. `None` when neither works;
+    /// once `sudo -n` failed it is not tried again.
+    // ponytail: the refusal is kept until the app restarts; a sudoers rule added meanwhile needs it.
     pub fn text() -> Option<String> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static SUDO_FAILED: AtomicBool = AtomicBool::new(false);
         std::fs::read_to_string(FILE).ok().or_else(|| {
-            crate::root::run_unprompted("cat", &[FILE])
+            if SUDO_FAILED.load(Ordering::Relaxed) {
+                return None;
+            }
+            let text = crate::root::run_unprompted("cat", &[FILE])
                 .filter(exec::Output::success)
-                .map(|out| out.stdout)
+                .map(|out| out.stdout);
+            SUDO_FAILED.store(text.is_none(), Ordering::Relaxed);
+            text
         })
     }
 

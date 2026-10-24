@@ -175,20 +175,22 @@ pub const FLUSHERS: [(&str, &[&str]); 5] = [
     ("pkill", &["-HUP", "dnsmasq"]),
 ];
 
-/// Each of `FLUSHERS` that is installed, as the user and then as root; nscd and dnsmasq only
-/// while they run. Nothing worked and `/etc/resolv.conf` points at no local stub: there is no
+/// Each of `FLUSHERS` that is installed and whose daemon runs, as the user and then as root. Nothing worked and `/etc/resolv.conf` points at no local stub: there is no
 /// cache to flush, which is success too.
 #[cfg(target_os = "linux")]
 pub fn flush_dns() -> anyhow::Result<()> {
     use std::time::Duration;
     let mut tried = Vec::new();
     for (prog, args) in FLUSHERS {
+        // The cache's daemon (its process name; systemd-resolved's is cut to 15 characters):
+        // asking root to flush one that is not running only raises a dialog for nothing.
         let daemon = match prog {
-            "nscd" => Some("nscd"),
-            "pkill" => Some("dnsmasq"),
-            _ => None,
+            "resolvectl" | "systemd-resolve" => "systemd-resolve",
+            "nmcli" => "NetworkManager",
+            "pkill" => "dnsmasq",
+            other => other,
         };
-        if daemon.is_some_and(|daemon| !crate::procs::is_running(daemon)) {
+        if !crate::procs::is_running(daemon) {
             continue;
         }
         let mut cmd = std::process::Command::new(prog);

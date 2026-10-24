@@ -125,7 +125,7 @@ fn rights(exe: &Path) -> (bool, bool) {
     let executable =
         std::fs::metadata(exe).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0);
     let getcap = exec::run(
-        std::process::Command::new("getcap").arg(exe),
+        std::process::Command::new(crate::root::tool("getcap")).arg(exe),
         Duration::from_secs(10),
         None,
     )
@@ -210,7 +210,7 @@ fn tables_text() -> Option<String> {
 /// `nft` as the user, else as root without asking. `None` when neither may read the ruleset (or
 /// there is no `nft`): an `Operation not permitted` is not an answer about the table.
 fn nft(args: &[&str]) -> Option<exec::Output> {
-    let mut cmd = std::process::Command::new("nft");
+    let mut cmd = std::process::Command::new(crate::root::tool("nft"));
     cmd.args(args);
     match exec::run(&mut cmd, Duration::from_secs(10), None) {
         Ok(out) if !denied(&out) => Some(out),
