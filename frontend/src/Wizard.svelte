@@ -84,7 +84,7 @@
   {#if step === 1}
     <h2>{S.wizard.folderTitle}</h2>
     <p>{S.wizard.folderText}</p>
-    <p class="muted">{S.wizard.zapret2Text}</p>
+    <p class="muted">{app.linux ? S.wizard.zapret2TextLinux : S.wizard.zapret2Text}</p>
     <div class="row">
       <input
         class="grow"

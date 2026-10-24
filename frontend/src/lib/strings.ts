@@ -231,6 +231,7 @@ export const S = {
     folderTitle: "Где лежит zapret2?",
     folderText: "Стратегии Flowseal встроены в приложение и работают на zapret2.",
     zapret2Text: "Распакованный релиз bol-van/zapret2: в нём winws2.exe и папка lua.",
+    zapret2TextLinux: "Распакованный релиз bol-van/zapret2: в нём nfqws2 и папка lua.",
     needOne: "Укажите рабочую папку zapret2.",
     searching: "Ищу…",
     autoFound: "Найдено автоматически",
