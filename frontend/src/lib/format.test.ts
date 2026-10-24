@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Fix, Rule, StrategyResult } from "./ipc/bindings";
-import { copyStem, faultText, fixApplies, fixText, fixWarnings, pathLabel, patternTitle, scoreWorks, defaultTestable, blockSummary, bytes, programName, proxyLabel, routeDraft, routeSummary, viaLabel, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, foldersReady, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
+import { copyStem, faultText, fixApplies, fixText, fixWarnings, pathLabel, patternTitle, scoreWorks, defaultTestable, blockSummary, bytes, programName, proxyLabel, routeDraft, routeSummary, viaLabel, circularFilter, desyncLabel, estimateMinutes, listChoices, mergeNote, variantLabel, latencySpread, latestPerSuite, localizeError, nameError, ownName, runDate, uniqueName, zapret2Name } from "./format";
 import { S } from "./strings";
 
 describe("blockSummary", () => {
@@ -59,24 +59,6 @@ describe("latestPerSuite", () => {
     expect(latestPerSuite(runs).map((run) => run.id)).toEqual(["b", "c"]);
     expect(latestPerSuite(runs.slice(0, 1)).map((run) => run.id)).toEqual(["c"]);
     expect(latestPerSuite([])).toEqual([]);
-  });
-});
-
-describe("foldersReady", () => {
-  const flowseal = (missing: string[]) => ({ path: "E:\Zapret", missing, version: null });
-  const zapret2 = (error: string | null) => ({ dir: "D:\zapret2", version: null, compat: null, error });
-
-  it("needs at least one working folder", () => {
-    expect(foldersReady(null, null)).toBe(false);
-    expect(foldersReady(flowseal([]), null)).toBe(true);
-    expect(foldersReady(null, zapret2(null))).toBe(true);
-    expect(foldersReady(flowseal([]), zapret2(null))).toBe(true);
-  });
-
-  it("refuses a chosen folder that fails its check, even next to a good one", () => {
-    expect(foldersReady(flowseal(["bin"]), zapret2(null))).toBe(false);
-    expect(foldersReady(flowseal([]), zapret2("missing winws2.exe"))).toBe(false);
-    expect(foldersReady(null, { dir: null, version: null, compat: null, error: null })).toBe(false);
   });
 });
 

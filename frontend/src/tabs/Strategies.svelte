@@ -3,22 +3,19 @@
   import { call } from "$lib/api";
   import { app, change, refreshLive } from "$lib/app.svelte";
   import { confirmation } from "$lib/confirm.svelte";
-  import { ZAPRET2_TEMPLATE, copyStem, blockSummary, hubStem, mergeNote, ms, nameError, ownName, runDate, uniqueName, variantLabel, zapret2Name } from "$lib/format";
+  import { ZAPRET2_TEMPLATE, copyStem, blockSummary, mergeNote, ms, nameError, ownName, runDate, uniqueName, variantLabel, zapret2Name } from "$lib/format";
   import { S } from "$lib/strings";
   import RepeatsSelect from "../components/RepeatsSelect.svelte";
   import TargetChecks from "../components/TargetChecks.svelte";
-  import StrategyEditor from "./StrategyEditor.svelte";
   import Zapret2Editor from "./Zapret2Editor.svelte";
 
   let rows = $state<StrategyRow[]>([]);
   let query = $state("");
   let detail = $state<StrategyDetail | null>(null);
-  /** The stem of the custom strategy under edit. */
-  let editing = $state<string | null>(null);
   /** The zapret2 strategy under edit, or a copy not saved yet (zapret2 spec 5.2). */
   let editing2 = $state<{ name: string; from: string; create: boolean; initial?: string } | null>(null);
-  /** The «new strategy» form: its engine and name. */
-  let creating = $state<{ engine: "flowseal" | "zapret2"; name: string } | null>(null);
+  /** The «new strategy» form: its name. */
+  let creating = $state<{ name: string } | null>(null);
   let createError = $state("");
   /** «Сделать circular из стратегий»: the strategies picked, in order, the new name and the preview. */
   let merging = $state<{ picked: string[]; name: string; result: Merged | null } | null>(null);
@@ -27,7 +24,7 @@
 
   const visible = $derived(rows.filter((row) => row.name.toLowerCase().includes(query.trim().toLowerCase())));
   const locked = $derived(app.busy || (app.overview?.testing ?? false));
-  /** Names a new one must not take: the user's own in either engine (and Flowseal's, harmlessly). */
+  /** Names a new one must not take. */
   const taken = $derived(rows.map((row) => ownName(row.name)));
   const cloneError = $derived(nameError(cloneName));
   /** A run is going: another cannot start. */
@@ -54,19 +51,11 @@
     void load();
   });
 
-  async function clone(source: string): Promise<void> {
+  /** A copy is saved from the editor: the check may want its text changed first. */
+  function clone(source: string): void {
     const name = cloneName.trim();
-    if (zapret2Name(source) !== null) {
-      // A zapret2 copy is saved from its editor: the check may want its text changed first.
-      cloneName = "";
-      editing2 = { name, from: source, create: true };
-      return;
-    }
-    const created = await change(S.failed.clone, () => commands.cloneStrategy(source, name));
-    if (!created) return;
     cloneName = "";
-    await open(hubStem(created.name));
-    editing = hubStem(created.name);
+    editing2 = { name, from: source, create: true };
   }
 
   async function create(): Promise<void> {
@@ -74,22 +63,8 @@
     const name = creating.name.trim();
     createError = nameError(name) ?? "";
     if (createError) return;
-    if (creating.engine === "zapret2") {
-      creating = null;
-      editing2 = { name, from: "", create: true, initial: ZAPRET2_TEMPLATE };
-      return;
-    }
-    // The custom-strategy model starts from a source: the plain `general`.
-    const source = rows.find((row) => row.name === "general" && row.error === null);
-    if (!source) {
-      createError = S.strategies.newNoGeneral;
-      return;
-    }
-    const created = await change(S.failed.clone, () => commands.cloneStrategy(source.name, name));
-    if (!created) return;
     creating = null;
-    await open(hubStem(created.name));
-    editing = hubStem(created.name);
+    editing2 = { name, from: "", create: true, initial: ZAPRET2_TEMPLATE };
   }
 
   /** A standard run of this one strategy; its progress is on the «Тесты» tab, as for any run. */
@@ -98,16 +73,6 @@
     if (started === undefined) return;
     await refreshLive();
     app.tab = "tests";
-  }
-
-  async function remove(record: string, stem: string): Promise<void> {
-    const sure = await confirmation.ask({
-      title: S.strategies.deleteTitle,
-      text: S.strategies.deleteText(stem),
-      yes: S.strategies.delete,
-      danger: true,
-    });
-    if (sure && (await change(S.failed.deleteCustom, () => commands.deleteCustom(record))) !== undefined) detail = null;
   }
 
   async function preview(): Promise<void> {
@@ -142,25 +107,20 @@
         disabled={locked}
         onclick={() => {
           detail = null;
-          editing = null;
           editing2 = null;
           merging = null;
           createError = "";
-          creating = { engine: app.settings?.zapret_dir ? "flowseal" : "zapret2", name: uniqueName("my strategy", taken) };
+          creating = { name: uniqueName("my strategy", taken) };
         }}>{S.strategies.newStrategy}</button
       >
     </div>
     <div class="buttons folders">
-      <button disabled={!app.settings?.zapret_dir} onclick={() => call(S.failed.open, commands.openFolder("Zapret"))}>
-        {S.strategies.folderFlowseal}
-      </button>
       {#if app.overview?.zapret2.dir}
         <button onclick={() => call(S.failed.open, commands.openFolder("Zapret2"))}>{S.strategies.folderZapret2}</button>
         <button
           disabled={locked}
           onclick={() => {
             detail = null;
-            editing = null;
             editing2 = null;
             creating = null;
             merging = { picked: [], name: uniqueName("circular", taken), result: null };
@@ -179,7 +139,6 @@
               <button
                 class="link"
                 onclick={() => {
-                  editing = null;
                   editing2 = null;
                   creating = null;
                   merging = null;
@@ -198,15 +157,7 @@
   </section>
 
   <section class="card scroll">
-    {#if editing}
-      <StrategyEditor
-        stem={editing}
-        onClose={() => {
-          editing = null;
-          void load();
-        }}
-      />
-    {:else if editing2}
+    {#if editing2}
       <Zapret2Editor
         name={editing2.name}
         from={editing2.from}
@@ -273,15 +224,7 @@
       {/if}
     {:else if creating}
       <h2>{S.strategies.newTitle}</h2>
-      <div class="row">
-        {#if app.settings?.zapret_dir}
-          <label class="inline"><input type="radio" bind:group={creating.engine} value="flowseal" /> {S.strategies.engineFlowseal}</label>
-        {/if}
-        {#if app.overview?.zapret2.dir}
-          <label class="inline"><input type="radio" bind:group={creating.engine} value="zapret2" /> {S.strategies.engineZapret2}</label>
-        {/if}
-      </div>
-      <p class="muted">{creating.engine === "flowseal" ? S.strategies.newFlowsealNote : S.strategies.newZapret2Note}</p>
+      <p class="muted">{S.strategies.newZapret2Note}</p>
       <div class="buttons">
         <input placeholder={S.strategies.newName} bind:value={creating.name} aria-label={S.strategies.newName} />
         <button class="primary" disabled={locked || nameError(creating.name) !== null} onclick={create}>{S.strategies.newCreate}</button>
@@ -370,9 +313,9 @@
         <h3>{S.strategies.cloneTitle}</h3>
         <div class="buttons">
           <input placeholder={S.strategies.cloneName} bind:value={cloneName} aria-label={S.strategies.cloneName} />
-          <!-- A zapret2 copy starts from the text: a static check error is a reason to copy it. -->
+          <!-- A copy starts from the text: a static check error is a reason to copy it. -->
           <button
-            disabled={locked || cloneError !== null || (z2 === null && d.row.error !== null)}
+            disabled={locked || cloneError !== null}
             onclick={() => clone(d.row.name)}
           >
             {S.strategies.clone}
@@ -382,17 +325,15 @@
       </section>
       <section class="part">
         <h3>{S.strategies.applyTitle}</h3>
-        <p>{S.strategies.engine}: {z2 === null ? S.strategies.engineFlowseal : S.strategies.engineZapret2}</p>
         <p>
-          {S.strategies.file}: <code>{z2 === null ? `${d.row.name}.bat` : `strategies\${z2}.txt`}</code>
-          <!-- A built-in zapret2 strategy lives in the app: no file to show. -->
-          {#if z2 === null || d.row.custom}
+          {S.strategies.file}: <code>{`strategies\${z2}.txt`}</code>
+          <!-- A built-in strategy lives in the app: no file to show. -->
+          {#if d.row.custom}
             <button class="link" onclick={() => call(S.failed.open, commands.openFolder({ Strategy: d.row.name }))}>
               {S.strategies.showFile}
             </button>
           {/if}
         </p>
-        {#if d.record}<p class="muted">{S.strategies.clonedFrom(d.record.cloned_from)}</p>{/if}
         <p>
           {S.strategies.state}:
           {#if d.row.active}<span class="ok">{S.strategies.activeNow}</span>{:else}<span class="muted">{S.strategies.notActive}</span>{/if}
@@ -404,13 +345,6 @@
             disabled={locked || d.row.error !== null}
             onclick={() => change(S.failed.apply, () => commands.applyStrategy(d.row.name))}>{S.common.apply}</button
           >
-          {#if d.record}
-            {@const record = d.record}
-            <button disabled={locked} onclick={() => (editing = d.row.name)}>{S.strategies.edit}</button>
-            <button class="danger" disabled={locked || d.row.active} onclick={() => remove(record.name, d.row.name)}>
-              {S.strategies.delete}
-            </button>
-          {/if}
           {#if z2 !== null && d.row.custom}
             {@const own = z2}
             <button disabled={locked} onclick={() => (editing2 = { name: own, from: d.row.name, create: false })}>

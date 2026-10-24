@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
-  import { commands, type FolderCheck, type Info, type ProxyStatus, type Settings, type Theme } from "$lib/ipc/bindings";
+  import { commands, type Info, type ProxyStatus, type Settings, type Theme } from "$lib/ipc/bindings";
   import { call } from "$lib/api";
   import { app, change, loadSettings } from "$lib/app.svelte";
   import { follow } from "$lib/draft";
@@ -13,24 +13,10 @@
   // A copy to edit, saved as a whole, and the settings it was last copied from.
   let draft = $state<Settings | null>(null);
   let from: Settings | null = null;
-  let folder = $state<FolderCheck | null>(null);
   let zapret2 = $state<Info | null>(null);
   let proxy = $state<ProxyStatus | null>(null);
   let saved = $state(false);
   let version = $state("");
-
-  async function checkFolder(): Promise<void> {
-    const path = draft?.zapret_dir?.trim();
-    folder = path ? ((await call(S.failed.folder, commands.checkFolder(path))) ?? null) : null;
-  }
-
-  async function pick(): Promise<void> {
-    const path = await call(S.failed.pick, commands.pickFolder());
-    if (path && draft) {
-      draft.zapret_dir = path;
-      await checkFolder();
-    }
-  }
 
   async function pickZapret2(): Promise<void> {
     const path = await call(S.failed.pick, commands.pickFolder());
@@ -52,7 +38,6 @@
     if (!draft) return;
     const settings: Settings = {
       ...draft,
-      zapret_dir: draft.zapret_dir?.trim() || null,
       zapret2_dir: draft.zapret2_dir?.trim() || null,
       socks5: draft.socks5?.trim() || null,
       nekobox_dir: draft.nekobox_dir?.trim() || null,
@@ -82,7 +67,6 @@
       if (copy.socks5 !== draft?.socks5) proxy = null;
       draft = copy;
       from = next;
-      void checkFolder();
       void checkZapret2();
     });
   });
@@ -91,28 +75,6 @@
 </script>
 
 {#if draft}
-  <section class="card">
-    <h2>{S.settings.folder}</h2>
-    <p class="muted">{S.settings.folderOptional}</p>
-    <div class="row">
-      <input class="grow" bind:value={draft.zapret_dir} onchange={checkFolder} placeholder={S.settings.folderHint} />
-      <button onclick={pick}>{S.settings.pick}</button>
-    </div>
-    {#if folder}
-      <p class={folder.missing.length > 0 ? "bad" : "ok"}>
-        {folder.missing.length > 0 ? S.settings.missing(folder.missing) : S.settings.folderOk(folder.version)}
-      </p>
-    {/if}
-    <DownloadEngine
-      engine="Flowseal"
-      ondone={async (dir) => {
-        if (!draft) return;
-        draft.zapret_dir = dir;
-        await checkFolder();
-      }}
-    />
-  </section>
-
   <section class="card">
     <h2>{S.settings.zapret2}</h2>
     <p class="muted">{S.settings.zapret2Hint}</p>
@@ -143,6 +105,8 @@
     <button class="link" onclick={() => call(S.failed.open, commands.openUrl(LINKS.zapret2))}>
       {S.settings.zapret2Releases}
     </button>
+    <label class="inline"><input type="checkbox" bind:checked={draft.game_filter} /> {S.settings.gameFilter}</label>
+    <p class="muted">{S.settings.gameFilterHint}</p>
   </section>
 
   <section class="card">
@@ -193,7 +157,7 @@
     <p class="muted">{S.settings.nekoboxHint}</p>
   </section>
 
-  <!-- One button for the six cards above: they are saved together. -->
+  <!-- One button for the five cards above: they are saved together. -->
   <div class="buttons">
     <button class="primary" disabled={app.busy} onclick={save}>{S.common.save}</button>
     {#if saved}<span class="ok">{S.settings.saved}</span>{/if}
@@ -203,8 +167,8 @@
     <h2>{S.settings.files}</h2>
     <div class="buttons">
       <button onclick={() => call(S.failed.open, commands.openFolder("Logs"))}>{S.settings.openLogs}</button>
-      <button disabled={!app.settings?.zapret_dir} onclick={() => call(S.failed.open, commands.openFolder("Zapret"))}>
-        {S.settings.openZapret}
+      <button disabled={!app.settings?.zapret2_dir} onclick={() => call(S.failed.open, commands.openFolder("Zapret2"))}>
+        {S.settings.openZapret2}
       </button>
     </div>
     {#if version}<p class="muted">{S.settings.version(version)}</p>{/if}

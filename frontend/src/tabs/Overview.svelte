@@ -4,11 +4,10 @@
   import { call } from "$lib/api";
   import { app, change, refreshOverview } from "$lib/app.svelte";
   import { latestPerSuite, ms, runDate } from "$lib/format";
-  import { LINKS, S } from "$lib/strings";
+  import { S } from "$lib/strings";
 
   let proxy = $state<ProxyStatus | null>(null);
   let proxyBusy = $state(false);
-  let upToDate = $state(false);
   let runs = $state<RunSummary[]>([]);
 
   // The newest run of each kind: a DPI run does not hide the last standard one.
@@ -27,10 +26,6 @@
     proxyBusy = false;
   }
 
-  async function checkUpdate(): Promise<void> {
-    upToDate = (await change(S.failed.version, () => commands.checkFlowsealUpdate())) === null;
-  }
-
   onMount(() => {
     void refreshOverview();
     void checkProxy();
@@ -40,13 +35,6 @@
 {#if app.overview}
   {@const o = app.overview}
   {@const locked = app.busy || o.testing}
-  {#if o.folder_error && (o.folder || !o.zapret2.dir)}
-    <section class="card">
-      <h2 class="bad">{S.overview.folderProblem}</h2>
-      <pre>{o.folder_error}</pre>
-      <div class="buttons"><button onclick={() => (app.tab = "settings")}>{S.overview.chooseFolder}</button></div>
-    </section>
-  {/if}
   <div class="cards">
     <section class="card">
       <h2>{S.overview.service(o.service_name)}</h2>
@@ -69,24 +57,6 @@
         </button>
       </div>
     </section>
-
-    <!-- zapret2 alone: no Flowseal folder, nothing of it to show. -->
-    {#if o.folder}
-      <section class="card">
-        <h2>{S.overview.flowseal}</h2>
-        <p>{S.overview.version(o.version)}</p>
-        {#if o.update}
-          {@const version = o.update}
-          <p class="warn">{S.overview.updateAvailable(version)}</p>
-          <button class="link" onclick={() => call(S.failed.open, commands.openUrl(LINKS.release(version)))}>
-            {S.overview.release}
-          </button>
-        {:else if upToDate}
-          <p class="ok">{S.overview.upToDate}</p>
-        {/if}
-        <div class="buttons"><button disabled={app.busy} onclick={checkUpdate}>{S.overview.checkUpdate}</button></div>
-      </section>
-    {/if}
 
     <section class="card">
       <h2>{o.zapret2.dir ? S.overview.zapret2 : S.overview.zapret2Off}</h2>

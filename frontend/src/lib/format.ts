@@ -1,4 +1,4 @@
-import type { CheckLevel, CheckStatus, DiagScore, DpiStatus, Fault, Fix, FolderCheck, Info, MergeNote, PathKind, Pattern, Protocol, ProxyState, QuickCheck, Rule, StrategyResult, Suite, Traffic, Via } from "./ipc/bindings";
+import type { CheckLevel, CheckStatus, DiagScore, DpiStatus, Fault, Fix,  MergeNote, PathKind, Pattern, Protocol, ProxyState, QuickCheck, Rule, StrategyResult, Suite, Traffic, Via } from "./ipc/bindings";
 import { plural, S } from "./strings";
 
 export function ms(value: number | null | undefined): string {
@@ -19,7 +19,7 @@ export function hubStem(name: string): string {
 /** A zapret2 strategy's name is `zapret2:<name>` (zapret2 spec 3.1). */
 export const ZAPRET2 = "zapret2:";
 
-/** `mine` for `zapret2:mine`; `null` for a Flowseal strategy. */
+/** `mine` for `zapret2:mine`; `null` for a name without the prefix. */
 export function zapret2Name(name: string): string | null {
   return name.startsWith(ZAPRET2) ? name.slice(ZAPRET2.length) : null;
 }
@@ -112,18 +112,9 @@ export const ZAPRET2_TEMPLATE = [
   "",
 ].join("\n");
 
-/** The wizard's first step: at least one engine's folder works, and none chosen fails its check. */
-export function foldersReady(flowseal: FolderCheck | null, zapret2: Info | null): boolean {
-  const flowsealOk = flowseal !== null && flowseal.missing.length === 0;
-  const zapret2Ok = zapret2?.dir != null && zapret2.error === null;
-  const flowsealBad = flowseal !== null && !flowsealOk;
-  const zapret2Bad = zapret2?.dir != null && !zapret2Ok;
-  return (flowsealOk || zapret2Ok) && !flowsealBad && !zapret2Bad;
-}
-
 const DEVICE = /^(CON|PRN|AUX|NUL|COM\d|LPT\d)$/i;
 
-/** `zapret::custom::validate_name` for the page, in Russian: `null` for a name it accepts. */
+/** `zapret::validate_name` for the page, in Russian: `null` for a name it accepts. */
 export function nameError(name: string): string | null {
   const trimmed = name.trim();
   if (trimmed.length === 0) return S.names.empty;

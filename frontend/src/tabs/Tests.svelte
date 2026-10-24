@@ -18,7 +18,6 @@
   let picked = false;
 
   const usable = defaultTestable;
-  const flowseal = $derived(rows.filter((row) => zapret2Name(row.name) === null));
   const zapret2 = $derived(rows.filter((row) => zapret2Name(row.name) !== null));
   // Ticks or clears one group; the other group's ticks stay.
   function setGroup(list: StrategyRow[], on: boolean): void {
@@ -96,7 +95,6 @@
       <label class="inline"><input type="radio" bind:group={suite} value="Dpi" /> {S.tests.dpi}</label>
     </div>
     <p class="muted">{suite === "Standard" ? S.tests.standardHint : S.tests.dpiHint}</p>
-    {#if app.settings?.zapret_dir}{@render group(S.tests.groupFlowseal, flowseal)}{/if}
     {#if zapret2.length > 0}{@render group(S.tests.groupZapret2, zapret2)}{/if}
     <div class="buttons">
       <button class="primary" disabled={app.busy || chosen.length === 0} onclick={start}>{S.tests.start}</button>
@@ -111,7 +109,7 @@
     <section class="card">
       <h2>{S.tests.runTitle(runDate(run.id), suiteName(run.suite))}</h2>
       <p class="muted">
-        {S.tests.versions(run.flowseal_version, run.zapret2_version)}{#if run.canceled}{" · "}{S.tests.canceled}{/if}
+        {S.tests.version(run.zapret2_version)}{#if run.canceled}{" · "}{S.tests.canceled}{/if}
       </p>
       {#if run.restore_error}<pre class="bad">{run.restore_error}</pre>{/if}
       <div class="buttons">
