@@ -585,6 +585,7 @@ dependencies = [
  "tester",
  "windows",
  "zapret",
+ "zapret2",
 ]
 
 [[package]]

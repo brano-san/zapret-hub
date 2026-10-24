@@ -4,6 +4,7 @@
 
 pub mod compact;
 pub mod pipe;
+pub mod probe;
 
 use diag::evaluate::Answer;
 use diag::run::Request as DiagRequest;

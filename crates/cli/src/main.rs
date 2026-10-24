@@ -123,6 +123,13 @@ enum Command {
     /// Diagnostics: find what breaks a program or a profile and which path fixes it.
     #[command(subcommand)]
     Diag(DiagCommand),
+    /// Where a domain or URL resolves, which zapret2 lists and route take it, and whether HTTP,
+    /// TLS 1.2, TLS 1.3 and ping get through now. Prints text; --json the document.
+    Probe {
+        target: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -720,6 +727,22 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
             id: report_id(call, id)?,
             fix: fix.unwrap_or(0),
         },
+        Command::Probe { target, json } => {
+            cli::probe::target(&target).map_err(|err| Fail::new(USAGE, format!("{err:#}")))?;
+            let dir = call(Request::GetSettings)?["zapret2_dir"]
+                .as_str()
+                .map(str::to_owned);
+            let routes: router::RoutesView = read(call(Request::ListRoutes)?)?;
+            let rules: Vec<router::rules::Rule> =
+                routes.rules.into_iter().map(|r| r.rule).collect();
+            let report = cli::probe::run(&target, dir.as_deref(), &rules)
+                .map_err(|err| Fail::new(USAGE, format!("{err:#}")))?;
+            return Ok(if json {
+                Done::Json(serde_json::to_value(&report).expect("a report is JSON"))
+            } else {
+                Done::Text(cli::probe::text(&report))
+            });
+        }
         Command::Tests(TestsCommand::Wait { timeout }) => {
             return wait_for_run(call, timeout, note);
         }
@@ -1381,6 +1404,38 @@ mod tests {
 
     fn code(outcome: Result<Done, Fail>) -> u8 {
         outcome.map_or_else(|fail| fail.code, |_| 0)
+    }
+
+    #[test]
+    fn probe_reads_the_folder_and_the_routes_then_checks_the_host() {
+        let (outcome, asked) = drive(&["probe", "a b"], vec![]);
+        assert_eq!(code(outcome), USAGE);
+        assert!(asked.is_empty());
+        let routes = json!({
+            "rules": [{
+                "rule": {
+                    "name": "Local", "enabled": true, "protocol": "both", "ports": [],
+                    "ips": ["127.0.0.0/8"], "domains": [], "apps": []
+                },
+                "traffic": { "flows": 0, "up": 0.0, "down": 0.0 }
+            }],
+            "error": null,
+            "system_doh": false
+        });
+        let (outcome, asked) = drive(
+            &["probe", "127.0.0.1:9", "--json"],
+            vec![Ok(json!({ "zapret2_dir": null })), Ok(routes)],
+        );
+        assert_eq!(asked, [Request::GetSettings, Request::ListRoutes]);
+        let Ok(Done::Json(report)) = outcome else {
+            panic!("{outcome:?}")
+        };
+        assert_eq!(report["host"], "127.0.0.1");
+        assert_eq!(report["url"], "https://127.0.0.1:9");
+        assert_eq!(report["dns"], json!(["127.0.0.1"]));
+        assert_eq!(report["route"], "Local");
+        assert_eq!(report["lists_error"], "the zapret2 folder is not set");
+        assert_eq!(report["checks"].as_array().unwrap().len(), 3);
     }
 
     #[test]

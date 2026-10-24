@@ -18,6 +18,7 @@ diag.workspace = true
 router.workspace = true
 tester.workspace = true
 zapret.workspace = true
+zapret2.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true
