@@ -2,6 +2,7 @@ pub mod divert;
 pub mod dns;
 pub mod doh;
 pub mod flows;
+pub mod linux;
 #[cfg(windows)]
 mod live;
 pub mod observe;
