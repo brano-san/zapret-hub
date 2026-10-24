@@ -4,6 +4,7 @@
   import { app, change, refreshLive } from "$lib/app.svelte";
   import { confirmation } from "$lib/confirm.svelte";
   import { ZAPRET2_TEMPLATE, copyStem, blockSummary, mergeNote, ms, nameError, ownName, runDate, uniqueName, variantLabel, zapret2Name } from "$lib/format";
+  import { detectTechniques, summarizeServices, techniqueColor, TECHNIQUES, type Technique } from "$lib/techniques";
   import { S } from "$lib/strings";
   import RepeatsSelect from "../components/RepeatsSelect.svelte";
   import TargetChecks from "../components/TargetChecks.svelte";
@@ -21,10 +22,28 @@
   let merging = $state<{ picked: string[]; name: string; result: Merged | null } | null>(null);
   let cloneName = $state("");
   let repeats = $state(1);
+  let tagsCache = $state<Record<string, Technique[]>>({});
+  /** The tag filter over the list: every strategy, a technique, or the user's own. */
+  let tagFilter = $state<"all" | Technique | "own">("all");
 
-  const visible = $derived(rows.filter((row) => row.name.toLowerCase().includes(query.trim().toLowerCase())));
+  const visible = $derived(
+    rows.filter((row) => {
+      if (!row.name.toLowerCase().includes(query.trim().toLowerCase())) return false;
+      return tagFilter === "all" || (tagFilter === "own" ? row.custom : (tagsCache[row.name] ?? []).includes(tagFilter));
+    }),
+  );
+  /** Times a technique appears in the list: a filter without matches does not appear. */
+  const tagCount = (tag: Technique): number => rows.filter((row) => (tagsCache[row.name] ?? []).includes(tag)).length;
+  /** The open card's tags, once over their changes — not again per render. */
+  const techs = $derived.by(() => {
+    if (!detail) return [];
+    return (
+      tagsCache[detail.row.name] ??
+      detectTechniques((detail.source || "") + " " + detail.blocks.join(" ") + " " + (detail.final_args || ""))
+    );
+  });
   const locked = $derived(app.busy || (app.overview?.testing ?? false));
-  /** Names a new one must not take. */
+  /** Names a new one must not take: every name in the list, by its own name. */
   const taken = $derived(rows.map((row) => ownName(row.name)));
   const cloneError = $derived(nameError(cloneName));
   /** A run is going: another cannot start. */
@@ -36,10 +55,25 @@
     // Another strategy: its copy gets a fresh name; a reload of the same one keeps what was typed.
     if (detail?.row.name !== name) cloneName = uniqueName(`${copyStem(name)} copy`, taken);
     detail = (await call(S.failed.strategy, commands.getStrategy(name))) ?? null;
+    if (detail) {
+      const text = (detail.source || "") + " " + detail.blocks.join(" ") + " " + (detail.final_args || "");
+      tagsCache[name] = detectTechniques(text);
+    }
   }
 
   async function load(): Promise<void> {
     rows = (await call(S.failed.strategies, commands.listStrategies())) ?? [];
+    for (const row of rows) {
+      if (!tagsCache[row.name]) {
+        void commands.getStrategy(row.name).then((ans) => {
+          if (ans.status === "ok") {
+            const d = ans.data;
+            const text = (d.source || "") + " " + d.blocks.join(" ") + " " + (d.final_args || "");
+            tagsCache[row.name] = detectTechniques(text);
+          }
+        });
+      }
+    }
     const name = detail?.row.name;
     // A deletion announces itself before it answers: the strategy it removed must not be read again.
     if (name && rows.some((row) => row.name === name)) await open(name);
@@ -51,9 +85,9 @@
     void load();
   });
 
-  /** A copy is saved from the editor: the check may want its text changed first. */
   function clone(source: string): void {
     const name = cloneName.trim();
+    // A copy is saved from its editor: the check may want its text changed first.
     cloneName = "";
     editing2 = { name, from: source, create: true };
   }
@@ -72,14 +106,7 @@
     const started = await change(S.failed.startTests, () => commands.startTests({ suite: "Standard", strategies: [name], repeats }));
     if (started === undefined) return;
     await refreshLive();
-    app.tab = "tests";
-  }
-
-  async function preview(): Promise<void> {
-    if (!merging) return;
-    const picked = [...merging.picked];
-    const result = await call(S.failed.merge, commands.zapret2Merge(picked));
-    if (merging && result) merging.result = result;
+    void app.setTab("tests");
   }
 
   async function removeZapret2(name: string): Promise<void> {
@@ -91,14 +118,48 @@
     });
     if (sure && (await change(S.failed.deleteCustom, () => commands.deleteZapret2(name))) !== undefined) detail = null;
   }
+
+  async function preview(): Promise<void> {
+    if (!merging) return;
+    const picked = [...merging.picked];
+    const result = await call(S.failed.merge, commands.zapret2Merge(picked));
+    if (merging && result) merging.result = result;
+  }
+
+  /** The splitter between the list pane and the detail pane: dragging shifts the column edge. */
+  let split = $state<HTMLElement>();
+  let leftW = $state(360);
+  let dragging = $state(false);
+  const LEFT_MIN = 260;
+
+  function dragStart(event: PointerEvent): void {
+    // Without this the drag also selects the list's text under the pointer.
+    event.preventDefault();
+    const handle = event.currentTarget as HTMLElement;
+    dragging = true;
+    handle.setPointerCapture(event.pointerId);
+  }
+
+  function dragMove(event: PointerEvent): void {
+    if (!dragging || !split) return;
+    const bounds = split.getBoundingClientRect();
+    // 60% at most: the detail pane keeps its share at every window width.
+    leftW = Math.round(Math.min(Math.max(event.clientX - bounds.left, LEFT_MIN), bounds.width * 0.6));
+  }
+
+  function dragEnd(event: PointerEvent): void {
+    const handle = event.currentTarget as HTMLElement;
+    dragging = false;
+    handle.releasePointerCapture(event.pointerId);
+  }
 </script>
 
-<div class="split">
+<div class="split" bind:this={split} class:dragging style:grid-template-columns="{leftW}px 10px minmax(0, 1fr)">
   <section class="card scroll">
     {#if app.overview && !app.overview.zapret2.dir}
       <p class="muted">
         {S.strategies.zapret2Off}
-        <button class="link" onclick={() => (app.tab = "settings")}>{S.overview.zapret2Connect}</button>
+        <button class="link" onclick={() => app.setTab("settings")}>{S.overview.zapret2Connect}</button>
       </p>
     {/if}
     <div class="row search">
@@ -112,6 +173,27 @@
           createError = "";
           creating = { name: uniqueName("my strategy", taken) };
         }}>{S.strategies.newStrategy}</button
+      >
+    </div>
+    <div class="tagbar" role="group" aria-label={S.strategies.filtersTitle}>
+      <button class="tag-filter" class:on={tagFilter === "all"} onclick={() => (tagFilter = "all")}>{S.strategies.allTags}</button>
+      {#each TECHNIQUES as tech (tech)}
+        {@const col = techniqueColor(tech)}
+        {@const count = tagCount(tech)}
+        {#if count > 0}
+          <button
+            class="tag-filter"
+            class:on={tagFilter === tech}
+            style:border-color={col.border}
+            style:color={col.text}
+            onclick={() => (tagFilter = tagFilter === tech ? "all" : tech)}>{tech} {count}</button
+          >
+        {/if}
+      {/each}
+      <button
+        class="tag-filter"
+        class:on={tagFilter === "own"}
+        onclick={() => (tagFilter = tagFilter === "own" ? "all" : "own")}>{S.strategies.ownTags}</button
       >
     </div>
     <div class="buttons folders">
@@ -136,25 +218,28 @@
         {#each visible as row (row.name)}
           <tr class:selected={detail?.row.name === row.name}>
             <td>
-              <button
-                class="link"
-                onclick={() => {
-                  editing2 = null;
-                  creating = null;
-                  merging = null;
-                  void open(row.name);
-                }}>{row.name}</button
-              >
-              {#if row.active}<span class="badge ok">{S.strategies.active}</span>{/if}
-              {#if row.custom}<span class="badge muted">{S.strategies.custom}</span>{/if}
-              {#if zapret2Name(row.name) !== null}<span class="badge muted">{S.strategies.zapret2}</span>{/if}
+              <div class="row">
+                <button
+                  class="link"
+                  onclick={() => {
+                    editing2 = null;
+                    creating = null;
+                    merging = null;
+                    void open(row.name);
+                  }}>{zapret2Name(row.name) ?? row.name}</button
+                >
+                {#if row.active}<span class="badge ok">{S.strategies.active}</span>{/if}
+                {#if row.custom}<span class="badge muted">{S.strategies.custom}</span>{/if}
+              </div>
             </td>
-            <td>{@render summary(row)}</td>
+            <td>{@render summary(row, true)}</td>
           </tr>
         {/each}
       </tbody>
     </table>
   </section>
+
+  <div class="handle" role="separator" aria-orientation="vertical" onpointerdown={dragStart} onpointermove={dragMove} onpointerup={dragEnd} onpointercancel={dragEnd}></div>
 
   <section class="card scroll">
     {#if editing2}
@@ -235,33 +320,87 @@
       {@const d = detail}
       {@const z2 = zapret2Name(d.row.name)}
       <h2>
-        {d.row.name}
+        {z2 ?? d.row.name}
         {#if d.row.active}<span class="badge ok">{S.strategies.active}</span>{/if}
         {#if d.row.custom}<span class="badge muted">{S.strategies.custom}</span>{/if}
-        {#if z2 !== null}<span class="badge muted">{S.strategies.zapret2}</span>{/if}
-        {#if d.row.last?.stale}<span class="badge warn">{S.strategies.stale}</span>{/if}
+        {#if d.row.last?.stale}<span class="badge warn" title={S.strategies.staleHint}>{S.strategies.stale}</span>{/if}
       </h2>
+      {#if techs.length > 0}
+        <div class="tech-tags detail-tags">
+          {#each techs as tech (tech)}
+            {@const col = techniqueColor(tech)}
+            <span class="tech-tag" style:border-color={col.border} style:background={col.bg} style:color={col.text}>{tech}</span>
+          {/each}
+        </div>
+      {/if}
       {#if d.row.error}<pre class="bad">{d.row.error}</pre>{/if}
+      <section class="part">
+        <div class="buttons">
+          <button
+            class="primary"
+            disabled={locked || d.row.error !== null}
+            onclick={() => change(S.failed.apply, () => commands.applyStrategy(d.row.name))}>{S.common.apply}</button
+          >
+          <span class={d.row.active ? "ok" : "muted"}>{d.row.active ? S.strategies.activeNow : S.strategies.notActive}</span>
+        </div>
+        <div class="buttons">
+          <button disabled={app.busy || testing || d.row.error !== null} onclick={() => test(d.row.name)}>
+            {S.strategies.runTest}
+          </button>
+          <RepeatsSelect bind:value={repeats} disabled={app.busy || testing || d.row.error !== null} />
+          {#if testing}
+            <span class="muted">{S.strategies.runTestBusy}</span>
+          {:else if d.row.error !== null}
+            <span class="muted">{S.strategies.runTestError}</span>
+          {/if}
+        </div>
+      </section>
+
+      {#if d.blocks.length > 0}
+        {@const serviceSummaries = summarizeServices(d.blocks)}
+        {#if serviceSummaries.length > 0}
+          <section class="part">
+            <h3>{S.strategies.summaryTitle}</h3>
+            <div class="summary-cards">
+              {#each serviceSummaries as item (item.title)}
+                <div class="summary-card">
+                  <div class="summary-header">
+                    <span class="summary-icon">{item.icon}</span>
+                    <strong class="summary-name">{item.title}</strong>
+                  </div>
+                  <div class="summary-details">{item.details}</div>
+                </div>
+              {/each}
+            </div>
+          </section>
+        {/if}
+      {/if}
+
       {#if d.wf || d.blocks.length > 0}
         <section class="part">
-          <h3>{S.strategies.filtersTitle}</h3>
-          {#if d.wf}
-            <h4>{z2 === null ? S.strategies.filter : S.zapret2.global}</h4>
-            <pre>{d.wf}</pre>
-          {/if}
-          {#each d.blocks as block, i (i)}
-            <h4>
-              {z2 === null ? S.strategies.block(i + 1) : S.zapret2.profile(i + 1)}
-              <span class="muted">· {blockSummary(block)}</span>
-            </h4>
-            <pre>{block}</pre>
-          {/each}
-          {#if d.final_args}
-            <details>
-              <summary>{z2 === null ? S.strategies.finalArgs : S.zapret2.commandLine}</summary>
+          <details class="raw-cli-details">
+            <summary>
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              {S.strategies.showCliArgs}
+            </summary>
+            {#if d.wf}
+              <h4>{z2 === null ? S.strategies.filter : S.zapret2.global}</h4>
+              <pre>{d.wf}</pre>
+            {/if}
+            {#each d.blocks as block, i (i)}
+              <h4>
+                {z2 === null ? S.strategies.block(i + 1) : S.zapret2.profile(i + 1)}
+                <span class="muted">· {blockSummary(block)}</span>
+              </h4>
+              <pre>{block}</pre>
+            {/each}
+            {#if d.final_args}
+              <h4>{z2 === null ? S.strategies.finalArgs : S.zapret2.commandLine}</h4>
               <pre>{d.final_args}</pre>
-            </details>
-          {/if}
+            {/if}
+          </details>
         </section>
       {/if}
       {#if d.circular.profiles.some((profile) => profile.circular) || d.circular.warnings.length > 0}
@@ -293,21 +432,11 @@
         <h3>{S.strategies.resultsTitle}</h3>
         {#if d.result}
           <p class="muted">{S.strategies.lastRun(runDate(d.row.last?.run_id ?? ""))}</p>
+          {#if d.row.last?.stale}<p class="muted">{S.strategies.staleHint}</p>{/if}
           <TargetChecks result={d.result} />
         {:else}
           <p class="muted">{S.strategies.untested}</p>
         {/if}
-        <div class="buttons">
-          <button disabled={app.busy || testing || d.row.error !== null} onclick={() => test(d.row.name)}>
-            {S.strategies.runTest}
-          </button>
-          <RepeatsSelect bind:value={repeats} disabled={app.busy || testing || d.row.error !== null} />
-          {#if testing}
-            <span class="muted">{S.strategies.runTestBusy}</span>
-          {:else if d.row.error !== null}
-            <span class="muted">{S.strategies.runTestError}</span>
-          {/if}
-        </div>
       </section>
       <section class="part">
         <h3>{S.strategies.cloneTitle}</h3>
@@ -325,26 +454,21 @@
       </section>
       <section class="part">
         <h3>{S.strategies.applyTitle}</h3>
-        <p>
-          {S.strategies.file}: <code>{`strategies\${z2}.txt`}</code>
-          <!-- A built-in strategy lives in the app: no file to show. -->
-          {#if d.row.custom}
+        <!-- A built-in zapret2 strategy lives in the app: no file to show. -->
+        {#if z2 !== null && !d.row.custom}
+          <p>{S.strategies.builtinType}</p>
+        {:else}
+          <p>
+            {S.strategies.file}: <code>{app.linux ? "strategies/" : "strategies\\"}{z2 ?? d.row.name}.txt</code>
             <button class="link" onclick={() => call(S.failed.open, commands.openFolder({ Strategy: d.row.name }))}>
               {S.strategies.showFile}
             </button>
-          {/if}
-        </p>
+          </p>
+        {/if}
         <p>
-          {S.strategies.state}:
-          {#if d.row.active}<span class="ok">{S.strategies.activeNow}</span>{:else}<span class="muted">{S.strategies.notActive}</span>{/if}
+          {S.strategies.result}: {@render summary(d.row)}{#if d.row.last}<span class="muted"> · {runDate(d.row.last.run_id)}</span>{/if}
         </p>
-        <p>{S.strategies.result}: {@render summary(d.row)}{#if d.row.last}<span class="muted"> · {runDate(d.row.last.run_id)}</span>{/if}</p>
         <div class="buttons">
-          <button
-            class="primary"
-            disabled={locked || d.row.error !== null}
-            onclick={() => change(S.failed.apply, () => commands.applyStrategy(d.row.name))}>{S.common.apply}</button
-          >
           {#if z2 !== null && d.row.custom}
             {@const own = z2}
             <button disabled={locked} onclick={() => (editing2 = { name: own, from: d.row.name, create: false })}>
@@ -362,7 +486,7 @@
   </section>
 </div>
 
-{#snippet summary(row: StrategyRow)}
+{#snippet summary(row: StrategyRow, /** Left list: a stale icon instead of a text badge. */ compact = false)}
   {#if row.error}
     <span class="bad">{S.strategies.notStrategy}</span>
   {:else if !row.last}
@@ -376,7 +500,9 @@
         ? S.strategies.score(score.total - score.ok, score.total, ms(score.median_ms))
         : S.strategies.dpiScore(score.likely_blocked, score.fail)}
     </span>
-    {#if row.last.stale}<span class="badge warn">{S.strategies.stale}</span>{/if}
+    {#if row.last.stale}
+      <span class="badge warn mini" title={S.strategies.staleHint}>{compact ? "↻" : S.strategies.stale}</span>
+    {/if}
   {/if}
 {/snippet}
 
@@ -407,10 +533,57 @@
 
   .split {
     display: grid;
-    grid-template-columns: minmax(340px, 2fr) 3fr;
-    gap: 14px;
+    gap: 4px;
     min-height: 0;
     flex: 1;
+    /* The detail card scrolls inside itself: main keeps a single scrollbar out. */
+    overflow: hidden;
+    min-width: 0;
+  }
+
+  .split.dragging {
+    /* A drag at the border must not select the strategy text under the pointer. */
+    user-select: none;
+    cursor: col-resize;
+  }
+
+  /* 10px of capture around a 2px line: thin to look at, easy to grab. */
+  .handle {
+    cursor: col-resize;
+    display: flex;
+    justify-content: center;
+    touch-action: none;
+  }
+
+  .handle::after {
+    content: "";
+    width: 2px;
+    height: 100%;
+    border-radius: 1px;
+    background: var(--border);
+  }
+
+  .handle:hover::after,
+  .split.dragging .handle::after {
+    background: var(--accent);
+  }
+
+  .tagbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 12px 0;
+  }
+
+  .tag-filter {
+    padding: 4px 10px;
+    font-size: 12px;
+    border-radius: 6px;
+  }
+
+  .tag-filter.on {
+    background: var(--hover);
+    font-weight: 600;
   }
 
   .search {
@@ -428,5 +601,93 @@
   /* The list gives way before it scrolls sideways: at the minimum window the result column would be cut off. */
   td {
     white-space: normal;
+  }
+
+  .tech-tags {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .tech-tags.detail-tags {
+    margin: 6px 0 10px;
+  }
+
+  .tech-tag {
+    display: inline-block;
+    padding: 1px 6px;
+    font-size: 11px;
+    font-weight: 500;
+    border-radius: 4px;
+    border: 1px solid;
+    line-height: 1.3;
+  }
+
+  .summary-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .summary-card {
+    padding: 8px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+
+  .summary-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .summary-icon {
+    font-size: 15px;
+  }
+
+  .summary-name {
+    font-size: 13px;
+  }
+
+  .summary-details {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .raw-cli-details {
+    margin-top: 4px;
+  }
+
+  .raw-cli-details summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    list-style: none;
+    line-height: 1;
+    margin: 0;
+    padding: 4px 0;
+    font-weight: 600;
+    color: var(--accent);
+  }
+
+  .raw-cli-details summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .raw-cli-details summary svg {
+    flex-shrink: 0;
+    transition: transform 0.15s ease;
+  }
+
+  .raw-cli-details[open] > summary svg {
+    transform: rotate(90deg);
+  }
+
+  .raw-cli-details summary:hover {
+    text-decoration: underline;
   }
 </style>
