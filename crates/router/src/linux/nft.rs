@@ -5,7 +5,7 @@
 //! connections keep their conntrack NAT.
 //!
 //! TCP: `nat output` redirects a match to the acceptor. UDP: a `route output` chain marks a match
-//! with `MARK_TPROXY`; `ip rule fwmark … lookup ROUTE_TABLE` + a `local` route send it to `lo`,
+//! with `MARK_TPROXY`; `ip rule fwmark … lookup <table>` (`Policy`) + a `local` route send it to `lo`,
 //! where `prerouting` hands it to the TPROXY socket.
 //!
 //! Domain IPs come in through `Table::with_names` like the rule subnets: `Names` expiry (which
@@ -21,8 +21,6 @@ pub const TABLE: &str = "zapret_hub_route";
 pub const MARK_TPROXY: u32 = 0x1000_0000;
 /// The hub's own sockets (direct connections, relays, replies): never matched.
 pub const MARK_OWN: u32 = 0x2000_0000;
-/// The policy routing table that delivers `MARK_TPROXY` packets locally.
-pub const ROUTE_TABLE: &str = "100";
 /// Processes of this group (`sg zapret-bypass …`, as for zapret2's queue) are never routed.
 pub const GROUP: &str = "zapret-bypass";
 
@@ -159,29 +157,104 @@ pub fn delete() -> String {
     format!("table inet {TABLE}\ndelete table inet {TABLE}\n")
 }
 
-/// `ip` arguments that add (`true`) or remove the policy routing of `MARK_TPROXY`. The route is
-/// `replace`d, so adding twice is harmless; a rule added twice needs as many removals.
-pub fn route_argv(add: bool) -> [Vec<&'static str>; 2] {
-    const MARK: &str = "0x10000000/0x10000000";
-    let (rule, route) = if add {
-        ("add", "replace")
-    } else {
-        ("del", "del")
+/// The `ip rule` selector of `MARK_TPROXY`: what tells our rules from any other.
+const MARK_RULE: &str = "0x10000000/0x10000000";
+/// Where the policy routing goes when nothing uses it: a table number seldom taken, and an early
+/// priority, so a VPN's own rules (wg-quick 32764–32765, Tailscale 5210–5270) never take a marked
+/// packet. Taken ones step to the next free (`pick`).
+pub const ROUTE_TABLE: u32 = 0x5a48;
+pub const RULE_PRIORITY: u32 = 1000;
+
+/// One policy rule of ours: its priority and the table it looks up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Policy {
+    pub priority: u32,
+    pub table: u32,
+}
+
+impl Policy {
+    /// `ip` arguments that add (`true`) or remove the rule and its `local` route. The route is
+    /// `replace`d, so adding twice is harmless.
+    pub fn argv(self, add: bool) -> [Vec<String>; 2] {
+        let (rule, route) = if add {
+            ("add", "replace")
+        } else {
+            ("del", "del")
+        };
+        let (priority, table) = (self.priority.to_string(), self.table.to_string());
+        let words = |w: &[&str]| w.iter().map(|w| (*w).to_owned()).collect();
+        [
+            words(&[
+                "-4", "rule", rule, "priority", &priority, "fwmark", MARK_RULE, "lookup", &table,
+            ]),
+            words(&[
+                "-4",
+                "route",
+                route,
+                "local",
+                "0.0.0.0/0",
+                "dev",
+                "lo",
+                "table",
+                &table,
+            ]),
+        ]
+    }
+}
+
+/// `(priority, words)` of each `ip rule show` line (`32765:\tfrom all fwmark … lookup 100`).
+fn rule_lines(rules: &str) -> impl Iterator<Item = (Option<u32>, Vec<&str>)> {
+    rules.lines().filter_map(|line| {
+        let (priority, rest) = line.split_once(':')?;
+        Some((
+            priority.trim().parse().ok(),
+            rest.split_whitespace().collect(),
+        ))
+    })
+}
+
+fn after<'a>(words: &[&'a str], key: &str) -> Option<&'a str> {
+    words
+        .iter()
+        .position(|w| *w == key)
+        .and_then(|i| words.get(i + 1).copied())
+}
+
+/// Our rules in `ip -4 rule show`, by the mark, whatever their priority and table: also those a
+/// crashed session or an older version (table 100) left.
+pub fn ours(rules: &str) -> Vec<Policy> {
+    rule_lines(rules)
+        .filter(|(_, words)| after(words, "fwmark") == Some(MARK_RULE))
+        .filter_map(|(priority, words)| {
+            Some(Policy {
+                priority: priority?,
+                table: after(&words, "lookup")?.parse().ok()?,
+            })
+        })
+        .collect()
+}
+
+/// Table numbers an `rt_tables` file names (`100\tvpn`): someone's, even when empty now.
+pub fn named_tables(text: &str) -> Vec<u32> {
+    text.lines()
+        .filter_map(|l| l.split_whitespace().next()?.parse().ok())
+        .collect()
+}
+
+/// A priority no rule in `rules` (`ip rule show`, both families) has, and a table no rule looks
+/// up, no `rt_tables` file names (`named`) and that holds no route (`has_routes`): the defaults
+/// when free, else the next free. `None` when none of 256 tables is.
+pub fn pick(rules: &str, named: &[u32], mut has_routes: impl FnMut(u32) -> bool) -> Option<Policy> {
+    let lines: Vec<_> = rule_lines(rules).collect();
+    let priority = (RULE_PRIORITY..).find(|p| !lines.iter().any(|(q, _)| *q == Some(*p)))?;
+    let used = |t: u32| {
+        named.contains(&t)
+            || lines
+                .iter()
+                .any(|(_, w)| after(w, "lookup") == Some(t.to_string().as_str()))
     };
-    [
-        vec!["-4", "rule", rule, "fwmark", MARK, "lookup", ROUTE_TABLE],
-        vec![
-            "-4",
-            "route",
-            route,
-            "local",
-            "0.0.0.0/0",
-            "dev",
-            "lo",
-            "table",
-            ROUTE_TABLE,
-        ],
-    ]
+    let table = (ROUTE_TABLE..ROUTE_TABLE + 256).find(|&t| !used(t) && !has_routes(t))?;
+    Some(Policy { priority, table })
 }
 
 #[cfg(test)]
@@ -311,33 +384,71 @@ mod tests {
             delete(),
             "table inet zapret_hub_route\ndelete table inet zapret_hub_route\n"
         );
+        let p = Policy {
+            priority: 1000,
+            table: 23112,
+        };
         assert_eq!(
-            route_argv(true),
+            p.argv(true),
             [
-                vec![
-                    "-4",
-                    "rule",
-                    "add",
-                    "fwmark",
-                    "0x10000000/0x10000000",
-                    "lookup",
-                    "100"
-                ],
-                vec![
-                    "-4",
-                    "route",
-                    "replace",
-                    "local",
-                    "0.0.0.0/0",
-                    "dev",
-                    "lo",
-                    "table",
-                    "100"
-                ],
+                "-4 rule add priority 1000 fwmark 0x10000000/0x10000000 lookup 23112",
+                "-4 route replace local 0.0.0.0/0 dev lo table 23112",
+            ]
+            .map(|l| l.split(' ').map(str::to_owned).collect::<Vec<_>>())
+        );
+        assert_eq!(p.argv(false)[0][2], "del");
+        assert_eq!(p.argv(false)[1][2], "del");
+    }
+
+    const RULES: &str = "0:\tfrom all lookup local\n\
+        1000:\tfrom all fwmark 0x10000000/0x10000000 lookup 23112\n\
+        5270:\tfrom all lookup 52\n\
+        32765:\tfrom all fwmark 0x10000000/0x10000000 lookup 100 proto boot\n\
+        32765:\tfrom all fwmark 0x10000 lookup 23113\n\
+        32766:\tfrom all lookup main\n\
+        32767:\tfrom all lookup default\n";
+
+    #[test]
+    fn our_rules_are_known_by_the_mark_whatever_their_priority_and_table() {
+        assert_eq!(
+            ours(RULES),
+            [
+                Policy {
+                    priority: 1000,
+                    table: 23112
+                },
+                Policy {
+                    priority: 32765,
+                    table: 100
+                },
             ]
         );
-        assert_eq!(route_argv(false)[0][2], "del");
-        assert_eq!(route_argv(false)[1][2], "del");
+        assert_eq!(ours(""), []);
+    }
+
+    #[test]
+    fn the_defaults_are_taken_when_free_else_the_next_free() {
+        let base = "0:\tfrom all lookup local\n32766:\tfrom all lookup main\n";
+        assert_eq!(
+            pick(base, &[], |_| false),
+            Some(Policy {
+                priority: RULE_PRIORITY,
+                table: ROUTE_TABLE
+            })
+        );
+        // 1000 and the tables 23112 and 23113 are looked up by rules; 23114 is named in
+        // rt_tables, 23115 holds a route.
+        let named = named_tables("# reserved\n255\tlocal\n23114 mine\n");
+        let p = pick(RULES, &named, |t| t == 23115).unwrap();
+        assert_eq!(
+            p,
+            Policy {
+                priority: 1001,
+                table: 23116
+            }
+        );
+        assert_eq!(pick(base, &[], |_| true), None, "every table holds routes");
+        assert_eq!(named_tables("# c\n\n100 vpn\n0x10 hex\n"), [100]);
     }
 
     /// `nft` itself checks the text: needs `CAP_NET_ADMIN`, e.g. `unshare -rn <test binary>

@@ -35,8 +35,9 @@
   перенаправляется весь TCP на портах правила; в приёмнике владелец сокета (`owner::procfs` по исходному порту)
   решает: совпало — через SOCKS5 CONNECT, нет — прямое соединение с `SO_MARK` (как `DirectReason::NoRule`).
   Исходный адрес — `getsockopt(SO_ORIGINAL_DST)`.
-- **UDP.** TPROXY: в `mangle output` совпадающий UDP получает метку `0x1000_0000`; `ip rule fwmark 0x10000000
-  lookup 100` + `ip route add local 0.0.0.0/0 dev lo table 100`; в `mangle prerouting` `meta mark ... tproxy to
+- **UDP.** TPROXY: в `mangle output` совпадающий UDP получает метку `0x1000_0000`; `ip rule priority <P> fwmark
+  0x10000000/0x10000000 lookup <N>` + `ip route replace local 0.0.0.0/0 dev lo table <N>` (N — 23112 или следующая
+  свободная таблица, P — 1000 или следующий свободный приоритет; своё правило — по метке); в `mangle prerouting` `meta mark ... tproxy to
   127.0.0.1:<udp>`. Сокет с `IP_TRANSPARENT` и `IP_RECVORIGDSTADDR`; ответ клиенту — с сокета, привязанного
   (`IP_TRANSPARENT`) к исходному адресу назначения. Через SOCKS5 UDP ASSOCIATE (уже есть в `socks.rs`); правила с
   программами — владелец по `/proc` (UDP), не совпало — прямой релей с `SO_MARK`.

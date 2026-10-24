@@ -34,8 +34,6 @@ const POLL: Duration = Duration::from_millis(500);
 /// A DNS flow (one query and its answer, a new port each) holds its sockets and thread no
 /// longer than this.
 const DNS_IDLE: Duration = Duration::from_secs(5);
-/// At most this many stale `ip rule`s go at a start (each crash may have left one).
-const MAX_STALE_RULES: usize = 64;
 
 /// One running session: sockets, flows and counters; dropped whole on stop or pause.
 pub(crate) struct Live {
@@ -66,17 +64,19 @@ fn spawn(f: impl FnOnce() + Send + 'static) {
     std::thread::spawn(f);
 }
 
-/// Runs a system tool with the hub's routing capabilities; its error output is the error.
-fn run(program: &str, args: &[&str], stdin: Option<&str>) -> Result<(), String> {
+/// Runs a system tool with the hub's routing capabilities: its output, or its error output as
+/// the error.
+fn run<S: AsRef<str>>(program: &str, args: &[S], stdin: Option<&str>) -> Result<String, String> {
+    let args: Vec<&str> = args.iter().map(AsRef::as_ref).collect();
     let mut cmd = Command::new(zapret::root::tool(program));
     caps::inherit(zapret::root::c_locale(&mut cmd))
-        .args(args)
+        .args(&args)
         .stdin(if stdin.is_some() {
             Stdio::piped()
         } else {
             Stdio::null()
         })
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = cmd
         .spawn()
@@ -89,7 +89,7 @@ fn run(program: &str, args: &[&str], stdin: Option<&str>) -> Result<(), String> 
         .wait_with_output()
         .map_err(|e| format!("{program}: {e}"))?;
     if out.status.success() {
-        Ok(())
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
         Err(format!(
             "{program} {}: {}",
@@ -112,20 +112,60 @@ fn session_lock() -> Result<UnixListener> {
 }
 
 fn nft(text: &str) -> Result<(), String> {
-    run("nft", &["-f", "-"], Some(text))
+    run("nft", &["-f", "-"], Some(text)).map(drop)
 }
 
-/// Removes the table and the policy routing, also what a crashed session left (a rule added
-/// twice needs two removals). Harmless when there is nothing to remove.
+/// Removes the table and the policy routing, also what a crashed session or an older version
+/// left: every rule with our mark, and the route in the table it looks up. Harmless when there is
+/// nothing to remove.
 fn clear() {
     let _ = nft(&nft::delete());
-    let [rule, route] = nft::route_argv(false);
-    for _ in 0..MAX_STALE_RULES {
-        if run("ip", &rule, None).is_err() {
-            break;
+    if let Ok(rules) = run("ip", &["-4", "rule", "show"], None) {
+        for policy in nft::ours(&rules) {
+            for argv in policy.argv(false) {
+                let _ = run("ip", &argv, None);
+            }
         }
     }
-    let _ = run("ip", &route, None);
+}
+
+/// A rule priority and a table nobody else uses (`nft::pick`): `ip` rules of both families,
+/// the `rt_tables` names and the routes of each candidate table.
+fn free_policy() -> Result<nft::Policy, String> {
+    let mut rules = run("ip", &["-4", "rule", "show"], None)?;
+    rules += &run("ip", &["-6", "rule", "show"], None).unwrap_or_default();
+    let mut named = Vec::new();
+    let dropins = std::fs::read_dir("/etc/iproute2/rt_tables.d")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path());
+    for path in [
+        "/etc/iproute2/rt_tables",
+        "/usr/share/iproute2/rt_tables",
+        "/usr/lib/iproute2/rt_tables",
+    ]
+    .map(std::path::PathBuf::from)
+    .into_iter()
+    .chain(dropins)
+    {
+        named.extend(nft::named_tables(
+            &std::fs::read_to_string(path).unwrap_or_default(),
+        ));
+    }
+    let has_routes = |table: u32| {
+        let table = table.to_string();
+        ["-4", "-6"].iter().any(|family| {
+            // A table never used "does not exist"; another IPv4 error counts as taken, no IPv6
+            // at all as empty.
+            match run("ip", &[*family, "route", "show", "table", &table], None) {
+                Ok(routes) => !routes.trim().is_empty(),
+                Err(e) => *family == "-4" && !e.contains("does not exist"),
+            }
+        })
+    };
+    nft::pick(&rules, &named, has_routes)
+        .ok_or_else(|| "no free policy routing table: 256 tables from 23112 on are in use".into())
 }
 
 /// Clears what a crashed session left (`clear`) unless a live session holds the lock; needs the
@@ -214,9 +254,12 @@ impl Live {
                 bypass_group(),
             );
             let installed = nft(&text).and_then(|()| {
-                nft::route_argv(true)
+                let policy = free_policy()?;
+                // The rule first: `clear` finds the route through it.
+                policy
+                    .argv(true)
                     .iter()
-                    .try_for_each(|argv| run("ip", argv, None))
+                    .try_for_each(|argv| run("ip", argv, None).map(drop))
             });
             if let Err(e) = installed {
                 drop(applied);

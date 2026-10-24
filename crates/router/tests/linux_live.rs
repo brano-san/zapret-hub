@@ -299,11 +299,18 @@ fn the_router_carries_tcp_udp_programs_and_domains_through_the_proxy() {
     let proxy = proxy(&log);
     let proxied = |entry: &str| log.lock().unwrap().iter().any(|l| l == entry);
 
-    // What a crashed session leaves: the table and two policy rules.
+    // What a crashed session of an older version leaves: the table, two policy rules and the
+    // route of table 100. The user's own route in the default table must stay.
     cmd("nft", "add table inet zapret_hub_route");
     for _ in 0..2 {
         ip("-4 rule add fwmark 0x10000000/0x10000000 lookup 100");
     }
+    ip("-4 route add local 0.0.0.0/0 dev lo table 100");
+    let theirs = format!(
+        "-4 route add 192.0.2.0/24 dev lo table {}",
+        nft::ROUTE_TABLE
+    );
+    ip(&theirs);
 
     let dir = tempfile::tempdir().unwrap();
     let r = Router::new(dir.path().join("routes.toml"));
@@ -325,6 +332,16 @@ fn the_router_carries_tcp_udp_programs_and_domains_through_the_proxy() {
     .unwrap();
     assert_eq!(r.status().state, RouterState::Running);
     assert_eq!(fwmark_rules(), 1, "the stale rules went, one is in force");
+    assert_eq!(
+        ip("-4 route show table 100"),
+        "",
+        "the old version's route went"
+    );
+    let next = nft::ROUTE_TABLE + 1;
+    assert!(
+        ip("-4 rule").contains(&format!("lookup {next}")),
+        "a table with someone's route is passed over"
+    );
     // A second session (another hub process, the CLI) is refused and leaves this one alone.
     let other_dir = tempfile::tempdir().unwrap();
     let other = Router::new(other_dir.path().join("routes.toml"));
@@ -447,7 +464,11 @@ fn the_router_carries_tcp_udp_programs_and_domains_through_the_proxy() {
     assert_eq!(r.status().state, RouterState::Off);
     assert_eq!(fwmark_rules(), 0);
     assert!(!cmd("nft", "list tables").contains("zapret_hub_route"));
-    assert_eq!(ip("-4 route show table 100"), "");
+    assert_eq!(ip(&format!("-4 route show table {next}")), "");
+    assert!(
+        ip(&format!("-4 route show table {}", nft::ROUTE_TABLE)).contains("192.0.2.0/24"),
+        "the user's route stays"
+    );
     let count = log.lock().unwrap().len();
     assert_eq!(echo("tcp", "10.77.0.2:7000", "after"), "after");
     assert_eq!(echo("udp", "10.77.0.2:7001", "after"), "after");
