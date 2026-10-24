@@ -1,5 +1,5 @@
-//! The main window: made when needed, destroyed by its close button, while the app stays in the
-//! tray (spec 4.2).
+//! The main window: made when needed; its close button destroys it on Windows and hides it on
+//! Linux (`lib.rs`), while the app stays in the tray (spec 4.2).
 
 use tauri::{AppHandle, Manager as _, WebviewUrl, WebviewWindowBuilder};
 use tauri_specta::Event as _;
@@ -9,7 +9,7 @@ use crate::dto::OpenTab;
 pub const MAIN: &str = "main";
 
 /// Brings the window up, making it first if it is gone. A new one starts hidden: the page shows
-/// it once it has drawn, so it never flashes white.
+/// it once it has drawn, so it never flashes white (Windows; on Linux it is shown at once).
 pub fn show(app: &AppHandle) {
     open(app, None);
 }
@@ -38,17 +38,22 @@ fn open(app: &AppHandle, tab: Option<&str>) {
         }
         return;
     }
-    // Off the main thread: building a webview from a main-thread handler deadlocks on Windows,
-    // and tray clicks and the second-instance callback run there.
-    let app = app.clone();
     let url = tab.map_or_else(WebviewUrl::default, |tab| {
         WebviewUrl::App(format!("#{tab}").into())
     });
-    std::thread::spawn(move || {
-        if let Err(err) = build(&app, url) {
+    let handle = app.clone();
+    let make = move || {
+        if let Err(err) = build(&handle, url) {
             log::error!("cannot create the window: {err:#}");
         }
-    });
+    };
+    // Windows: off the main thread, building a webview from a main-thread handler deadlocks, and
+    // tray clicks and the second-instance callback run there. Linux: GTK wants its one thread.
+    if cfg!(windows) {
+        std::thread::spawn(make);
+    } else if let Err(err) = app.run_on_main_thread(make) {
+        log::error!("cannot schedule the window: {err}");
+    }
 }
 
 fn build(app: &AppHandle, url: WebviewUrl) -> anyhow::Result<()> {
@@ -58,7 +63,9 @@ fn build(app: &AppHandle, url: WebviewUrl) -> anyhow::Result<()> {
         .inner_size(1100.0, 720.0)
         .min_inner_size(900.0, 560.0)
         .center()
-        .visible(false)
+        // Windows: hidden until the page has drawn (`main.ts` shows it). Linux: WebKitGTK does
+        // not run an unmapped window's page, so `main.ts` would never show it.
+        .visible(!cfg!(windows))
         .data_directory(profile)
         .build()?;
     Ok(())

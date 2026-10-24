@@ -9,7 +9,8 @@ use tauri_specta::Event as _;
 use zapret::service::{QuickCheck, SERVICE, SERVICE2, SvcState, active};
 
 use crate::dto::{
-    Candidates, Detected, FolderKind, Notice, NoticeLevel, NoticesChanged, Overview, StateChanged,
+    Candidates, Detected, FolderKind, Notice, NoticeLevel, NoticesChanged, Overview,
+    StateChanged,
 };
 use crate::settings::Settings;
 use crate::state::AppState;
@@ -248,6 +249,12 @@ pub fn save_settings(app: &AppHandle, settings: Settings, pipe: bool) -> anyhow:
     if engine_changed && let Some(dir) = &settings.zapret2_dir {
         zapret2::Engine::open(dir)?;
     }
+    // Linux: against the entry on the disk, which the desktop's settings may have changed.
+    #[cfg(not(windows))]
+    let old = Settings {
+        autostart: crate::autostart::is_enabled(&std::env::current_exe()?),
+        ..old
+    };
     if settings.autostart != old.autostart {
         if settings.autostart {
             crate::autostart::enable(&std::env::current_exe()?)?;
@@ -324,6 +331,7 @@ pub fn overview(app: &AppHandle) -> Overview {
         quick: state.quick(),
         last_run: state.last_run(),
         testing: state.testing(),
+        platform: crate::dto::Platform::CURRENT,
     }
 }
 
@@ -353,7 +361,8 @@ pub fn detect_folders() -> Detected {
 }
 
 /// The cheap places a release is unpacked to, each with its direct subfolders and nothing
-/// deeper: next to the app, Downloads, Desktop, Documents, Program Files, then drive roots.
+/// deeper: next to the app, Downloads, Desktop, Documents, then Program Files and drive roots
+/// (Windows) or the home, the data folder, `/opt` and `/usr/local/share` (Linux).
 /// Stops listing when `budget` is spent; the order is the order of preference.
 fn nearby_dirs(budget: Duration) -> Vec<PathBuf> {
     let deadline = std::time::Instant::now() + budget;
@@ -366,19 +375,26 @@ fn nearby_dirs(budget: Duration) -> Vec<PathBuf> {
         roots.extend(app.parent().map(Path::to_path_buf));
         roots.push(app);
     }
-    if let Some(home) = var("USERPROFILE") {
+    let home = var(if cfg!(windows) { "USERPROFILE" } else { "HOME" });
+    if let Some(home) = &home {
         roots.extend(["Downloads", "Desktop", "Documents"].map(|name| home.join(name)));
     }
-    roots.extend(
-        ["ProgramFiles", "ProgramFiles(x86)"]
-            .iter()
-            .filter_map(|name| var(name)),
-    );
-    roots.extend(
-        ('A'..='Z')
-            .map(|drive| PathBuf::from(format!("{drive}:\\")))
-            .filter(|root| root.is_dir()),
-    );
+    if cfg!(windows) {
+        roots.extend(
+            ["ProgramFiles", "ProgramFiles(x86)"]
+                .iter()
+                .filter_map(|name| var(name)),
+        );
+        roots.extend(
+            ('A'..='Z')
+                .map(|drive| PathBuf::from(format!("{drive}:\\")))
+                .filter(|root| root.is_dir()),
+        );
+    } else {
+        roots.extend(home);
+        roots.push(zapret::release::default_parent());
+        roots.extend(["/opt", "/usr/local/share"].map(PathBuf::from));
+    }
     expand(&roots, deadline)
 }
 
@@ -411,7 +427,12 @@ fn expand(roots: &[PathBuf], deadline: std::time::Instant) -> Vec<PathBuf> {
 /// SOCKS5 ports that answer now: NekoBox's own port when it runs, then the default ports of known
 /// clients (spec 9.2).
 pub fn candidates() -> Candidates {
-    let mut ports: Vec<u16> = ["nekobox.exe", "nekoray.exe"]
+    let images = if cfg!(windows) {
+        ["nekobox.exe", "nekoray.exe"]
+    } else {
+        ["nekobox", "nekoray"]
+    };
+    let mut ports: Vec<u16> = images
         .iter()
         .flat_map(|image| zapret::procs::find(image))
         .filter_map(|proc| {

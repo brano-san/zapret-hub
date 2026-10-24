@@ -1,14 +1,14 @@
-//! Windows notifications (spec 9.3) under the AppUserModelID `ZapretHub`.
+//! Desktop notifications (spec 9.3): Windows toasts under the AppUserModelID `ZapretHub`, Linux
+//! `notify-send`.
 
 use tauri::AppHandle;
-use windows::Data::Xml::Dom::XmlDocument;
-use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
-use windows::core::HSTRING;
 
+#[cfg(windows)]
 const AUMID: &str = "ZapretHub";
 
 /// An unpackaged exe has no identity for notifications: this names one. No `IconUri`: the shell
 /// draws a registered icon inverted and caches it.
+#[cfg(windows)]
 pub fn register() {
     let key =
         windows_registry::CURRENT_USER.create(format!(r"Software\Classes\AppUserModelId\{AUMID}"));
@@ -17,6 +17,11 @@ pub fn register() {
     }
 }
 
+/// Nothing to register: the notification daemon takes the name `notify-send -a` gives.
+#[cfg(not(windows))]
+pub fn register() {}
+
+#[cfg(windows)]
 fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -24,7 +29,11 @@ fn escape(text: &str) -> String {
         .replace('"', "&quot;")
 }
 
+#[cfg(windows)]
 pub fn show(app: &AppHandle, title: &str, body: &str) {
+    use windows::Data::Xml::Dom::XmlDocument;
+    use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
+    use windows::core::HSTRING;
     log::info!("notification: {title}: {body}");
     let xml = format!(
         r#"<toast><visual><binding template="ToastGeneric"><text>{}</text><text>{}</text></binding></visual></toast>"#,
@@ -46,4 +55,18 @@ pub fn show(app: &AppHandle, title: &str, body: &str) {
     if let Err(err) = dispatched {
         log::warn!("cannot show a notification: {err}");
     }
+}
+
+#[cfg(not(windows))]
+pub fn show(_app: &AppHandle, title: &str, body: &str) {
+    log::info!("notification: {title}: {body}");
+    send(title, body);
+}
+
+/// `notify-send`, not waited for; also what `lib::fatal` says with, before there is an app.
+#[cfg(not(windows))]
+pub fn send(title: &str, body: &str) {
+    let mut cmd = std::process::Command::new("notify-send");
+    cmd.arg("-a").arg(crate::texts::APP).arg(title).arg(body);
+    crate::shell::launch(cmd);
 }

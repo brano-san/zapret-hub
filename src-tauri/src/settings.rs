@@ -1,4 +1,4 @@
-//! `zapret-hub.toml` next to the exe (spec 4.3).
+//! `zapret-hub.toml`: next to the exe on Windows, in `~/.config/zapret-hub` on Linux (spec 4.3).
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};

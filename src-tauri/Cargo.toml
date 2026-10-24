@@ -19,6 +19,11 @@ name = "zapret-hub"
 path = "src/main.rs"
 test = false
 
+# A plain `cargo build` serves the bundled page; `tauri dev` drops the feature to use devUrl.
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build.workspace = true
 
@@ -42,6 +47,8 @@ tauri-plugin-dialog.workspace = true
 tauri-plugin-single-instance.workspace = true
 tauri-specta.workspace = true
 toml.workspace = true
+
+[target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = ["Data_Xml_Dom", "UI_Notifications", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 windows-registry.workspace = true
 

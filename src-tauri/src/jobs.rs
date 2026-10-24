@@ -8,7 +8,7 @@ use tauri::AppHandle;
 use tauri_specta::Event as _;
 use tester::model::{Suite, TestRun};
 use tester::run::{Progress, Request};
-use zapret::service::{QuickCheck, SvcState};
+use zapret::service::{QuickCheck, SvcState, active};
 use zapret::snapshot::{Snapshot, pending_path};
 
 use crate::actions::{self, state};
@@ -166,6 +166,7 @@ fn background_check(app: &AppHandle) {
 /// Before anything else changes zapret, an interrupted operation is put back (spec 10).
 fn startup(app: &AppHandle, flowseal: Option<PathBuf>) {
     recover(app);
+    raise_services(app);
     let state = state(app);
     // Routing comes back as it was left (router spec 3).
     crate::routing::sync(app);
@@ -198,6 +199,25 @@ fn startup(app: &AppHandle, flowseal: Option<PathBuf>) {
         ),
     }
     actions::changed(app);
+}
+
+/// Linux: after a boot the strategy's unit may be enabled yet down (`/home` or the network were
+/// not ready and systemd's retries ran out): it is started here, and the first background check
+/// turns the tray green. Windows' service manager does this itself.
+fn raise_services(app: &AppHandle) {
+    let (name, _) = active();
+    let down = cfg!(target_os = "linux")
+        && zapret::service::strategy().is_some()
+        && zapret::service::config(name).is_some_and(|config| config.auto_start)
+        && zapret::service::state(name) != SvcState::Running;
+    if down && let Err(err) = state(app).in_turn(|| zapret::service::start(name)) {
+        actions::notice(
+            app,
+            NoticeLevel::Error,
+            texts::SERVICE_RAISE_FAILED,
+            format!("{err:#}"),
+        );
+    }
 }
 
 fn recover(app: &AppHandle) {

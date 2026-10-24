@@ -697,6 +697,7 @@ export type Overview = {
 	quick: QuickCheck | null,
 	last_run: RunSummary | null,
 	testing: boolean,
+	platform: Platform,
 };
 
 /**  One pass of a strategy in a run with repeats, as measured. */
@@ -725,6 +726,9 @@ rule: string | null } | { id: "R2VoiceUdp"; server: string; via_vpn: boolean } |
 control_route: string | null; 
 /**  The control channel went direct (not through the VPN). */
 direct: boolean };
+
+/**  The system the app runs on: the page hides what the other one has. */
+export type Platform = "windows" | "linux";
 
 export type Preset = "discord-voice" | "discord" | "cloudflare" | "telegram" | "twitch" | "dbd";
 

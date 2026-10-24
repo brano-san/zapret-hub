@@ -123,8 +123,9 @@ pub fn refresh(app: &AppHandle) {
 }
 
 /// «Открыть»; «Стратегия: <имя>» → «Переключить на» and the top five; «Перезапустить zapret»;
-/// «Быстрая проверка»; «Диагностика…»; «Маршрутизация: вкл/выкл»; «Выход» (spec 9.3, router
-/// spec 8, diag spec 10).
+/// «Быстрая проверка»; «Диагностика…»; «Маршрутизация: вкл/выкл» (Windows); «Выход» (spec 9.3,
+/// router spec 8, diag spec 10). Linux's ayatana tray opens this menu on any click: «Открыть»
+/// is the way to the window there.
 fn menu(
     app: &AppHandle,
     strategy: Option<&str>,
@@ -156,9 +157,12 @@ fn menu(
     let router = MenuItem::with_id(app, "router", label, true, None::<&str>)?;
     let gap = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", texts::QUIT, true, None::<&str>)?;
-    let items: [&dyn IsMenuItem<Wry>; 8] = [
-        &open, &current, &restart, &quick, &diag, &router, &gap, &quit,
-    ];
+    let mut items: Vec<&dyn IsMenuItem<Wry>> = vec![&open, &current, &restart, &quick, &diag];
+    // The router is Windows only (WinDivert).
+    if cfg!(windows) {
+        items.push(&router);
+    }
+    items.extend([&gap as &dyn IsMenuItem<Wry>, &quit]);
     Menu::with_items(app, &items)
 }
 

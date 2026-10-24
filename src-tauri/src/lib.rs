@@ -119,6 +119,7 @@ pub fn report(err: &anyhow::Error) {
 }
 
 /// The one native message box: there is no window to show the error in.
+#[cfg(windows)]
 fn fatal(text: &str) {
     use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
     use windows::core::HSTRING;
@@ -134,11 +135,21 @@ fn fatal(text: &str) {
     };
 }
 
+/// There is no window to show the error in: the journal, the terminal and a notification.
+#[cfg(not(windows))]
+fn fatal(text: &str) {
+    log::error!("{text}");
+    eprintln!("{text}");
+    notify::send(texts::FAILED_TO_START, text);
+}
+
+#[cfg(windows)]
 const WEBVIEW2_CLIENT: &str =
     r"Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
 
 /// `pv` of the WebView2 Runtime, per machine (WOW6432Node on 64-bit Windows) or per user. An
 /// uninstall leaves an empty value or `0.0.0.0` behind.
+#[cfg(windows)]
 fn webview2_installed() -> bool {
     [
         windows_registry::LOCAL_MACHINE.open(format!(r"SOFTWARE\WOW6432Node\{WEBVIEW2_CLIENT}")),
@@ -152,6 +163,7 @@ fn webview2_installed() -> bool {
 
 pub fn run() -> anyhow::Result<()> {
     // Without the runtime no window can exist: the user is told here (spec 12).
+    #[cfg(windows)]
     if !webview2_installed() {
         fatal(texts::WEBVIEW2_MISSING);
         std::process::exit(1);
@@ -159,9 +171,10 @@ pub fn run() -> anyhow::Result<()> {
     let paths = Paths::current()?;
     journal::init(paths.logs());
     log::info!(
-        "Zapret Hub {} started from {}",
+        "Zapret Hub {} started from {}, settings {}",
         env!("CARGO_PKG_VERSION"),
-        paths.exe_dir.display()
+        std::env::current_exe().unwrap_or_default().display(),
+        paths.settings().display()
     );
     // Read before the settings load: saving them drops the old key (0.8.0 used Flowseal).
     let flowseal = settings::flowseal_dir(&paths.settings());
@@ -181,7 +194,7 @@ pub fn run() -> anyhow::Result<()> {
             text,
         });
     }
-    // The Task Scheduler entry passes it (autostart.rs).
+    // The Task Scheduler entry or the autostart desktop entry passes it (autostart.rs).
     let autostarted = std::env::args().any(|arg| arg == "--autostart");
     let builder = specta_builder();
     #[cfg(debug_assertions)]
@@ -195,6 +208,18 @@ pub fn run() -> anyhow::Result<()> {
         }))
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
+        // Linux: the cross hides the window. Destroying the last one ends GTK's main loop and the
+        // tray with it; only «Выход» may end the app (spec 4.2). Windows frees the webview.
+        .on_window_event(|window, event| {
+            if cfg!(target_os = "linux")
+                && let tauri::WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                if let Err(err) = window.hide() {
+                    log::warn!("cannot hide the window: {err}");
+                }
+            }
+        })
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

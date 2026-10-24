@@ -15,28 +15,56 @@ use crate::diag::Reply;
 use crate::dto::{LiveRun, Notice, NoticeLevel};
 use crate::settings::Settings;
 
-/// Everything lives next to the exe: the app is portable.
+/// Windows: everything lives next to the exe, the app is portable. Linux: the settings in
+/// `~/.config/zapret-hub`, the data in `~/.local/share/zapret-hub` (XDG): the exe usually sits in
+/// a folder the user cannot write.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
-    pub exe_dir: PathBuf,
+    /// Holds `zapret-hub.toml`.
+    config: PathBuf,
+    data: PathBuf,
 }
 
 impl Paths {
+    /// `zapret-hub.toml` in `dir`, the data in its `data` folder.
+    #[cfg(any(windows, test))]
+    pub fn portable(dir: &std::path::Path) -> Self {
+        Self {
+            config: dir.to_path_buf(),
+            data: dir.join("data"),
+        }
+    }
+
+    #[cfg(windows)]
     pub fn current() -> anyhow::Result<Self> {
         let exe = std::env::current_exe().context("cannot find the executable's path")?;
-        let exe_dir = exe
-            .parent()
-            .context("the executable has no folder")?
-            .to_path_buf();
-        Ok(Self { exe_dir })
+        Ok(Self::portable(
+            exe.parent().context("the executable has no folder")?,
+        ))
+    }
+
+    /// The settings folder is made here: a save writes a temporary file next to the settings.
+    #[cfg(not(windows))]
+    pub fn current() -> anyhow::Result<Self> {
+        let paths = Self {
+            config: zapret::config_home().join("zapret-hub"),
+            data: zapret::data_home().join("zapret-hub"),
+        };
+        anyhow::ensure!(
+            paths.config.is_absolute() && paths.data.is_absolute(),
+            "neither HOME nor the XDG folders are set: there is nowhere to keep the settings"
+        );
+        std::fs::create_dir_all(&paths.config)
+            .with_context(|| format!("cannot create {}", paths.config.display()))?;
+        Ok(paths)
     }
 
     pub fn settings(&self) -> PathBuf {
-        self.exe_dir.join("zapret-hub.toml")
+        self.config.join("zapret-hub.toml")
     }
 
     pub fn data(&self) -> PathBuf {
-        self.exe_dir.join("data")
+        self.data.clone()
     }
 
     pub fn logs(&self) -> PathBuf {
@@ -494,12 +522,7 @@ mod tests {
     use super::*;
 
     fn state(dir: &std::path::Path) -> AppState {
-        AppState::new(
-            Paths {
-                exe_dir: dir.to_path_buf(),
-            },
-            Settings::default(),
-        )
+        AppState::new(Paths::portable(dir), Settings::default())
     }
 
     fn notice(level: NoticeLevel, title: &str) -> Notice {
@@ -698,6 +721,7 @@ mod tests {
             ..Settings::default()
         });
         let err = state.engine2_required().unwrap_err();
-        assert!(format!("{err:#}").contains("missing winws2.exe"), "{err:#}");
+        let missing = format!("missing {}", zapret2::EXE);
+        assert!(format!("{err:#}").contains(&missing), "{err:#}");
     }
 }

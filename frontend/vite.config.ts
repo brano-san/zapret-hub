@@ -9,6 +9,8 @@ export default defineConfig({
   },
   clearScreen: false,
   server: {
+    // localhost resolves to ::1 for WebKitGTK while Vite picks 127.0.0.1: the page stays blank.
+    host: "127.0.0.1",
     port: 1420,
     strictPort: true,
     watch: { ignored: ["**/src-tauri/**", "**/target/**"] },

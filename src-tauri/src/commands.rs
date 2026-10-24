@@ -20,7 +20,9 @@ use zapret::release::{Downloaded, Engine};
 use zapret::service::QuickCheck;
 
 use crate::actions::{self, state as app};
-use crate::dto::{Candidates, Detected, DownloadProgress, FolderKind, LiveRun, Notice, Overview};
+use crate::dto::{
+    Candidates, Detected, DownloadProgress, FolderKind, LiveRun, Notice, Overview,
+};
 use crate::settings::Settings;
 use crate::state::AppState;
 use crate::{routing, texts, window};
@@ -55,7 +57,14 @@ pub fn app_version() -> String {
 #[tauri::command]
 #[specta::specta]
 pub fn get_settings(state: State<'_, AppState>) -> Settings {
-    state.settings()
+    let settings = state.settings();
+    // Linux: the autostart entry may have been switched off in the desktop's own settings.
+    #[cfg(not(windows))]
+    let settings = Settings {
+        autostart: std::env::current_exe().is_ok_and(|exe| crate::autostart::is_enabled(&exe)),
+        ..settings
+    };
+    settings
 }
 
 #[tauri::command]

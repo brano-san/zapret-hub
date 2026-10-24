@@ -5,6 +5,22 @@ use tester::model::StrategyResult;
 use tester::run::{Progress, Request};
 use zapret::service::{QuickCheck, SvcState};
 
+/// The system the app runs on: the page hides what the other one has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum Platform {
+    Windows,
+    Linux,
+}
+
+impl Platform {
+    pub const CURRENT: Self = if cfg!(windows) {
+        Self::Windows
+    } else {
+        Self::Linux
+    };
+}
+
 /// The «Обзор» tab, read in one go.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct Overview {
@@ -20,6 +36,7 @@ pub struct Overview {
     pub quick: Option<QuickCheck>,
     pub last_run: Option<RunSummary>,
     pub testing: bool,
+    pub platform: Platform,
 }
 
 /// SOCKS5 ports that answer, for the wizard (spec 9.2).

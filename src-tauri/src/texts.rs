@@ -11,6 +11,7 @@ pub const APP: &str = "Zapret Hub";
 
 pub const FAILED_TO_START: &str = "Zapret Hub не запустился.";
 
+#[cfg(windows)]
 pub const WEBVIEW2_MISSING: &str = "Для окна Zapret Hub нужен Microsoft Edge WebView2 Runtime, а на этом \
 компьютере его нет.\n\nСкачайте его: https://go.microsoft.com/fwlink/p/?LinkId=2124703\n\n\
 Ctrl+C копирует этот текст.";
@@ -210,6 +211,8 @@ pub fn strategy(name: Option<&str>) -> String {
 pub const ROUTER_ON: &str = "Маршрутизация: вкл";
 pub const ROUTER_OFF: &str = "Маршрутизация: выкл";
 pub const ROUTER_FAILED: &str = "Маршрутизация не включилась";
+
+pub const SERVICE_RAISE_FAILED: &str = "Служба zapret2 не запустилась после загрузки";
 pub const PROXY_DOWN: &str = "Прокси недоступен, трафик идёт напрямую";
 
 /// Windows cuts a tray tooltip at 127 characters: short lines, the strategy's name last, so a long

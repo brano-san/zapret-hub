@@ -186,12 +186,7 @@ mod tests {
     #[test]
     fn tests_status_is_what_the_cli_reads() {
         let dir = tempfile::tempdir().unwrap();
-        let state = AppState::new(
-            Paths {
-                exe_dir: dir.path().to_path_buf(),
-            },
-            Settings::default(),
-        );
+        let state = AppState::new(Paths::portable(dir.path()), Settings::default());
         let read = |state: &AppState| -> ::cli::TestsStatus {
             serde_json::from_value(tests_status(state)).unwrap()
         };
