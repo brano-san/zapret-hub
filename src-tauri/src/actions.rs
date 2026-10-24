@@ -580,8 +580,31 @@ pub fn save_exclusions(app: &AppHandle, exclusions: Exclusions) -> anyhow::Resul
     // Refuses a bad port before anything is written.
     engine.clone().with_excluded_ports(&ports)?;
     anyhow::ensure!(!state.testing(), crate::state::TESTING);
-    let lists = zapret2::strategies::lists_dir(&engine);
-    std::fs::create_dir_all(&lists).with_context(|| lists.display().to_string())?;
+    // Diagnostics read the ports and the lists (`diag_reads_changed`): nothing is written.
+    state.not_diagnosing()?;
+    let mut any = write_lists(&zapret2::strategies::lists_dir(&engine), &exclusions)?;
+    {
+        let _saving = state.saving();
+        let mut settings = state.settings();
+        if settings.excluded_ports != ports {
+            settings.excluded_ports = ports;
+            crate::settings::save(&state.paths.settings(), &settings)?;
+            state.set_settings(settings);
+            any = true;
+        }
+    }
+    let installed = zapret::service::state(SERVICE2) != SvcState::NotInstalled;
+    if let Some(active) = zapret::service::strategy().filter(|_| any && installed) {
+        apply(app, &active)?;
+    }
+    changed(app);
+    Ok(())
+}
+
+/// Both exclusion lists merged into their files in `lists`; whether either file changed.
+fn write_lists(lists: &Path, exclusions: &Exclusions) -> anyhow::Result<bool> {
+    std::fs::create_dir_all(lists).with_context(|| lists.display().to_string())?;
+    let mut any = false;
     for (name, entries) in [
         (EXCLUDE_DOMAINS, &exclusions.domains),
         (EXCLUDE_IPS, &exclusions.ips),
@@ -595,22 +618,9 @@ pub fn save_exclusions(app: &AppHandle, exclusions: Exclusions) -> anyhow::Resul
         std::fs::write(&temp, text).with_context(|| format!("cannot write {}", temp.display()))?;
         std::fs::rename(&temp, &path)
             .with_context(|| format!("cannot replace {}", path.display()))?;
+        any = true;
     }
-    {
-        let _saving = state.saving();
-        let mut settings = state.settings();
-        if settings.excluded_ports != ports {
-            settings.excluded_ports = ports;
-            crate::settings::save(&state.paths.settings(), &settings)?;
-            state.set_settings(settings);
-        }
-    }
-    let installed = zapret::service::state(SERVICE2) != SvcState::NotInstalled;
-    if let Some(active) = zapret::service::strategy().filter(|_| installed) {
-        apply(app, &active)?;
-    }
-    changed(app);
-    Ok(())
+    Ok(any)
 }
 
 #[cfg(test)]
@@ -648,6 +658,28 @@ mod tests {
             Some("a.com\n")
         );
         assert_eq!(merge_list("# only\n", &[]), None);
+    }
+
+    #[test]
+    fn saving_the_same_exclusions_again_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let lists = dir.path().join("lists");
+        let mut exclusions = Exclusions {
+            domains: vec!["a.com".into()],
+            ips: Vec::new(),
+            ports: Vec::new(),
+        };
+        assert!(write_lists(&lists, &exclusions).unwrap());
+        assert!(
+            !write_lists(&lists, &exclusions).unwrap(),
+            "nothing to reinstall"
+        );
+        exclusions.ips.push("10.0.0.0/8".into());
+        assert!(write_lists(&lists, &exclusions).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(lists.join(EXCLUDE_IPS)).unwrap(),
+            "10.0.0.0/8\n"
+        );
     }
 
     #[test]
