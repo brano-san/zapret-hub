@@ -549,7 +549,7 @@ git commit -m "feat(exec): run external programs with timeout, cancel and journa
   - `probe::curl::dpi_check(host: &str, kind, payload: &Path, cancel) -> DpiResult`, `dpi_classify(kind, exit: Option<i32>, text: &str, timeout_s: u32) -> DpiResult`, `write_payload(path: &Path) -> io::Result<()>`, `DPI_TIMEOUT_S`
   - `probe::curl::available() -> bool`, `fetch_text(url, socks5: Option<&str>) -> anyhow::Result<String>`, `download(url, dest: &Path, socks5: Option<&str>) -> anyhow::Result<()>`
   - `probe::ping::ping(host: &str, timeout_ms: u32) -> Option<u32>`
-  - `probe::socks::handshake(addr: &str, timeout: Duration) -> bool`, `ProxyStatus { ok, latency_ms: Option<u32>, error: Option<String> }`, `check(addr) -> ProxyStatus`, `KNOWN_PORTS`, `nekobox_port(exe_dir: &Path) -> Option<u16>`, `listening(ports: &[u16]) -> Vec<String>`
+  - `probe::socks::handshake(addr: &str, timeout: Duration) -> bool`, `ProxyStatus { ok, latency_ms: Option<u32>, error: Option<String> }`, `check(addr) -> ProxyStatus`, `KNOWN_PORTS`, `proxy_client_port(exe_dir: &Path) -> Option<u16>`, `listening(ports: &[u16]) -> Vec<String>`
 
 - [ ] **Шаг 1: Манифест крейта**
 
@@ -666,13 +666,13 @@ fn a_closed_port_is_not_a_proxy() {
 }
 
 #[test]
-fn reads_the_nekobox_port() {
+fn reads_the_proxy_client_port() {
     let dir = tempfile::tempdir().unwrap();
     let groups = dir.path().join("config").join("groups");
     std::fs::create_dir_all(&groups).unwrap();
-    std::fs::write(groups.join("nekobox.json"), r#"{"inbound_socks_port": 18082, "spmode2": ["system_proxy"]}"#).unwrap();
-    assert_eq!(probe::socks::nekobox_port(dir.path()), Some(18082));
-    assert_eq!(probe::socks::nekobox_port(&dir.path().join("missing")), None);
+    std::fs::write(groups.join("proxy-client.json"), r#"{"inbound_socks_port": 18082, "spmode2": ["system_proxy"]}"#).unwrap();
+    assert_eq!(probe::socks::proxy_client_port(dir.path()), Some(18082));
+    assert_eq!(probe::socks::proxy_client_port(&dir.path().join("missing")), None);
 }
 ```
 
@@ -1047,12 +1047,12 @@ pub fn check(addr: &str) -> ProxyStatus {
     }
 }
 
-/// Default SOCKS ports of known clients: NekoBox 2080, v2rayN 10808, Clash 7890.
+/// Default SOCKS ports of known clients: 2080, v2rayN 10808, Clash 7890.
 pub const KNOWN_PORTS: [u16; 3] = [2080, 10808, 7890];
 
-/// `inbound_socks_port` from `config\groups\nekobox.json` next to NekoBox's exe.
-pub fn nekobox_port(exe_dir: &Path) -> Option<u16> {
-    let text = std::fs::read_to_string(exe_dir.join("config").join("groups").join("nekobox.json")).ok()?;
+/// `inbound_socks_port` from `config\groups\proxy-client.json` next to the proxy client's exe.
+pub fn proxy_client_port(exe_dir: &Path) -> Option<u16> {
+    let text = std::fs::read_to_string(exe_dir.join("config").join("groups").join("proxy-client.json")).ok()?;
     let json: serde_json::Value = serde_json::from_str(&text).ok()?;
     u16::try_from(json.get("inbound_socks_port")?.as_u64()?).ok()
 }
@@ -8018,14 +8018,14 @@ pub fn check_folder(path: &Path) -> FolderCheck {
     }
 }
 
-/// Folders where Flowseal probably is, and SOCKS5 ports that answer now: NekoBox's own port when
+/// Folders where Flowseal probably is, and SOCKS5 ports that answer now: the proxy client's own port when
 /// it runs, then the default ports of known clients (spec 9.2).
 pub fn candidates() -> Candidates {
     let folders = zapret::folder::candidates().iter().map(|path| check_folder(path)).collect();
-    let mut ports: Vec<u16> = ["nekobox.exe", "nekoray.exe"]
+    let mut ports: Vec<u16> = ["proxy-client.exe", "proxy-client-gui.exe"]
         .iter()
         .flat_map(|image| zapret::procs::find(image))
-        .filter_map(|proc| proc.exe.as_deref().and_then(Path::parent).and_then(probe::socks::nekobox_port))
+        .filter_map(|proc| proc.exe.as_deref().and_then(Path::parent).and_then(probe::socks::proxy_client_port))
         .collect();
     ports.extend(probe::socks::KNOWN_PORTS);
     Candidates { folders, proxies: probe::socks::listening(&ports) }
@@ -10745,7 +10745,7 @@ Run: `npm run check`, затем `npm test`
 Expected: 0 ошибок и 0 предупреждений; тесты задачи 16 проходят.
 
 Вручную, из повышенного терминала, `npm run tauri dev` (старый `target\debug\zapret-hub.toml` удалить, чтобы увидеть мастер):
-- мастер находит папку zapret из службы и порт NekoBox, если тот запущен; «Готово» сохраняет настройки, при включённом автозапуске в Планировщике появляется задача «Zapret Hub» (`schtasks /Query /TN "Zapret Hub"`);
+- мастер находит папку zapret из службы и порт SOCKS5-прокси, если тот запущен; «Готово» сохраняет настройки, при включённом автозапуске в Планировщике появляется задача «Zapret Hub» (`schtasks /Query /TN "Zapret Hub"`);
 - обзор показывает службу, стратегию, версию Flowseal, прокси; «Быстрая проверка» заполняет строку проверки, иконка трея становится зелёной;
 - «Перезапустить zapret» перезапускает службу (в журнале `sc`/`net` с кодами выхода);
 - в настройках смена темы применяется после «Сохранить»;
