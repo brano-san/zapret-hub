@@ -1,7 +1,7 @@
 //! The check that runs the engine and the `zapret2` service (zapret2 spec 5.3, 6).
 //! `zapret::service` does the `sc`/`systemctl` work; this module knows what zapret2 needs from it.
 //! On Linux `nfqws2` gets the arguments `nft::translate` makes, and its queue the table
-//! `nft::write_config` writes.
+//! `nft::table_for` builds; an install is one root batch (one sudo/pkexec).
 
 use anyhow::Context as _;
 #[cfg(windows)]
@@ -45,10 +45,27 @@ pub fn intercept_args(tail: &str) -> String {
     format!("{tail} --intercept=0")
 }
 
-/// The service's `binPath` (`ExecStart` on Linux): `"<engine>" <tail>`, `tail` as the engine
-/// reads it.
+/// The service's `binPath`: `"<winws2.exe>" <tail>`.
+#[cfg(windows)]
 pub fn bin_path(engine: &Engine, tail: &str) -> String {
     format!("\"{}\" {tail}", engine.exe().display())
+}
+
+/// The service's `ExecStart`: the engine and `tail` (as the engine reads it) split the way
+/// `run` splits them, quoted so that systemd splits them back the same (`exec_line`).
+#[cfg(target_os = "linux")]
+pub fn bin_path(engine: &Engine, tail: &str) -> String {
+    let mut argv = vec![engine.exe().display().to_string()];
+    argv.extend(zapret::spawn_tokens(tail));
+    service::exec_line(&argv)
+}
+
+/// What a Linux install writes: the unit's `ExecStart` and the nftables table.
+#[cfg(target_os = "linux")]
+pub fn service_plan(engine: &Engine, tail: &str) -> anyhow::Result<(String, String)> {
+    let translated = crate::nft::translate(tail)?;
+    let table = crate::nft::table_for(&translated, engine.excluded_ports())?;
+    Ok((bin_path(engine, &translated.args), table))
 }
 
 /// The whole check (spec 5.3), to the first failure: the static one, `--dry-run`,
@@ -97,18 +114,32 @@ fn run(engine: &Engine, args: &str) -> anyhow::Result<exec::Output> {
 /// `zapret2` created and started, its strategy recorded. Flowseal's `zapret` is left to the system
 /// checks, which name it a conflict and remove it at the user's word. On Linux the queue's table
 /// file goes first: the unit applies it at its start.
+#[cfg(windows)]
 pub fn install(engine: &Engine, strategy: &Strategy, tail: &str) -> anyhow::Result<()> {
     service::stop_and_delete(SERVICE2)?;
     zapret::procs::kill_all(service::WINWS2)?;
     let _ = service::enable_tcp_timestamps();
-    #[cfg(target_os = "linux")]
-    let tail = &{
-        let translated = crate::nft::translate(tail)?;
-        crate::nft::write_config(&translated, engine.excluded_ports())?;
-        translated.args
-    };
     service::create(SERVICE2, &bin_path(engine, tail), true)?;
     service::start(SERVICE2)?;
+    service::set_strategy_of(SERVICE2, &strategy.full_name())
+}
+
+/// Linux: the same in one root batch, so one sudo/pkexec: `zapret2` stopped, every other
+/// nfqws2 ended, TCP timestamps on (only when off), the `zapret-bypass` group, the table file
+/// the unit applies, the unit written over, reloaded, enabled and restarted.
+#[cfg(target_os = "linux")]
+pub fn install(engine: &Engine, strategy: &Strategy, tail: &str) -> anyhow::Result<()> {
+    let (exec, table) = service_plan(engine, tail)?;
+    let mut batch = zapret::root::Batch::new();
+    batch.try_run(&["systemctl", "stop", "zapret2.service"]);
+    batch.try_run(&["pkill", "-KILL", "-x", service::WINWS2]);
+    if service::tcp_timestamps() != Some(true) {
+        batch.try_run(&["sysctl", "-w", "net.ipv4.tcp_timestamps=1"]);
+    }
+    crate::nft::add_group(&mut batch);
+    batch.write(Path::new(crate::nft::CONFIG), &table)?;
+    service::add_replace(&mut batch, SERVICE2, &exec, true, true)?;
+    batch.exec()?;
     service::set_strategy_of(SERVICE2, &strategy.full_name())
 }
 

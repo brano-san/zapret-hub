@@ -5,7 +5,6 @@
 //! group. The `zapret2` unit applies the table file before the engine and deletes the table after
 //! it (`zapret::service`); the tests apply it themselves.
 
-use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -24,8 +23,8 @@ pub const GROUP: &str = "zapret-bypass";
 /// What `tail` becomes for `nfqws2`, and the ports its queue takes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Translated {
-    /// The arguments without any `--wf-*` (WinDivert's whole filter family), with `--qnum=200`
-    /// unless the strategy named a queue.
+    /// The arguments without any `--wf-*` (WinDivert's whole filter family) and with
+    /// `--qnum=200` in place of any queue the strategy named: the table feeds that one only.
     pub args: String,
     /// The `--wf-tcp-out=` ports, merged: `80,443,1024-65535`.
     pub tcp: String,
@@ -43,13 +42,11 @@ pub fn translate(tail: &str) -> anyhow::Result<Translated> {
             tcp.extend(ports.split(',').map(str::to_owned));
         } else if let Some(ports) = plain.strip_prefix("--wf-udp-out=") {
             udp.extend(ports.split(',').map(str::to_owned));
-        } else if !plain.starts_with("--wf-") {
+        } else if !plain.starts_with("--wf-") && !plain.starts_with("--qnum=") {
             kept.push(token);
         }
     }
-    if !kept.iter().any(|token| token.starts_with("--qnum=")) {
-        kept.push(format!("--qnum={QNUM}"));
-    }
+    kept.push(format!("--qnum={QNUM}"));
     Ok(Translated {
         args: kept.join(" "),
         tcp: merge_ports(&tcp).context("--wf-tcp-out")?,
@@ -123,43 +120,33 @@ pub fn table(tcp: &str, udp: &str, excluded: &str) -> String {
 }
 
 /// The table for `translated` with `excluded` ports (validated, merged).
-fn table_for(translated: &Translated, excluded: &[String]) -> anyhow::Result<String> {
+pub fn table_for(translated: &Translated, excluded: &[String]) -> anyhow::Result<String> {
     let excluded = merge_ports(excluded).context("excluded ports")?;
     Ok(table(&translated.tcp, &translated.udp, &excluded))
 }
 
-/// `{GROUP}` created as a system group when `/etc/group` lacks it. Best effort: when it fails the
-/// next `nft -f` names the missing group in its own error.
-fn ensure_group() {
+/// `{GROUP}` created as a system group when `/etc/group` lacks it, as a step of `batch`. Best
+/// effort: when it fails the `nft -f` after it names the missing group in its own error.
+pub fn add_group(batch: &mut zapret::root::Batch) {
     let known = exec::run(
         Command::new("getent").args(["group", GROUP]),
         Duration::from_secs(10),
         None,
     )
     .map(|out| out.success());
-    if known.is_ok_and(|known| !known)
-        && let Err(err) = zapret::root::check("groupadd", &["--system", GROUP])
-    {
-        log::warn!("the {GROUP} group was not created: {err:#}");
+    if known.is_ok_and(|known| !known) {
+        batch.try_run(&["groupadd", "--system", GROUP]);
     }
 }
 
-/// Writes the table to {CONFIG}, which the service applies at every start.
-pub fn write_config(translated: &Translated, excluded: &[String]) -> anyhow::Result<()> {
-    let text = table_for(translated, excluded)?;
-    ensure_group();
-    zapret::root::write(Path::new(CONFIG), &text)
-        .with_context(|| format!("cannot write the nftables table file {CONFIG}"))
-}
-
-/// Applies the table now, for an engine started without the service (the tests).
+/// Applies the table now, for an engine started without the service (the tests): one root batch.
 pub fn apply(translated: &Translated, excluded: &[String]) -> anyhow::Result<()> {
     let text = table_for(translated, excluded)?;
-    ensure_group();
-    let mut file = tempfile::NamedTempFile::new()?;
-    std::io::Write::write_all(&mut file, text.as_bytes())?;
-    let path = file.path().display().to_string();
-    zapret::root::check("nft", &["-f", &path])
+    let mut batch = zapret::root::Batch::new();
+    add_group(&mut batch);
+    let file = batch.stage(&text)?;
+    batch.run(&["nft", "-f", &file]);
+    batch.exec()
 }
 
 /// The table gone, best effort: there may be none.
@@ -206,9 +193,9 @@ mod tests {
     }
 
     #[test]
-    fn a_strategy_that_named_a_queue_keeps_it() {
+    fn a_strategy_that_named_a_queue_gets_the_tables_one() {
         let t = translate("--wf-tcp-out=443 --qnum=207 --lua-desync=fake").unwrap();
-        assert_eq!(t.args, "--qnum=207 --lua-desync=fake");
+        assert_eq!(t.args, "--lua-desync=fake --qnum=200");
     }
 
     #[test]

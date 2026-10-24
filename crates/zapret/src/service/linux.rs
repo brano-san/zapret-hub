@@ -80,8 +80,8 @@ pub fn config(name: &str) -> Option<SvcConfig> {
     })
 }
 
-/// The last `ExecStart=` (a drop-in's replaces the unit's), without systemd's `-+!@:` prefixes
-/// and with `%%` back to `%`, as `unit` wrote it.
+/// The last `ExecStart=` (a drop-in's replaces the unit's), without systemd's `-+!@:` prefixes:
+/// the line as `exec_line` wrote it, which `create` takes back unchanged.
 fn exec_start(unit: &str) -> Option<String> {
     unit.lines()
         .filter_map(|line| line.trim().strip_prefix("ExecStart="))
@@ -89,8 +89,25 @@ fn exec_start(unit: &str) -> Option<String> {
         .map(|value| {
             value
                 .trim_start_matches(['-', '+', '!', '@', ':'])
-                .replace("%%", "%")
+                .to_owned()
         })
+}
+
+/// `argv` as an `ExecStart` value that systemd splits back into exactly `argv`: every word in
+/// double quotes, with `\` and `"` escaped (systemd C-unescapes), `$` as `$$` (no variable
+/// expansion) and `%` as `%%` (no specifiers). The engine runs with the argv it was checked with.
+pub fn exec_line(argv: &[String]) -> String {
+    argv.iter()
+        .map(|arg| {
+            let escaped = arg
+                .replace('\\', r"\\")
+                .replace('"', "\\\"")
+                .replace('$', "$$")
+                .replace('%', "%%");
+            format!("\"{escaped}\"")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Name (without `.service`) and description of every running service: what the checks search.
@@ -162,8 +179,8 @@ pub struct EngineUnit {
     pub nft: PathBuf,
 }
 
-/// The unit file. `exec` is the whole command line, quoted as systemd reads it; `%` is doubled
-/// (systemd's specifiers) and a line break is refused: it would add lines to the unit.
+/// The unit file. `exec` is the command line as `exec_line` quotes it; a line break is refused:
+/// it would add lines to the unit.
 pub fn unit(exec: &str, engine: Option<&EngineUnit>) -> anyhow::Result<String> {
     anyhow::ensure!(
         !exec.contains(['\n', '\r']),
@@ -182,7 +199,7 @@ pub fn unit(exec: &str, engine: Option<&EngineUnit>) -> anyhow::Result<String> {
             engine.nft.display()
         ));
     }
-    service.push_str(&format!("ExecStart={}\n", exec.replace('%', "%%")));
+    service.push_str(&format!("ExecStart={exec}\n"));
     if let Some(engine) = engine {
         service.push_str(&format!(
             "ExecStopPost=+-{} delete table {NFT_TABLE}\n",
@@ -198,46 +215,88 @@ pub fn unit(exec: &str, engine: Option<&EngineUnit>) -> anyhow::Result<String> {
     ))
 }
 
-/// The first `nft` of the system folders: systemd's lines need an absolute path, and a user's
-/// `PATH` often lacks `sbin`.
+/// `nft` by its absolute path: systemd's lines need one.
 fn nft_path() -> anyhow::Result<PathBuf> {
-    ["/usr/sbin/nft", "/sbin/nft", "/usr/bin/nft", "/bin/nft"]
-        .iter()
-        .map(PathBuf::from)
-        .find(|path| path.is_file())
-        .context(
-            "nft was not found: install nftables, zapret2 on Linux takes its packets through it",
-        )
+    let nft = crate::root::tool("nft");
+    anyhow::ensure!(
+        nft.starts_with('/'),
+        "nft was not found: install nftables, zapret2 on Linux takes its packets through it"
+    );
+    Ok(PathBuf::from(nft))
 }
 
-/// The unit file of `name`, systemd reloaded, enabled at boot when `auto_start`. The `zapret2`
-/// unit runs the engine as this process's user (root when that is root).
-pub fn create(name: &str, bin_path: &str, auto_start: bool) -> anyhow::Result<()> {
+/// The user the engine runs as: this process's, or for a hub started through `sudo`/`pkexec` the
+/// user who started it (root's engine drops to a uid that cannot read a home folder).
+fn engine_user() -> Option<u32> {
+    // SAFETY: `getuid` is a plain syscall without invariants.
+    let uid = unsafe { libc::getuid() };
+    let invoker = ["SUDO_UID", "PKEXEC_UID"]
+        .iter()
+        .find_map(|var| std::env::var(var).ok()?.parse::<u32>().ok());
+    let uid = if uid == 0 { invoker.unwrap_or(0) } else { uid };
+    (uid != 0).then_some(uid)
+}
+
+/// The unit of `name` as it should be: the `zapret2` one runs the engine (`EngineUnit`).
+fn unit_for(name: &str, exec: &str) -> anyhow::Result<String> {
     let engine = if name == SERVICE2 {
-        // SAFETY: `getuid` is a plain syscall without invariants.
-        let uid = unsafe { libc::getuid() };
         Some(EngineUnit {
-            user: (uid != 0).then_some(uid),
+            user: engine_user(),
             nft: nft_path()?,
         })
     } else {
         None
     };
-    crate::root::write(&unit_path(name), &unit(bin_path, engine.as_ref())?)?;
-    crate::root::check("systemctl", &["daemon-reload"])?;
-    let toggle = if auto_start { "enable" } else { "disable" };
-    crate::root::check("systemctl", &[toggle, &unit_name(name)])
+    unit(exec, engine.as_ref())
 }
 
-/// `systemctl stop`, `disable`, the unit file gone, errors ignored.
-pub fn request_delete(name: &str) {
+/// Steps that put `name` in place with command line `exec` (`exec_line`): stopped, its unit
+/// written, systemd reloaded, enabled at boot when `auto_start`, and running again when `running`.
+/// Writing over a unit and restarting it replaces it: no delete first.
+pub fn add_replace(
+    batch: &mut crate::root::Batch,
+    name: &str,
+    exec: &str,
+    auto_start: bool,
+    running: bool,
+) -> anyhow::Result<()> {
     let unit = unit_name(name);
-    let _ = crate::root::run("systemctl", &["stop", &unit]);
-    let _ = crate::root::run("systemctl", &["disable", &unit]);
-    let path = unit_path(name);
-    if path.exists() {
-        crate::root::remove(&path);
-        let _ = crate::root::run("systemctl", &["daemon-reload"]);
+    batch.try_run(&["systemctl", "stop", &unit]);
+    batch.write(&unit_path(name), &unit_for(name, exec)?)?;
+    batch.run(&["systemctl", "daemon-reload"]);
+    batch.run(&[
+        "systemctl",
+        if auto_start { "enable" } else { "disable" },
+        &unit,
+    ]);
+    if running {
+        batch.run(&["systemctl", "restart", &unit]);
+    }
+    Ok(())
+}
+
+/// Steps that remove `name`: stopped, disabled, its unit file gone, systemd reloaded.
+pub fn add_remove(batch: &mut crate::root::Batch, name: &str) {
+    let unit = unit_name(name);
+    batch.try_run(&["systemctl", "stop", &unit]);
+    batch.try_run(&["systemctl", "disable", &unit]);
+    batch.run(&["rm", "-f", "--", &unit_path(name).display().to_string()]);
+    batch.try_run(&["systemctl", "daemon-reload"]);
+}
+
+/// The unit file of `name`, systemd reloaded, enabled at boot when `auto_start`: one root batch.
+pub fn create(name: &str, exec: &str, auto_start: bool) -> anyhow::Result<()> {
+    let mut batch = crate::root::Batch::new();
+    add_replace(&mut batch, name, exec, auto_start, false)?;
+    batch.exec()
+}
+
+/// `systemctl stop`, `disable`, the unit file gone: one root batch, errors ignored.
+pub fn request_delete(name: &str) {
+    let mut batch = crate::root::Batch::new();
+    add_remove(&mut batch, name);
+    if let Err(err) = batch.exec() {
+        log::warn!(target: "exec", "{name} was not removed: {err:#}");
     }
 }
 
@@ -318,7 +377,7 @@ mod tests {
             user: Some(1000),
             nft: PathBuf::from("/usr/sbin/nft"),
         };
-        let exec = r#""/opt/z2/binaries/linux-x86_64/nfqws2" --chdir="/opt/z2" --qnum=200"#;
+        let exec = r#""/opt/z2/binaries/linux-x86_64/nfqws2" "--chdir=/opt/z2" "--qnum=200""#;
         let text = unit(exec, Some(&engine)).unwrap();
         assert_eq!(
             text,
@@ -350,12 +409,73 @@ mod tests {
         }
     }
 
+    /// systemd's reading of a line `exec_line` wrote: double-quoted words, `\` escapes, then
+    /// `$` and `%%` (the subset of systemd's grammar that line uses).
+    fn systemd_split(line: &str) -> Vec<String> {
+        let mut words = Vec::new();
+        let mut chars = line.chars();
+        while let Some(c) = chars.next() {
+            if c != '"' {
+                assert_eq!(c, ' ', "only quoted words: {line}");
+                continue;
+            }
+            let mut word = String::new();
+            loop {
+                match chars.next().expect("closed quote") {
+                    '"' => break,
+                    '\\' => word.push(chars.next().expect("escaped char")),
+                    other => word.push(other),
+                }
+            }
+            words.push(word.replace("$$", "$").replace("%%", "%"));
+        }
+        words
+    }
+
     #[test]
-    fn a_percent_is_escaped_and_a_line_break_refused() {
-        let text = unit("/bin/echo 100%", None).unwrap();
-        assert!(text.contains("ExecStart=/bin/echo 100%%\n"), "{text}");
-        assert_eq!(exec_start(&text).as_deref(), Some("/bin/echo 100%"));
+    fn the_engine_runs_with_exactly_the_argv_it_was_checked_with() {
+        let argv: Vec<String> = [
+            "/home/me/my zapret/nfqws2",
+            "--chdir=/home/me/my zapret",
+            r"--lua-init=x='\x16' .. $HOME",
+            "'a b'",
+            r#"say "hi"\"#,
+            "100%",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let line = exec_line(&argv);
+        assert_eq!(systemd_split(&line), argv);
+        let text = unit(&line, None).unwrap();
+        assert_eq!(
+            exec_start(&text).as_deref(),
+            Some(line.as_str()),
+            "round trip"
+        );
         assert!(unit("/bin/true\nExecStartPre=+/bin/sh", None).is_err());
+    }
+
+    #[test]
+    fn a_replace_is_one_batch_and_a_remove_too() {
+        let mut batch = crate::root::Batch::new();
+        add_replace(&mut batch, "other", "\"/bin/true\"", true, true).unwrap();
+        let script = batch.script();
+        for step in [
+            "'systemctl' 'stop' 'other.service' || true",
+            "'/etc/systemd/system/other.service'",
+            "'systemctl' 'daemon-reload'",
+            "'systemctl' 'enable' 'other.service'",
+            "'systemctl' 'restart' 'other.service'",
+        ] {
+            assert!(script.contains(step), "{step}: {script}");
+        }
+        let mut batch = crate::root::Batch::new();
+        add_remove(&mut batch, "other");
+        assert!(
+            batch
+                .script()
+                .contains("'rm' '-f' '--' '/etc/systemd/system/other.service'")
+        );
     }
 
     #[test]

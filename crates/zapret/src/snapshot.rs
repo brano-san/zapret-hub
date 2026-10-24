@@ -40,6 +40,10 @@ pub struct Snapshot {
     /// Filled by the app; a `pending.json` from before it has none.
     #[serde(default)]
     pub router: Option<RouterSnap>,
+    /// Linux: the nftables table file the `zapret2` unit applies (`service::NFT_CONFIG`), as it
+    /// was: its ports belong to the recorded `ExecStart`. `None` without one, and on Windows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nft: Option<String>,
 }
 
 /// `data/state/pending.json`
@@ -90,6 +94,10 @@ impl Snapshot {
             manual_winws2,
             zapret2: true,
             router: None,
+            #[cfg(windows)]
+            nft: None,
+            #[cfg(target_os = "linux")]
+            nft: std::fs::read_to_string(service::NFT_CONFIG).ok(),
         })
     }
 
@@ -141,12 +149,22 @@ impl Snapshot {
             }
         };
         if self.zapret2 {
-            note(&format!("stop {SERVICE2}"), service::stop(SERVICE2));
-            note(&format!("stop {WINWS2}"), procs::kill_all(WINWS2));
-            note(
-                "service zapret2",
-                restore_service(SERVICE2, self.service2.as_ref(), self.strategy2.as_deref()),
-            );
+            #[cfg(windows)]
+            {
+                note(&format!("stop {SERVICE2}"), service::stop(SERVICE2));
+                note(&format!("stop {WINWS2}"), procs::kill_all(WINWS2));
+                note(
+                    "service zapret2",
+                    restore_service(SERVICE2, self.service2.as_ref(), self.strategy2.as_deref()),
+                );
+            }
+            #[cfg(target_os = "linux")]
+            {
+                note("service zapret2", self.restore_linux());
+                if let Some(strategy) = &self.strategy2 {
+                    note("strategy", service::set_strategy_of(SERVICE2, strategy));
+                }
+            }
             for proc in &self.manual_winws2 {
                 note("start winws2", procs::spawn_detached(proc));
             }
@@ -157,6 +175,41 @@ impl Snapshot {
             errors.len()
         );
         anyhow::ensure!(errors.is_empty(), "{}", errors.join("\n\n"));
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Snapshot {
+    /// The `zapret2` unit, its table file and its state in one root batch (one sudo/pkexec): the
+    /// service stopped, every nfqws2 ended, then the unit and table written back (or removed).
+    fn restore_linux(&self) -> anyhow::Result<()> {
+        let mut batch = crate::root::Batch::new();
+        self.add_restore(&mut batch)?;
+        batch.exec()
+    }
+
+    pub(crate) fn add_restore(&self, batch: &mut crate::root::Batch) -> anyhow::Result<()> {
+        batch.try_run(&["systemctl", "stop", "zapret2.service"]);
+        batch.try_run(&["pkill", "-KILL", "-x", WINWS2]);
+        match &self.nft {
+            Some(table) => {
+                batch.write(Path::new(service::NFT_CONFIG), table)?;
+            }
+            None => {
+                batch.run(&["rm", "-f", "--", service::NFT_CONFIG]);
+            }
+        }
+        match &self.service2 {
+            Some(snap) => service::add_replace(
+                batch,
+                SERVICE2,
+                &snap.image_path,
+                snap.auto_start,
+                snap.running,
+            )?,
+            None => service::add_remove(batch, SERVICE2),
+        }
         Ok(())
     }
 }
@@ -200,6 +253,7 @@ fn engine(
     Ok((snap, service::strategy_of(name), manual))
 }
 
+#[cfg(windows)]
 /// One engine's service as the snapshot holds it: gone when there was none, else its
 /// configuration, strategy name and state. The name and the state do not depend on each other:
 /// both are done, and the first error comes back.
@@ -225,4 +279,58 @@ fn restore_service(
         service::stop(name)
     };
     named.and(state)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_linux_restore_is_one_batch_with_the_unit_and_its_table() {
+        let snap = Snapshot {
+            operation: "apply".into(),
+            service2: Some(ServiceSnap {
+                image_path: r#""/z/nfqws2" "--qnum=200""#.into(),
+                auto_start: true,
+                running: true,
+            }),
+            strategy2: Some("zapret2:general".into()),
+            manual_winws2: Vec::new(),
+            zapret2: true,
+            router: None,
+            nft: Some(
+                "table inet zapret_hub {}
+"
+                .into(),
+            ),
+        };
+        let mut batch = crate::root::Batch::new();
+        snap.add_restore(&mut batch).unwrap();
+        let script = batch.script();
+        let table = script.find(&format!("'{}'", service::NFT_CONFIG)).unwrap();
+        let unit = script
+            .find("'/etc/systemd/system/zapret2.service'")
+            .unwrap();
+        let restart = script
+            .find("'systemctl' 'restart' 'zapret2.service'")
+            .unwrap();
+        assert!(table < unit && unit < restart, "{script}");
+
+        let gone = Snapshot {
+            service2: None,
+            nft: None,
+            ..snap
+        };
+        let mut batch = crate::root::Batch::new();
+        gone.add_restore(&mut batch).unwrap();
+        let script = batch.script();
+        assert!(
+            script.contains("'rm' '-f' '--' '/etc/zapret-hub/nfqws2.nft'"),
+            "{script}"
+        );
+        assert!(
+            script.contains("'rm' '-f' '--' '/etc/systemd/system/zapret2.service'"),
+            "{script}"
+        );
+    }
 }

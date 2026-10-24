@@ -15,8 +15,5 @@ log.workspace = true
 serde.workspace = true
 specta.workspace = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
-tempfile.workspace = true
-
 [dev-dependencies]
 tempfile.workspace = true

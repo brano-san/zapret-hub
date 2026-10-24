@@ -41,8 +41,10 @@ impl Via {
                 cmd
             }
             Self::Pkexec => {
+                // Never its text agent: it would read the terminal from a background process
+                // group and stop there. Without a desktop agent pkexec says so and exits 127.
                 let mut cmd = Command::new("pkexec");
-                cmd.arg(prog);
+                cmd.args(["--disable-internal-agent", prog]);
                 cmd
             }
         };
@@ -128,34 +130,100 @@ pub fn check(prog: &str, args: &[&str]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Writes `contents` into a root-owned file, mode 0644, its folder created: a plain write as
-/// root, else one privileged `install` from a private temp file (created with `O_EXCL`, mode 0600:
-/// nobody else can swap its text before root copies it).
-pub fn write(path: &Path, contents: &str) -> anyhow::Result<()> {
-    if is_root() {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("cannot create {}", parent.display()))?;
-        }
-        return std::fs::write(path, contents)
-            .with_context(|| format!("cannot write {}", path.display()));
-    }
-    let mut temp = tempfile::NamedTempFile::new().context("cannot create a temp file")?;
-    std::io::Write::write_all(&mut temp, contents.as_bytes())
-        .context("cannot write a temp file")?;
-    let from = temp.path().display().to_string();
-    let to = path.display().to_string();
-    run("install", &["-D", "-m", "0644", &from, &to])?
-        .check()
-        .with_context(|| format!("cannot write {to}"))?;
-    Ok(())
+/// A system tool by its absolute path when it is in a system folder: a user's `PATH` often lacks
+/// `sbin` (`nft`, `getcap`, `setcap`). Else the bare name, for `PATH` to find.
+pub fn tool(name: &str) -> String {
+    ["/usr/sbin", "/sbin", "/usr/bin", "/bin"]
+        .iter()
+        .map(|dir| Path::new(dir).join(name))
+        .find(|path| path.is_file())
+        .map_or_else(|| name.to_owned(), |path| path.display().to_string())
 }
 
-/// Removes `path` as root, best effort: a missing file is fine.
-pub fn remove(path: &Path) {
-    if path.exists() {
-        let _ = run("rm", &["-f", "--", &path.display().to_string()]);
+/// Several root steps as one shell script, so they cost one `sudo -n`/pkexec (one dialog). Files
+/// to write are staged in private temp files (created with `O_EXCL`, mode 0600: nobody else can
+/// swap their text before root copies them) that live as long as the batch.
+#[derive(Default)]
+pub struct Batch {
+    lines: Vec<String>,
+    staged: Vec<tempfile::NamedTempFile>,
+}
+
+/// `arg` as one shell word: single-quoted, a `'` inside as `'\''`.
+fn quote(arg: &str) -> String {
+    format!("'{}'", arg.replace('\'', r"'\''"))
+}
+
+impl Batch {
+    pub fn new() -> Self {
+        Self::default()
     }
+
+    /// A step whose failure stops the batch.
+    pub fn run(&mut self, argv: &[&str]) -> &mut Self {
+        self.lines.push(
+            argv.iter()
+                .map(|arg| quote(arg))
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+        self
+    }
+
+    /// A step whose failure does not matter (stopping what may not run).
+    pub fn try_run(&mut self, argv: &[&str]) -> &mut Self {
+        self.run(argv);
+        if let Some(line) = self.lines.last_mut() {
+            line.push_str(" || true");
+        }
+        self
+    }
+
+    /// `contents` in a private temp file that lives as long as the batch; its path.
+    pub fn stage(&mut self, contents: &str) -> anyhow::Result<String> {
+        let mut temp = tempfile::NamedTempFile::new().context("cannot create a temp file")?;
+        std::io::Write::write_all(&mut temp, contents.as_bytes())
+            .context("cannot write a temp file")?;
+        let path = temp.path().display().to_string();
+        self.staged.push(temp);
+        Ok(path)
+    }
+
+    /// Writes `contents` into `dest`: `cp` over a file that exists (its inode, owner, mode and
+    /// SELinux label stay: `/etc/hosts`), a new one with `install -D -m 0644` (folder created).
+    pub fn write(&mut self, dest: &Path, contents: &str) -> anyhow::Result<&mut Self> {
+        let from = self.stage(contents)?;
+        let to = dest.display().to_string();
+        if dest.exists() {
+            self.run(&["cp", "--", &from, &to]);
+        } else {
+            self.run(&["install", "-D", "-m", "0644", "--", &from, &to]);
+        }
+        Ok(self)
+    }
+
+    /// The script: stop at the first failing step (`set -e`).
+    pub fn script(&self) -> String {
+        format!("set -e\n{}\n", self.lines.join("\n"))
+    }
+
+    /// Runs every step as root at once; nothing to run is done. The error carries the script's
+    /// whole output.
+    pub fn exec(&self) -> anyhow::Result<()> {
+        if self.lines.is_empty() {
+            return Ok(());
+        }
+        run("sh", &["-c", &self.script()])?.check()?;
+        Ok(())
+    }
+}
+
+/// Writes `contents` into a root-owned file (see `Batch::write`).
+pub fn write(path: &Path, contents: &str) -> anyhow::Result<()> {
+    Batch::new()
+        .write(path, contents)?
+        .exec()
+        .with_context(|| format!("cannot write {}", path.display()))
 }
 
 #[cfg(test)]
@@ -186,7 +254,10 @@ mod tests {
         );
         let pkexec = Via::Pkexec.command("nft", &["-f", "x"]);
         assert_eq!(pkexec.get_program(), "pkexec");
-        assert_eq!(pkexec.get_args().collect::<Vec<_>>(), ["nft", "-f", "x"]);
+        assert_eq!(
+            pkexec.get_args().collect::<Vec<_>>(),
+            ["--disable-internal-agent", "nft", "-f", "x"]
+        );
     }
 
     #[test]
@@ -213,6 +284,36 @@ mod tests {
         )));
         assert!(!pkexec_refused(&out(1, "Error: syntax error\n")));
         assert!(!pkexec_refused(&out(127, "sh: 1: nft: not found\n")));
+    }
+
+    #[test]
+    fn a_batch_is_one_script_with_every_argument_quoted() {
+        let mut batch = Batch::new();
+        batch.try_run(&["systemctl", "stop", "zapret2.service"]);
+        batch.run(&["install", "-D", "/tmp/a", "/etc/my dir/it's.conf"]);
+        assert_eq!(
+            batch.script(),
+            "set -e\n'systemctl' 'stop' 'zapret2.service' || true\n\
+             'install' '-D' '/tmp/a' '/etc/my dir/it'\\''s.conf'\n"
+        );
+        let path = batch.stage("text").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "text");
+        assert!(Batch::new().exec().is_ok(), "an empty batch runs nothing");
+    }
+
+    #[test]
+    fn the_quoted_script_runs_as_written() {
+        // `sh` reads the quoting back: the odd argument arrives whole.
+        let odd = r"a b'c$HOME\x16 %d";
+        let mut batch = Batch::new();
+        batch.run(&["printf", "%s", odd]);
+        let out = exec::run(
+            Command::new("sh").args(["-c", &batch.script()]),
+            Duration::from_secs(10),
+            None,
+        )
+        .unwrap();
+        assert_eq!(out.stdout, odd);
     }
 
     #[test]

@@ -1004,6 +1004,7 @@ mod tests {
             manual_winws2: Vec::new(),
             zapret2: true,
             router: None,
+            nft: None,
         };
         assert_eq!(
             router_after_restore(&snapshot),

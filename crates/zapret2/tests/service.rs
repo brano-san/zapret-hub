@@ -32,10 +32,44 @@ fn nfqws2_gets_the_strategy_first_and_its_own_flags_last() {
     let dir = tempfile::tempdir().unwrap();
     common::fake_engine(dir.path(), "bin", common::LIB);
     let engine = Engine::open(dir.path()).unwrap();
+    // Every word as `run` splits it, quoted for systemd.
     assert_eq!(
         bin_path(&engine, tail),
-        format!("\"{}/bin/nfqws2\" {tail}", dir.path().display())
+        format!(
+            r#""{}/bin/nfqws2" "--chdir=/opt/zapret2" "--lua-desync=fake:blob=fake_default_tls" "--qnum=200""#,
+            dir.path().display()
+        )
     );
+}
+
+/// What an install writes, from the strategy's line: the unit's `ExecStart` and the table.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_install_writes_the_checked_argv_and_the_strategys_ports() {
+    let dir = tempfile::tempdir().unwrap();
+    common::fake_engine(dir.path(), "", common::LIB);
+    let engine = Engine::open(dir.path())
+        .unwrap()
+        .with_excluded_ports(&["51413".to_owned()])
+        .unwrap();
+    let tail = r#"--chdir="/my z2" --wf-tcp-out=80,443 --wf-udp-out=443,50000-65535,1024-65535 --qnum=7 --lua-init="a='$x'""#;
+    let (exec, table) = zapret2::service::service_plan(&engine, tail).unwrap();
+    assert_eq!(
+        exec,
+        format!(
+            r#""{}/nfqws2" "--chdir=/my z2" "--lua-init=a='$$x'" "--qnum=200""#,
+            dir.path().display()
+        )
+    );
+    let unit = zapret::service::unit(&exec, None).unwrap();
+    assert!(unit.contains(&format!("ExecStart={exec}\n")), "{unit}");
+    for part in [
+        "tcp dport { 80,443 } ct original packets 1-12 queue num 200 bypass",
+        "udp dport { 443,1024-65535 } ct original packets 1-8 queue num 200 bypass",
+        "th dport { 51413 } return",
+    ] {
+        assert!(table.contains(part), "{part}: {table}");
+    }
 }
 
 #[test]

@@ -20,6 +20,7 @@ fn sample() -> Snapshot {
         }],
         zapret2: true,
         router: None,
+        nft: None,
     }
 }
 
@@ -121,6 +122,7 @@ fn router_section_roundtrips() {
             enabled: true,
             paused: false,
         }),
+        nft: None,
         ..sample()
     };
     let back: Snapshot = serde_json::from_str(&serde_json::to_string(&snap).unwrap()).unwrap();
@@ -136,6 +138,7 @@ fn recover_restores_router_section() {
             enabled: true,
             paused: true,
         }),
+        nft: None,
         ..sample()
     };
     snap.save(&path).unwrap();
