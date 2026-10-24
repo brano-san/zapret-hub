@@ -276,6 +276,9 @@ enum DiagCommand {
         /// Minutes the paths may take (1-60); none: the setting.
         #[arg(long)]
         budget: Option<u32>,
+        /// reach: any working path; latency: the fastest (games). None: the profile's.
+        #[arg(long, value_enum)]
+        goal: Option<DiagGoal>,
         /// Wait for the end and print the report; the progress goes to stderr.
         #[arg(long)]
         wait: bool,
@@ -327,6 +330,21 @@ impl From<DiagMode> for Mode {
         match mode {
             DiagMode::Auto => Mode::Auto,
             DiagMode::Ask => Mode::Ask,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum DiagGoal {
+    Reach,
+    Latency,
+}
+
+impl From<DiagGoal> for diag::profiles::Goal {
+    fn from(goal: DiagGoal) -> Self {
+        match goal {
+            DiagGoal::Reach => Self::Reach,
+            DiagGoal::Latency => Self::Latency,
         }
     }
 }
@@ -808,6 +826,7 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
             mode,
             observe,
             budget,
+            goal,
             wait,
             timeout,
             full,
@@ -818,6 +837,7 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
                 mode: mode.into(),
                 observe_secs: observe,
                 budget_min: budget,
+                goal: goal.map(Into::into),
             };
             request
                 .check()
@@ -2163,6 +2183,7 @@ mod tests {
                 mode: Mode::Auto,
                 observe_secs: None,
                 budget_min: None,
+                goal: None,
             },
             progress: Some(step),
             question: question.map(str::to_owned),
@@ -2223,6 +2244,7 @@ mod tests {
                     mode: Mode::Ask,
                     observe_secs: Some(10),
                     budget_min: Some(5),
+                    goal: None,
                 }
             }]
         );
@@ -2348,6 +2370,7 @@ mod tests {
             median_ms,
             loss_pct: None,
             answer: None,
+            probes: Vec::new(),
         };
         let with = |step, results: Vec<(PathKind, diag::evaluate::Score)>| {
             let mut live = diag_live(step, None, false);

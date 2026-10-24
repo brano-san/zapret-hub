@@ -449,3 +449,142 @@ pub fn dns_doh(name: &str, socks5: Option<&str>) -> Option<Vec<Ipv4Addr>> {
     let out = exec::run(&mut cmd, Duration::from_secs(10), None).ok()?;
     out.success().then(|| parse_doh_json(&out.stdout))
 }
+
+/// Pins `host:port` to `ip` and sets the route, as `https_args` does.
+fn pin_and_route(args: &mut Vec<String>, host: &str, port: u16, ip: Option<IpAddr>, via: &Via) {
+    if let Some(ip) = ip {
+        args.extend(["--resolve".into(), format!("{host}:{port}:{ip}")]);
+    }
+    match via {
+        Via::Direct => args.extend(["--noproxy".into(), "*".into()]),
+        Via::Socks5(addr) => args.extend(["--socks5-hostname".into(), addr.clone()]),
+    }
+}
+
+/// A WebSocket upgrade over HTTP/1.1: TLS, then `101 Switching Protocols`. curl does not end
+/// the upgraded connection by itself, so `-m 3` does, and `-w` still prints the code.
+pub fn ws_args(host: &str, port: u16, ip: Option<IpAddr>, via: &Via) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "--http1.1",
+        "-s",
+        "-m",
+        "3",
+        "--connect-timeout",
+        "2",
+        "-o",
+        "NUL",
+        "-w",
+        "%{http_code} %{time_starttransfer}",
+        "-H",
+        "Connection: Upgrade",
+        "-H",
+        "Upgrade: websocket",
+        "-H",
+        "Sec-WebSocket-Version: 13",
+        "-H",
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+    ]
+    .map(String::from)
+    .into();
+    pin_and_route(&mut args, host, port, ip, via);
+    args.push(format!("https://{host}:{port}/?v=8"));
+    args
+}
+
+/// The time to `101` in ms, or `None` when the upgrade did not happen.
+pub fn ws_upgrade(host: &str, port: u16, ip: Option<IpAddr>, via: &Via) -> Option<u32> {
+    let mut cmd = Command::new("curl.exe");
+    cmd.args(ws_args(host, port, ip, via));
+    let out = exec::run(&mut cmd, Duration::from_secs(10), None).ok()?;
+    ws_classify(&out.stdout)
+}
+
+/// `"101 0.366"` → `Some(366)`; any other code → `None`.
+pub fn ws_classify(stdout: &str) -> Option<u32> {
+    let (code, ms) = parse_code_and_time(stdout);
+    (code == "101").then(|| ms.unwrap_or(0))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BulkStatus {
+    /// The exchange finished.
+    Ok,
+    /// Data moved, then the flow froze: the 16-20 KB cut.
+    Throttled,
+    /// Nothing moved.
+    Fail,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Bulk {
+    pub status: BulkStatus,
+    pub up_bytes: u32,
+    pub down_bytes: u32,
+    pub time_ms: Option<u32>,
+    /// Up and down together, per second.
+    pub kbps: Option<u32>,
+}
+
+/// The `dpi_check` exchange (POST 64 KiB, 64 KiB asked back) at a pinned culprit, aborted by
+/// `--speed-limit` when it stalls for 3 s: an arbitrary host has no big file to download, but
+/// takes a body.
+pub fn bulk_args(host: &str, port: u16, ip: Option<IpAddr>, payload: &Path) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "--range",
+        "0-65535",
+        "-m",
+        "10",
+        "--connect-timeout",
+        "3",
+        "--speed-limit",
+        "1",
+        "--speed-time",
+        "3",
+        "-w",
+        "%{http_code} %{size_upload} %{size_download} %{time_total}",
+        "-o",
+        "NUL",
+        "-s",
+        "-X",
+        "POST",
+        "--data-binary",
+    ]
+    .map(String::from)
+    .into();
+    args.push(format!("@{}", payload.display()));
+    pin_and_route(&mut args, host, port, ip, &Via::Direct);
+    args.push(format!("https://{host}:{port}/"));
+    args
+}
+
+pub fn bulk(host: &str, port: u16, ip: Option<IpAddr>, payload: &Path) -> Bulk {
+    let mut cmd = Command::new("curl.exe");
+    cmd.args(bulk_args(host, port, ip, payload));
+    match exec::run(&mut cmd, Duration::from_secs(20), None) {
+        Ok(out) => bulk_classify(out.code, &out.stdout),
+        Err(_) => bulk_classify(None, ""),
+    }
+}
+
+/// Exit 0: done. Exit 28 (time or speed limit) after bytes moved: throttled. Else: failed.
+pub fn bulk_classify(exit: Option<i32>, stdout: &str) -> Bulk {
+    let (up, down, time) = parse_w4(stdout.trim())
+        .map(|(_, up, down, time)| (up, down, Some(time)))
+        .unwrap_or((0, 0, None));
+    let time_ms = time.map(|t| (t * 1000.0).round() as u32);
+    let moved = u64::from(up) + u64::from(down);
+    let status = match exit {
+        Some(0) => BulkStatus::Ok,
+        Some(28) if moved > 0 => BulkStatus::Throttled,
+        _ => BulkStatus::Fail,
+    };
+    Bulk {
+        status,
+        up_bytes: up,
+        down_bytes: down,
+        time_ms,
+        kbps: time_ms
+            .filter(|ms| *ms > 0)
+            .map(|ms| (moved * 1000 / u64::from(ms) / 1024) as u32),
+    }
+}

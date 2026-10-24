@@ -83,6 +83,7 @@ fn profile(kind: ProbeKind) -> Profile {
             kind,
             target: "observed".into(),
         }],
+        goal: Default::default(),
     }
 }
 

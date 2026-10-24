@@ -26,6 +26,7 @@ fn profile(kinds: &[ProbeKind]) -> Profile {
                 target: "observed".into(),
             })
             .collect(),
+        goal: Default::default(),
     }
 }
 

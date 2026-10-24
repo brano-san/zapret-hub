@@ -143,3 +143,77 @@ fn skip_name(r: &[u8], mut pos: usize) -> Option<usize> {
         }
     }
 }
+
+/// A sustained IP discovery run: how many of the packets came back, and how fast.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Burst {
+    pub sent: u32,
+    pub received: u32,
+    pub loss_pct: u32,
+    pub median_ms: Option<u32>,
+}
+
+/// `sent` packets and the round trips of those answered.
+pub fn burst_stats(sent: u32, mut rtts: Vec<u32>) -> Burst {
+    rtts.sort_unstable();
+    let received = (rtts.len() as u32).min(sent);
+    Burst {
+        sent,
+        received,
+        loss_pct: ((sent - received) * 100).checked_div(sent).unwrap_or(100),
+        // The lower middle, as the diagnostics' median.
+        median_ms: rtts.get(rtts.len().saturating_sub(1) / 2).copied(),
+    }
+}
+
+/// `count` IP discovery packets spread over `over`, from one socket, each with its own SSRC so a
+/// reply finds its packet. A flow cut after a few packets (DPI counting them) shows as loss,
+/// which three single packets miss. Replies are awaited up to 1 s after the last packet.
+pub fn ip_discovery_burst(dst: SocketAddr, count: u32, over: Duration) -> Burst {
+    const BASE: u32 = 0x5A00_0000;
+    let bind = if dst.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
+    let Ok(sock) = UdpSocket::bind(bind) else {
+        return burst_stats(0, vec![]);
+    };
+    let gap = over / count.max(1);
+    let start = Instant::now();
+    let mut sent_at: Vec<Instant> = Vec::new();
+    let mut rtts: Vec<Option<u32>> = Vec::new();
+    let mut buf = [0u8; 1500];
+    for i in 0..=count {
+        let deadline = if i < count {
+            let mut req = [0u8; 74];
+            req[..2].copy_from_slice(&1u16.to_be_bytes());
+            req[2..4].copy_from_slice(&70u16.to_be_bytes());
+            req[4..8].copy_from_slice(&(BASE + i).to_be_bytes());
+            if sock.send_to(&req, dst).is_ok() {
+                sent_at.push(Instant::now());
+                rtts.push(None);
+            }
+            start + gap * (i + 1)
+        } else {
+            Instant::now() + Duration::from_secs(1)
+        };
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            if left.is_zero() || sock.set_read_timeout(Some(left)).is_err() {
+                break;
+            }
+            let Ok((n, from)) = sock.recv_from(&mut buf) else {
+                break;
+            };
+            let r = &buf[..n];
+            if from.ip() != dst.ip() || r.len() < 8 || r[..2] != [0, 2] {
+                continue;
+            }
+            let ssrc = u32::from_be_bytes([r[4], r[5], r[6], r[7]]);
+            if let Some(slot) = ssrc
+                .checked_sub(BASE)
+                .and_then(|k| rtts.get_mut(k as usize))
+                .filter(|s| s.is_none())
+            {
+                *slot = Some(sent_at[(ssrc - BASE) as usize].elapsed().as_millis() as u32);
+            }
+        }
+    }
+    burst_stats(sent_at.len() as u32, rtts.into_iter().flatten().collect())
+}

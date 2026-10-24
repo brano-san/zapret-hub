@@ -11,3 +11,11 @@ target = "discord.com"
 [[probe]]
 kind = "discord-ip-discovery"
 target = "observed"
+
+[[probe]]
+kind = "discord-ws"
+target = "voice"
+
+[[probe]]
+kind = "https-bulk"
+target = "observed"

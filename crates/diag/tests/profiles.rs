@@ -9,7 +9,10 @@ fn builtin_has_five_profiles() {
         ["discord", "dbd", "youtube", "steam", "discord-stream"]
     );
     // No STUN: Discord media servers do not answer a plain binding request.
-    assert_eq!(p[0].probes.len(), 2);
+    assert_eq!(p[0].probes.len(), 4);
+    assert_eq!(p[0].probes[2].kind, ProbeKind::DiscordWs);
+    assert_eq!(p[1].goal, diag::profiles::Goal::Latency);
+    assert_eq!(p[0].goal, diag::profiles::Goal::Reach);
     assert!(p[0].probes.iter().all(|s| s.kind != ProbeKind::Stun));
     assert_eq!(p[0].probes[0].kind, ProbeKind::Https);
     assert_eq!(p[0].probes[0].target, "discord.com");

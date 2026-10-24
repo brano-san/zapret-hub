@@ -34,6 +34,7 @@ fn profile(kind: ProbeKind) -> Profile {
             kind,
             target: "observed".into(),
         }],
+        goal: Default::default(),
     }
 }
 
@@ -108,6 +109,7 @@ impl Env for Fake {
             median_ms: Some(50),
             loss_pct: None,
             answer: None,
+            probes: Vec::new(),
         }
     }
     fn ask(&mut self, _: &str, _: &PathKind) -> Answer {
@@ -258,6 +260,7 @@ fn score(ok: u32, total: u32, median: u32) -> Score {
         median_ms: Some(median),
         loss_pct: None,
         answer: None,
+        probes: Vec::new(),
     }
 }
 
@@ -317,7 +320,6 @@ fn budget_stops_and_lists_rest() {
 #[test]
 fn cancel_mid_path_rolls_back_and_keeps_partial() {
     let mut env = Fake {
-        works: HashSet::from(["Как сейчас".to_owned()]),
         cancel_at: Some(2),
         ..Fake::default()
     };
@@ -325,8 +327,30 @@ fn cancel_mid_path_rolls_back_and_keeps_partial() {
     assert!(out.canceled);
     assert_eq!(env.rolled_back, 1);
     let g = &out.per_group[0];
-    assert_eq!(g.results, [(PathKind::Current, score(3, 3, 50))]);
+    assert_eq!(g.results.len(), 1);
+    assert_eq!(g.results[0].0, PathKind::Current);
+    assert_eq!((g.results[0].1.ok, g.results[0].1.total), (0, 3));
     assert!(g.not_checked.iter().any(|s| s.contains("Напрямую")));
+}
+
+#[test]
+fn a_working_current_ends_the_group_with_a_fact() {
+    let mut env = Fake {
+        works: HashSet::from(["Как сейчас".to_owned()]),
+        ..Fake::default()
+    };
+    let out = go(&mut env, Mode::Auto, 600);
+    assert_eq!(env.sets, ["Как сейчас"]);
+    let g = &out.per_group[0];
+    assert_eq!(g.results.len(), 1);
+    assert!(g.not_checked.iter().any(|n| n == diag::run::CURRENT_WORKS));
+    let facts = diag::run::not_checked_facts(&out);
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].code, "current_works");
+    assert_eq!(facts[0].args, ["1.2.3.0/24"]);
+    // The breakdown: one line per probe.
+    assert_eq!(g.results[0].1.probes.len(), 1);
+    assert_eq!(g.results[0].1.probes[0].kind, ProbeKind::Https);
 }
 
 #[test]
@@ -434,6 +458,7 @@ fn request_check() {
         mode: Mode::Auto,
         observe_secs: Some(30),
         budget_min: Some(10),
+        goal: None,
     };
     assert!(r.check().is_ok());
     assert!(
@@ -629,6 +654,7 @@ fn loss_counts_every_lost_attempt_not_the_worst_probe() {
         median_ms: Some(26),
         loss_pct,
         answer: None,
+        probes: Vec::new(),
     };
     let mut env = Fake {
         by_kind: vec![
