@@ -33,6 +33,7 @@ use crate::state::{AppState, DiagEnds};
 use crate::{notify, routing, texts, window};
 
 mod apply;
+mod client;
 mod evidence;
 
 pub use apply::apply;
@@ -342,6 +343,7 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
         exec::LocalTime::now().stamp(),
         observe_secs,
     );
+    client::fill(&mut summary, &ctx, &marks, &verdict);
     summary.sources_missing = missing;
     summary.explanations.extend(summary::check_lines(&checks));
     summary.system_checks = checks;
