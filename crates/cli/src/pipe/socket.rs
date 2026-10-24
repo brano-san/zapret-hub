@@ -4,18 +4,18 @@ use std::ffi::OsStr;
 use std::fs::{File, Permissions};
 use std::io;
 use std::os::fd::AsRawFd as _;
-use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 /// `$XDG_RUNTIME_DIR/zapret-hub.sock` (a folder only its user may enter), else
-/// `/tmp/zapret-hub-<uid>.sock`.
+/// `/tmp/zapret-hub-<uid>/zapret-hub.sock`.
 pub fn socket_path(runtime_dir: Option<&OsStr>, uid: u32) -> PathBuf {
     match runtime_dir.map(Path::new) {
         Some(dir) if dir.is_absolute() => dir.join("zapret-hub.sock"),
-        _ => PathBuf::from(format!("/tmp/zapret-hub-{uid}.sock")),
+        _ => PathBuf::from(format!("/tmp/zapret-hub-{uid}/zapret-hub.sock")),
     }
 }
 
@@ -38,6 +38,7 @@ pub struct Server {
 impl Server {
     /// Fails with `PermissionDenied` when another server holds `name`.
     pub fn bind(name: &str) -> io::Result<Self> {
+        private_dir(Path::new(name), true)?;
         let lock = File::options()
             .write(true)
             .create(true)
@@ -93,6 +94,30 @@ impl Server {
     }
 }
 
+/// The folder of the socket `name`, made `0700` when `create` and missing. It must be a real
+/// folder of this user that nobody else may enter: in `/tmp` another user could otherwise make it
+/// first and take or fake the socket. A missing one is `NotFound`, a foreign one `PermissionDenied`.
+fn private_dir(name: &Path, create: bool) -> io::Result<()> {
+    let dir = name.parent().unwrap_or(Path::new("/"));
+    if create {
+        match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+            Err(err) if err.kind() != io::ErrorKind::AlreadyExists => return Err(err),
+            _ => {}
+        }
+    }
+    let meta = std::fs::symlink_metadata(dir)?;
+    // SAFETY: geteuid has no preconditions.
+    let uid = unsafe { libc::geteuid() };
+    if meta.is_dir() && meta.uid() == uid && meta.mode() & 0o077 == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} is not a folder only this user may enter", dir.display()),
+        ))
+    }
+}
+
 /// The client runs as this user or as root, like the pipe's SYSTEM, Administrators and user.
 fn trusted(client: &UnixStream) -> bool {
     let mut cred = libc::ucred {
@@ -118,6 +143,7 @@ fn trusted(client: &UnixStream) -> bool {
 /// The CLI's end: sends `line` and returns the answer line. A full backlog makes `connect` wait,
 /// so `busy` is not needed here. A socket file nobody listens on is `NotFound`, like none at all.
 pub fn request(name: &str, line: &[u8], _busy: Duration) -> io::Result<Vec<u8>> {
+    private_dir(Path::new(name), false)?;
     let socket = UnixStream::connect(name).map_err(|err| match err.kind() {
         io::ErrorKind::ConnectionRefused => io::Error::new(io::ErrorKind::NotFound, err),
         _ => err,

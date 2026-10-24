@@ -10,20 +10,44 @@ use cli::pipe::{self, Server};
 
 const BUSY: Duration = Duration::from_secs(10);
 
+/// A name, and on Linux the private folder that holds it until the test ends.
+struct Name {
+    path: String,
+    #[cfg(not(windows))]
+    _dir: tempfile::TempDir,
+}
+
+impl std::ops::Deref for Name {
+    type Target = String;
+
+    fn deref(&self) -> &String {
+        &self.path
+    }
+}
+
 /// Tests run in parallel: a name each.
-fn unique() -> String {
+fn unique() -> Name {
     static NEXT: AtomicU32 = AtomicU32::new(0);
-    let folder = if cfg!(windows) {
-        r"\\.\pipe".to_owned()
-    } else {
-        std::env::temp_dir().to_string_lossy().into_owned()
+    let n = NEXT.fetch_add(1, Ordering::SeqCst);
+    let file = format!("zapret-hub-cli-test-{}-{n}", std::process::id());
+    #[cfg(windows)]
+    return Name {
+        path: format!(r"\\.\pipe\{file}"),
     };
-    let separator = std::path::MAIN_SEPARATOR;
-    format!(
-        "{folder}{separator}zapret-hub-cli-test-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::SeqCst)
-    )
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        // The socket's folder must be private, like $XDG_RUNTIME_DIR.
+        let dir = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        Name {
+            path: dir.path().join(file).to_string_lossy().into_owned(),
+            _dir: dir,
+        }
+    }
 }
 
 /// A client that only writes: no line protocol, no waiting for an answer.
@@ -191,7 +215,7 @@ fn the_pipe_lets_in_system_administrators_and_this_user_only() {
     let client = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(&name)
+        .open(name.as_str())
         .unwrap();
     let what = DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
     // SAFETY: plain Win32 calls on an open handle; both buffers are freed.
@@ -259,7 +283,7 @@ fn the_app_can_identify_the_cli_but_not_act_as_it() {
     // SAFETY: a plain pipe with the default descriptor; the `File` owns and closes it.
     let pipe = unsafe {
         let raw = CreateNamedPipeW(
-            &HSTRING::from(&name),
+            &HSTRING::from(name.as_str()),
             PIPE_ACCESS_DUPLEX,
             PIPE_WAIT,
             1,
@@ -318,7 +342,7 @@ fn the_socket_lives_in_the_runtime_folder_else_in_tmp_per_user() {
 
     let path = pipe::socket_path(Some(OsStr::new("/run/user/1000")), 1000);
     assert_eq!(path, Path::new("/run/user/1000/zapret-hub.sock"));
-    let fallback = Path::new("/tmp/zapret-hub-1000.sock");
+    let fallback = Path::new("/tmp/zapret-hub-1000/zapret-hub.sock");
     assert_eq!(pipe::socket_path(None, 1000), fallback);
     // An empty or relative XDG_RUNTIME_DIR is invalid by the spec.
     assert_eq!(pipe::socket_path(Some(OsStr::new("")), 1000), fallback);
@@ -332,7 +356,10 @@ fn only_its_user_may_open_the_socket() {
 
     let name = unique();
     let _server = Server::bind(&name).unwrap();
-    let mode = std::fs::metadata(&name).unwrap().permissions().mode();
+    let mode = std::fs::metadata(name.as_str())
+        .unwrap()
+        .permissions()
+        .mode();
     assert_eq!(mode & 0o777, 0o600, "{mode:o}");
 }
 
@@ -341,10 +368,35 @@ fn only_its_user_may_open_the_socket() {
 fn a_socket_left_by_a_crashed_server_is_taken_over() {
     let name = unique();
     // A dead server: its socket file stays, its lock went with the process.
-    drop(std::os::unix::net::UnixListener::bind(&name).unwrap());
-    assert!(std::path::Path::new(&name).exists());
+    drop(std::os::unix::net::UnixListener::bind(name.as_str()).unwrap());
+    assert!(std::path::Path::new(name.as_str()).exists());
     let err = pipe::request(&name, b"{}", BUSY).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::NotFound, "{err}");
     serve(&name, |line| String::from_utf8_lossy(line).into_owned());
     assert_eq!(pipe::request(&name, b"back", BUSY).unwrap(), b"back");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_socket_folder_is_made_private_and_a_shared_one_is_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mine = dir.path().join("mine");
+    let name = mine.join("zapret-hub.sock");
+    let _server = Server::bind(name.to_str().unwrap()).unwrap();
+    let mode = std::fs::metadata(&mine).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o700, "{mode:o}");
+
+    let shared = dir.path().join("shared");
+    std::fs::create_dir(&shared).unwrap();
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let name = shared.join("zapret-hub.sock");
+    let name = name.to_str().unwrap();
+    let Err(err) = Server::bind(name) else {
+        panic!("a folder others may enter was taken");
+    };
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
+    let err = pipe::request(name, b"{}", BUSY).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
 }

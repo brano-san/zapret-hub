@@ -1296,9 +1296,8 @@ fn launch() -> Result<(), Fail> {
         Fail::new(
             UNAVAILABLE,
             format!(
-                "the autostart task «{}» did not run: start {APP} yourself or turn autostart on                  in its Settings
-
-{err:#}",
+                "the autostart task «{}» did not run: start {APP} yourself or turn \
+                 autostart on in its Settings\n\n{err:#}",
                 cli::AUTOSTART_TASK
             ),
         )
