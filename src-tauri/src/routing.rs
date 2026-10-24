@@ -43,7 +43,7 @@ pub fn grant() -> anyhow::Result<()> {
 /// sent to a dead acceptor.
 pub fn clear_stale() {
     if router::clear_stale() {
-        log::info!("cleared the routing a previous session left");
+        log::info!("checked for routing a previous session left");
     }
 }
 
@@ -94,6 +94,10 @@ pub fn set_enabled(app: &AppHandle, enabled: bool) -> anyhow::Result<RouterStatu
     let state = state(app);
     // Diagnostics drive the router themselves and put it back as they found it.
     state.not_diagnosing()?;
+    anyhow::ensure!(
+        !(enabled && EXITING.load(Ordering::SeqCst)),
+        "the app is quitting"
+    );
     let saved = {
         let _saving = state.saving();
         let switched = if enabled {
