@@ -219,7 +219,8 @@ pub fn plan(group: &Group, ctx: &Ctx) -> (Vec<PathKind>, Vec<String>) {
             ));
         }
     }
-    let (tricks, twins) = candidates(&ctx.zapret2, group);
+    let (tricks, mut twins) = candidates(&ctx.zapret2, group);
+    let tricks = one_per_action(tricks, &mut twins);
     // Spec 5: circular counts only resent data, so it never sees an unanswered SYN.
     if matches!(group.fault, Fault::SynUnanswered { .. }) {
         if !tricks.is_empty() {
@@ -241,4 +242,77 @@ pub fn plan(group: &Group, ctx: &Ctx) -> (Vec<PathKind>, Vec<String>) {
         skipped.push(routed_note(&rule));
     }
     (paths, skipped)
+}
+
+/// What a trick does: its profile without the lists (every candidate has the culprit's), each
+/// `name` value that is a blob replaced by the blob's file. Two strategies that call the same
+/// file by other names do the same thing.
+pub fn action_key(text: &str) -> String {
+    let (global, profiles) = zapret2::strategies::split(text);
+    let blobs: Vec<(String, String)> = zapret::custom::quoted_tokens(&global)
+        .iter()
+        .filter_map(|t| t.strip_prefix("--blob=")?.split_once(':'))
+        .map(|(name, file)| {
+            let file = file.trim_start_matches('@').replace('"', "");
+            (name.to_owned(), file.to_ascii_lowercase())
+        })
+        .collect();
+    let file_of = |value: &str| {
+        blobs
+            .iter()
+            .find(|(name, _)| name == value)
+            .map_or(value.to_owned(), |(_, file)| file.clone())
+    };
+    profiles
+        .iter()
+        .flat_map(|p| zapret::custom::quoted_tokens(p))
+        .filter(|t| !t.starts_with("--hostlist") && !t.starts_with("--ipset"))
+        .map(|t| {
+            t.split(':')
+                .map(|part| match part.rsplit_once('=') {
+                    Some((key, value)) => format!("{key}={}", file_of(value)),
+                    None => part.to_owned(),
+                })
+                .collect::<Vec<_>>()
+                .join(":")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The first trick of each action (`action_key`); the rest join `twins`. About 36 tricks of
+/// Flowseal's ports become a handful.
+fn one_per_action(tricks: Vec<Candidate>, twins: &mut Vec<String>) -> Vec<Candidate> {
+    let mut kept: Vec<(String, Candidate)> = Vec::new();
+    for candidate in tricks {
+        let key = action_key(&candidate.text);
+        if let Some((_, first)) = kept.iter().find(|(k, _)| *k == key) {
+            twins.push(format!(
+                "{}: то же действие, что {}, профиль {}",
+                PathKind::Trick {
+                    candidate: candidate.clone()
+                }
+                .label(),
+                first.source,
+                first.profile + 1
+            ));
+            continue;
+        }
+        kept.push((key, candidate));
+    }
+    kept.into_iter().map(|(_, c)| c).collect()
+}
+
+/// The strategy in use first, in the ranking and among the zapret2 strategies the tricks come
+/// from: the user's own setup is tried before others.
+pub fn current_first(ctx: &mut Ctx, current: Option<&str>) {
+    let Some(current) = current else { return };
+    if let Some(i) = ctx.ranking.iter().position(|n| n == current) {
+        let name = ctx.ranking.remove(i);
+        ctx.ranking.insert(0, name);
+    }
+    if let Some(i) = ctx.zapret2.iter().position(|(n, _)| n == current) {
+        let item = ctx.zapret2.remove(i);
+        ctx.zapret2.insert(0, item);
+    }
 }

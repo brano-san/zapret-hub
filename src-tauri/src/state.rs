@@ -620,6 +620,7 @@ mod tests {
                 mode: diag::run::Mode::Auto,
                 observe_secs: None,
                 budget_min: None,
+                goal: None,
             },
             progress: None,
             question: None,

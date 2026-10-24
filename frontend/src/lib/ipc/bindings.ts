@@ -366,6 +366,8 @@ export type DiagProfile = {
 	hint: string,
 	domains: string[],
 	probe?: ProbeSpec[],
+	/**  A request without a goal takes this one. */
+	goal?: Goal,
 };
 
 export type DiagProgress = DiagStep;
@@ -377,6 +379,8 @@ export type DiagRequest = {
 	mode: Mode,
 	observe_secs: number | null,
 	budget_min: number | null,
+	/**  None: the profile's goal (`reach`, `latency` for games). */
+	goal?: Goal | null,
 };
 
 export type DiagScore = {
@@ -386,6 +390,8 @@ export type DiagScore = {
 	loss_pct: number | null,
 	/**  The user's answer in the "with me" mode. */
 	answer: Answer | null,
+	/**  Per probe and target; empty in reports from before it. */
+	probes?: ProbeScore[],
 };
 
 export type DiagStep = { step: "Observing"; secs_left: number; flows: FlowCounters[] } | { step: "Culprits"; groups: Group[] } | { step: "Path"; group: number; 
@@ -551,6 +557,9 @@ export type GameFilter = {
 };
 
 export type GameFilterMode = "disabled" | "all" | "tcp" | "udp";
+
+/**  What a path is for: the culprit answering at all, or answering fast (games). */
+export type Goal = "reach" | "latency";
 
 export type Group = {
 	/**  Domain, SNI, or `a.b.c.0/24`. */
@@ -764,7 +773,24 @@ direct: boolean };
 
 export type Preset = "discord-voice" | "discord" | "dbd";
 
-export type ProbeKind = "https" | "discord-ip-discovery" | "stun" | "ping" | "live";
+export type ProbeKind = "https" | "discord-ip-discovery" | "stun" | "ping" | "live" | 
+/**  TLS and a WebSocket upgrade to the voice server of the Discord log, else the gateway. */
+"discord-ws" | 
+/**  A 64 KiB exchange with a named TCP culprit: throughput, and the 16-20 KB freeze. */
+"https-bulk";
+
+/**  One probe of a path, on one target (agent proposal 5, item 6). */
+export type ProbeScore = {
+	kind: ProbeKind,
+	target: string,
+	ok: number,
+	total: number,
+	median_ms: number | null,
+	/**  Why it failed: `throttled`, `no_upgrade`, ... */
+	error?: string | null,
+	/**  Throughput of a bulk exchange, KiB/s. */
+	kbps?: number | null,
+};
 
 export type ProbeSpec = {
 	kind: ProbeKind,

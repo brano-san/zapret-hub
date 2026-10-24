@@ -13,6 +13,19 @@ pub enum ProbeKind {
     Stun,
     Ping,
     Live,
+    /// TLS and a WebSocket upgrade to the voice server of the Discord log, else the gateway.
+    DiscordWs,
+    /// A 64 KiB exchange with a named TCP culprit: throughput, and the 16-20 KB freeze.
+    HttpsBulk,
+}
+
+/// What a path is for: the culprit answering at all, or answering fast (games).
+#[derive(Serialize, Deserialize, specta::Type, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Goal {
+    #[default]
+    Reach,
+    Latency,
 }
 
 #[derive(Serialize, Deserialize, specta::Type, Clone, Debug, PartialEq)]
@@ -32,6 +45,9 @@ pub struct Profile {
     pub domains: Vec<String>,
     #[serde(rename = "probe", default)]
     pub probes: Vec<ProbeSpec>,
+    /// A request without a goal takes this one.
+    #[serde(default)]
+    pub goal: Goal,
 }
 
 const BUILTIN: [&str; 3] = [
@@ -118,5 +134,31 @@ pub fn any_program(exe: &str) -> Profile {
         hint: "Воспроизведите проблему в программе".into(),
         domains: vec![],
         probes: vec![observed(ProbeKind::Https), observed(ProbeKind::Live)],
+        goal: Goal::Reach,
     }
+}
+
+/// The `discord-ws` probe's host when the log names none.
+pub const DISCORD_GATEWAY: &str = "gateway.discord.gg";
+
+/// The newest voice WebSocket of Discord's `renderer_js.log`:
+/// `[RTCControlSocket(default)] [CONNECT] wss://<host>:<port>/` → (host, port).
+pub fn voice_endpoint(lines: &[String]) -> Option<(String, u16)> {
+    lines.iter().rev().find_map(|l| {
+        let (_, rest) = l.split_once("[RTCControlSocket(default)] [CONNECT] wss://")?;
+        let authority = rest.split(['/', ' ', ',']).next()?;
+        match authority.rsplit_once(':') {
+            Some((host, port)) => Some((host.to_owned(), port.parse().ok()?)),
+            None => Some((authority.to_owned(), 443)),
+        }
+        .filter(|(host, _)| !host.is_empty())
+    })
+}
+
+/// A Discord WebSocket host: the log's voice server, any `*.discord.media`, the gateway.
+pub fn discord_ws_host(name: &str, endpoint: Option<&str>) -> bool {
+    let name = name.to_ascii_lowercase();
+    Some(name.as_str()) == endpoint.map(str::to_ascii_lowercase).as_deref()
+        || name.ends_with(".discord.media")
+        || (name.starts_with("gateway") && name.ends_with(".discord.gg"))
 }

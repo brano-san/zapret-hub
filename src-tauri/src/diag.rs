@@ -34,6 +34,7 @@ use crate::{notify, routing, texts, window};
 
 mod apply;
 mod evidence;
+mod probes;
 
 pub use apply::apply;
 use apply::hub_text;
@@ -286,7 +287,11 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
         ),
         mode: request.mode,
     };
-    let ctx = context(&state, folder.as_ref(), engine2.as_ref(), profile);
+    let mut ctx = context(&state, folder.as_ref(), engine2.as_ref(), profile);
+    if let Some(goal) = request.goal {
+        ctx.profile.goal = goal;
+    }
+    diag::paths::current_first(&mut ctx, zapret::service::strategy().as_deref());
     let started = Instant::now();
     let marks = Marks::now(&settings);
     // Read-only, before anything changes; no zapret folder, no checks.
@@ -370,6 +375,10 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
     if env.is_some() && summary.rollback_error.is_none() {
         Snapshot::clear(&pending)?;
     }
+    summary
+        .agent
+        .not_checked
+        .extend(diag::run::not_checked_facts(&outcome));
     report::save(&state.paths.diag(), &summary)?;
     Ok(summary)
 }
@@ -615,7 +624,7 @@ impl Env for AppEnv {
     }
 
     fn probe(&mut self, group: &Group, probe: &ProbeSpec) -> Score {
-        attempts(group, probe)
+        probes::sustained(group, probe).unwrap_or_else(|| attempts(group, probe))
     }
 
     fn ask(&mut self, hint: &str, path: &PathKind) -> Answer {
@@ -780,6 +789,7 @@ fn score(kind: ProbeKind, answers: &[Option<u32>]) -> Score {
         median_ms: diag::evaluate::median(times),
         loss_pct: (kind != ProbeKind::Https && total > 0).then(|| (total - ok) * 100 / total),
         answer: None,
+        probes: Vec::new(),
     }
 }
 

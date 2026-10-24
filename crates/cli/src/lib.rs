@@ -452,6 +452,7 @@ mod tests {
                     mode: Mode::Ask,
                     observe_secs: Some(30),
                     budget_min: None,
+                    goal: None,
                 },
             },
             Request::DiagStatus,
