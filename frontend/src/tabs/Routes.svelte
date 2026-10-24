@@ -178,7 +178,7 @@
     {/if}
     <p>{S.routes.proxied(trafficLabel(status.totals.proxied))} · {S.routes.direct(trafficLabel(status.totals.direct))}</p>
     {#if error}<pre class="bad">{error}</pre>{/if}
-    {#if dohBlind}<p class="warn">{S.routes.systemDoh}</p>{/if}
+    {#if dohBlind}<p class="warn">{app.linux ? S.routes.systemDohLinux : S.routes.systemDoh}</p>{/if}
 
     <hr />
 
