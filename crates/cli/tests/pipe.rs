@@ -351,6 +351,23 @@ fn the_socket_lives_in_the_runtime_folder_else_in_tmp_per_user() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn a_runtime_folder_others_may_enter_is_passed_over() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // SAFETY: geteuid has no preconditions.
+    let uid = unsafe { libc::geteuid() };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().as_os_str();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(pipe::private_runtime_dir(Some(path), uid), Some(path));
+    assert_eq!(pipe::private_runtime_dir(Some(path), uid + 1), None);
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(pipe::private_runtime_dir(Some(path), uid), None);
+    assert_eq!(pipe::private_runtime_dir(None, uid), None);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn only_its_user_may_open_the_socket() {
     use std::os::unix::fs::PermissionsExt as _;
 

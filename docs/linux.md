@@ -72,7 +72,8 @@ USER ALL=(ALL) NOPASSWD: /usr/sbin/nft, /usr/bin/systemctl, /usr/bin/journalctl,
   `ExecStopPost=+nft delete table inet zapret_hub` убирает. Аргументы стратегии — в `ExecStart`. Автозапуск
   (`enable`) включает «Применить».
 - **CLI.** `zapret-hub-cli` общается с приложением через Unix-сокет `$XDG_RUNTIME_DIR/zapret-hub.sock` (права
-  `0600`); без `XDG_RUNTIME_DIR` — `/tmp/zapret-hub-<uid>/`. Протокол и команды те же, что на Windows, см.
+  `0600`); без `XDG_RUNTIME_DIR` или если в эту папку могут войти другие (WSLg: `0755`) —
+  `/tmp/zapret-hub-<uid>/`. Протокол и команды те же, что на Windows, см.
   `docs/cli.md`. Для Linux есть `service`, `nft`, `dns-flush`, `exclusions`, `probe`, `tg-ws`, `routes grant`.
 - **Пути XDG.** Настройки: `$XDG_CONFIG_HOME/zapret-hub` (`~/.config/zapret-hub`); данные, журналы, свои
   стратегии и история тестов: `$XDG_DATA_HOME/zapret-hub` (`~/.local/share/zapret-hub`). Автозапуск хаба —

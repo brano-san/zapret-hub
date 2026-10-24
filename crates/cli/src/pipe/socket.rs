@@ -19,11 +19,22 @@ pub fn socket_path(runtime_dir: Option<&OsStr>, uid: u32) -> PathBuf {
     }
 }
 
+/// `dir` when it is a folder of `uid` nobody else may enter, as the XDG spec requires. WSLg's
+/// `/run/user/<uid>` is `0755`: the app could not serve there, so both ends fall back to `/tmp`.
+pub fn private_runtime_dir(dir: Option<&OsStr>, uid: u32) -> Option<&OsStr> {
+    dir.filter(|dir| std::fs::symlink_metadata(dir).is_ok_and(|meta| private(&meta, uid)))
+}
+
+fn private(meta: &std::fs::Metadata, uid: u32) -> bool {
+    meta.is_dir() && meta.uid() == uid && meta.mode() & 0o077 == 0
+}
+
 /// The socket the app serves and the CLI opens.
 pub fn name() -> String {
     // SAFETY: geteuid has no preconditions.
     let uid = unsafe { libc::geteuid() };
-    socket_path(std::env::var_os("XDG_RUNTIME_DIR").as_deref(), uid)
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
+    socket_path(private_runtime_dir(runtime_dir.as_deref(), uid), uid)
         .to_string_lossy()
         .into_owned()
 }
@@ -108,7 +119,7 @@ fn private_dir(name: &Path, create: bool) -> io::Result<()> {
     let meta = std::fs::symlink_metadata(dir)?;
     // SAFETY: geteuid has no preconditions.
     let uid = unsafe { libc::geteuid() };
-    if meta.is_dir() && meta.uid() == uid && meta.mode() & 0o077 == 0 {
+    if private(&meta, uid) {
         Ok(())
     } else {
         Err(io::Error::new(
