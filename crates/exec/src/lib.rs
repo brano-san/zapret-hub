@@ -29,6 +29,10 @@ mod tree {
     /// (`KILL_ON_JOB_CLOSE`), so even a crash of ours leaves no orphan behind.
     pub struct Tree(HANDLE);
 
+    // SAFETY: a job object handle is a kernel handle, usable from any thread; `Tree` owns it
+    // alone and closes it once.
+    unsafe impl Send for Tree {}
+
     impl Tree {
         /// A new job with `child` already in it.
         pub fn holding(child: &Child) -> std::io::Result<Self> {
