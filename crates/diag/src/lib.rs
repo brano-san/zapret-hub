@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod candidates;
 pub mod circular_store;
 pub mod cover;

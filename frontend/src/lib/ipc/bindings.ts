@@ -162,6 +162,25 @@ export const events = {
 };
 
 /* Types */
+/**  The agent's part of a report; `Summary.agent`. */
+export type AgentView = {
+	verdict: VerdictCode,
+	confidence: Confidence,
+	duration_s: number,
+	client: ClientState,
+	observed: Observed,
+	coverage: Coverage[],
+	context: Context,
+	/**  Short, checkable facts behind the verdict. */
+	evidence: Fact[],
+	/**  What was not checked and why. */
+	not_checked: Fact[],
+	/**  Differences from the previous report of the same profile. */
+	changes: Fact[],
+	/**  Exact CLI commands or `ask_user: …` lines, in order. */
+	next_steps: string[],
+};
+
 /**  A strategy's profiles and what is wrong with its circular ones. */
 export type Analysis = {
 	profiles: Profile[],
@@ -257,6 +276,55 @@ export type CircularVariant = {
 	text: string,
 	/**  Has `final`: circular stops on it. */
 	is_final: boolean,
+};
+
+/**  What the program's own logs say (proposal 3); empty for programs without known logs. */
+export type ClientState = {
+	/**  `running`, `not_running`, `unknown`. */
+	app: string,
+	voice: MediaState | null,
+	stream: MediaState | null,
+	/**  The gateway's last state, e.g. `connected`, `connect_failed`. */
+	gateway: string | null,
+	/**  Facts from other logs: the Discord updater, Steam's connection and content logs. */
+	facts: Fact[],
+};
+
+export type Confidence = {
+	level: Level,
+	/**  Codes, e.g. `stopped`, `budget_hit`, `source_missing:neko_log`, `no_voice_flow`. */
+	why: string[],
+};
+
+/**  The setup the run happened in (proposal 1): engine, routing, proxy, tests, the hub's errors. */
+export type Context = {
+	strategy: string | null,
+	engine_running: boolean,
+	flowseal_outdated: boolean,
+	routing: string,
+	proxy: string | null,
+	proxy_alive: boolean | null,
+	proxy_udp: boolean | null,
+	egress_ip_direct: string | null,
+	egress_ip_proxy: string | null,
+	/**  Place of the current strategy in the newest standard test run, and that run's best. */
+	tests_rank: number | null,
+	tests_best: string | null,
+	/**  The hub's own errors of the last day, newest first. */
+	hub_errors: string[],
+};
+
+/**  Whether the current strategy and lists cover a culprit (proposal 1, 5). */
+export type Coverage = {
+	/**  The culprit group's key. */
+	key: string,
+	/**  `zapret`, `zapret2`, `router:<rule>`, `system_proxy`, `direct`. */
+	route: string,
+	in_hostlist: boolean | null,
+	in_ipset: boolean | null,
+	game_filter_covers: boolean | null,
+	/**  Age of the list that should cover it, in days. */
+	list_age_days: number | null,
 };
 
 export type CustomStrategy = {
@@ -369,6 +437,13 @@ export type DpiTargetResult = {
 };
 
 export type Engine = "Flowseal" | "Zapret2";
+
+/**  One fact: a stable code, its arguments, and the text for a person. */
+export type Fact = {
+	code: string,
+	args: string[],
+	text: string,
+};
 
 export type FakeKind = "Discord" | "Game";
 
@@ -538,6 +613,8 @@ export type LastResult = {
 	stale: boolean,
 };
 
+export type Level = "low" | "medium" | "high";
+
 export type ListState = {
 	list: UserList,
 	entries: string[],
@@ -553,6 +630,20 @@ export type LiveRun = {
 	pass: number,
 	/**  Each strategy once, its passes so far aggregated, in the order they first finished. */
 	results: StrategyResult[],
+};
+
+/**  One media connection (voice or stream) as the client logged it. */
+export type MediaState = {
+	stage: VoiceStage,
+	/**  `ip:port` of the media server. */
+	server: string | null,
+	peers: number,
+	/**  From the client's pings: lost / sent over the session. */
+	loss_pct: number | null,
+	rtt_ms: number | null,
+	reconnects: number,
+	/**  Packets went out and none came in. */
+	one_way: boolean,
 };
 
 export type MergeNote = {
@@ -605,6 +696,16 @@ export type NoticeLevel = "Error" | "Info";
 
 /**  `take_notices` has something. */
 export type NoticesChanged = null;
+
+/**  The observation in counts (proposal 2). */
+export type Observed = {
+	secs: number,
+	flows: number,
+	tcp: number,
+	udp: number,
+	via_router: number,
+	via_system_proxy: number,
+};
 
 /**  The tray asks the open window to show a tab (a new window gets it as the URL fragment). */
 export type OpenTab = {
@@ -893,6 +994,8 @@ export type Summary = {
 	sources_missing: string[],
 	/**  `commands::system_checks` at the start (read-only); empty without a zapret folder. */
 	system_checks: SystemCheck[],
+	/**  Codes and facts for an agent (agent proposal); filled by the app after `summarize`. */
+	agent: AgentView,
 };
 
 export type SvcState = "NotInstalled" | "Stopped" | "StartPending" | "StopPending" | "Running" | "Other";
@@ -975,7 +1078,45 @@ export type TurnOffTarget =
 
 export type UserList = "General" | "Exclude" | "IpsetExclude";
 
+/**  The run's answer in one code (proposal 2). */
+export type VerdictCode = 
+/**  Nothing seen: the program opened no connections while watched. */
+"no_flows" | 
+/**  The program was not in the state the profile needs (Discord not running, not in voice). */
+"not_reproducible" | 
+/**  Everything seen worked, and everything that matters was seen. */
+"clean" | 
+/**  Nothing failed, but part of the traffic or the client state was not seen. */
+"inconclusive" | 
+/**  Culprits, and a path that fixes every one of them. */
+"culprits_fixed" | 
+/**  Culprits, some fixed. */
+"culprits_partial" | 
+/**  Culprits, none fixed. */
+"culprits_unfixed" | 
+/**  The problem is on the other side (a peer, the service). */
+"peer_side" | 
+/**  A whitelist network (Р5). */
+"whitelist" | 
+/**  A live-only profile in auto mode. */
+"live_only";
+
 export type Via = { via: "Opening" } | { via: "Proxy" } | { via: "Direct"; reason: DirectReason };
+
+/**  Where Discord's voice got to, from its own logs (proposal 3). */
+export type VoiceStage = 
+/**  No voice session in the logs. */
+"none" | 
+/**  Joined, but no voice server came (gateway side). */
+"no_endpoint" | 
+/**  The voice WebSocket did not connect. */
+"ws_failed" | 
+/**  The WebSocket connected, UDP did not. */
+"udp_failed" | 
+/**  Connected; DAVE waits for a second participant (normal when alone). */
+"dave_waiting_peer" | 
+/**  Connected; DAVE stalled with others present. */
+"dave_stalled" | "connected";
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

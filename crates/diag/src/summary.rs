@@ -76,6 +76,8 @@ pub struct Summary {
     pub sources_missing: Vec<String>,
     /// `commands::system_checks` at the start (read-only); empty without a zapret folder.
     pub system_checks: Vec<SystemCheck>,
+    /// Codes and facts for an agent (agent proposal); filled by the app after `summarize`.
+    pub agent: crate::agent::AgentView,
 }
 
 fn seen(f: &Fault) -> String {
@@ -499,6 +501,7 @@ pub fn summarize(
         rollback_error: outcome.rollback_error.clone(),
         sources_missing: vec![],
         system_checks: vec![],
+        agent: Default::default(),
     }
 }
 
