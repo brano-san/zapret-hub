@@ -117,6 +117,13 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `checks fix <action>` | исправление: `enable-tcp-timestamps`, `grant-capabilities` (Linux: chmod и setcap для nfqws2); `remove-windivert` и `remove-conflicts` — с `--yes` | `fix_check` |
 | `discord clear-cache --yes` | закрывает Discord и чистит его кэш | `clear_discord_cache` |
 | `service remove --yes` | удаляет службу zapret2 (и службу zapret Flowseal, если осталась) и WinDivert | `remove_service` |
+| `service start|stop|restart` | запускает, останавливает или перезапускает службу zapret2 как есть, без быстрой проверки; автозапуск службы не меняется | `start_service`, `stop_service`, `restart_service` |
+| `service logs` | Linux: последние 100 строк журнала юнита `zapret2` текстом (`journalctl` от пользователя, иначе `sudo -n`); в Windows — код 1, журнала у службы нет | `service_logs` |
+| `nft` | Linux: таблица nftables `inet zapret_hub`, через которую движок получает пакеты, текстом; в Windows — код 1 | `nft_rules` |
+| `dns-flush` | сбрасывает кэш DNS системы (Windows: `ipconfig /flushdns`; Linux: resolvectl, nmcli, nscd, dnsmasq — что запущено) | `flush_dns` |
+| `exclusions show` | исключения: домены, адреса и порты (раздел «Исключения») | `get_exclusions` |
+| `exclusions add|remove domains|ips|ports <value>` | добавляет или убирает одно исключение и ставит активную стратегию заново | `get_exclusions`, `save_exclusions` |
+| `exclusions reset --yes` | очищает все три списка | `save_exclusions` |
 | `router on\|off` | включает или выключает маршрутизацию; пишет `router_enabled` | `set_router_enabled` |
 | `router status` | идёт ли маршрутизация, состояние прокси, счётчики | `router_status` |
 | `routes list` | правила, их состояние, ошибка файла `routes.toml` и `system_doh` — включено ли шифрование DNS в Windows (тогда правила по доменам не срабатывают) | `list_routes` |
@@ -329,6 +336,19 @@ Flowseal (`flowseal_copy: true`); с именами
 - `checks` — HTTP, TLS 1.2 и TLS 1.3 через curl (как в тестах), `ping_ms` — ICMP, `null` — не ответил. Все
   четыре идут разом: проба занимает не больше 4–5 с.
 - Без `--json` печатает то же текстом, по строке на пункт.
+
+## Исключения
+
+То, что zapret2 не трогает. Встроенные стратегии читают два списка в `<папка zapret2>/lists`:
+`list-exclude-user.txt` (`domains`: домен и его поддомены) и `ipset-exclude-user.txt` (`ips`: IPv4-адрес или
+подсеть). `ports` — порты и диапазоны (`51413`, `6881-6889`), трафик которых не попадает в очередь nftables
+движка; это действует только на Linux (там же процессы группы `zapret-bypass` идут мимо движка всегда), в Windows
+порты хранятся, но не применяются. Порты лежат в настройках (`excluded_ports`), `settings set` их не меняет.
+
+Сохранение переписывает оба файла целиком (комментарии в них пропадают), а если стратегия zapret2 стоит службой,
+ставит её заново: движок читает списки при старте, а таблица nftables берёт порты. CLI проверяет значение до
+запроса: домен из двух и более меток, адрес или подсеть `a.b.c.d/n`, порт 1–65535 или диапазон по возрастанию —
+иначе код 2. `add` уже имеющегося и `remove` отсутствующего — код 1, ничего не пишется.
 
 ## Рецепт: подобрать и применить лучшую стратегию
 

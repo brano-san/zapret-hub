@@ -122,6 +122,18 @@ fn dispatch(app: &AppHandle, request: Request) -> Result<Value, String> {
         Request::FixCheck { action } => json(block_on(commands::fix_check(handle, action))?),
         Request::ClearDiscordCache => json(block_on(commands::clear_discord_cache())?),
         Request::RemoveService => json(block_on(commands::remove_service(handle))?),
+        Request::StartService => json(block_on(commands::start_service(handle))?),
+        Request::StopService => json(block_on(commands::stop_service(handle))?),
+        Request::RestartService => json(block_on(commands::restart_service(handle))?),
+        Request::ServiceLogs => json(block_on(commands::service_logs())?),
+        Request::NftRules => json(block_on(commands::nft_rules())?),
+        Request::FlushDns => json(block_on(commands::flush_dns())?),
+        Request::GetExclusions => json(block_on(commands::get_exclusions(handle))?),
+        Request::SaveExclusions { exclusions } => {
+            let exclusions = serde_json::from_value(exclusions)
+                .map_err(|err| format!("the exclusions do not parse: {err}"))?;
+            json(block_on(commands::save_exclusions(handle, exclusions))?)
+        }
         Request::QuickCheck => json(block_on(commands::quick_check(handle))?),
         Request::SetRouterEnabled { enabled } => {
             json(block_on(commands::set_router_enabled(handle, enabled))?)

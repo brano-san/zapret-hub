@@ -4,12 +4,14 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use anyhow::Context as _;
+
 use tauri::{AppHandle, Manager as _};
 use tauri_specta::Event as _;
 use zapret::service::{QuickCheck, SERVICE, SERVICE2, SvcState, active};
 
 use crate::dto::{
-    Candidates, Detected, FolderKind, Notice, NoticeLevel, NoticesChanged, Overview,
+    Candidates, Detected, Exclusions, FolderKind, Notice, NoticeLevel, NoticesChanged, Overview,
     StateChanged,
 };
 use crate::settings::Settings;
@@ -492,9 +494,126 @@ pub fn open_folder(app: &AppHandle, kind: FolderKind) -> anyhow::Result<()> {
     crate::shell::open(path.as_os_str())
 }
 
+/// The zapret2 exclude lists the built-in strategies read (`--hostlist-exclude`,
+/// `--ipset-exclude`).
+const EXCLUDE_DOMAINS: &str = "list-exclude-user.txt";
+const EXCLUDE_IPS: &str = "ipset-exclude-user.txt";
+
+/// One entry per line; blank lines and `#` comments are not entries.
+fn read_list(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// An entry is one line of text the engine reads as one entry: not empty, no comment.
+fn check_entries(list: &str, entries: &[String]) -> anyhow::Result<()> {
+    for entry in entries {
+        anyhow::ensure!(
+            !entry.trim().is_empty()
+                && !entry.contains('#')
+                && !entry.chars().any(|c| c.is_control() || c.is_whitespace()),
+            "{entry:?} is not an entry of {list}: one domain or address, no spaces or #"
+        );
+    }
+    Ok(())
+}
+
+/// The exclusions card: the two lists and the settings' ports.
+pub fn exclusions(app: &AppHandle) -> anyhow::Result<Exclusions> {
+    let state = state(app);
+    let lists = zapret2::strategies::lists_dir(&state.engine2_required()?);
+    Ok(Exclusions {
+        domains: read_list(&lists.join(EXCLUDE_DOMAINS)),
+        ips: read_list(&lists.join(EXCLUDE_IPS)),
+        ports: state.settings().excluded_ports,
+    })
+}
+
+/// The lists written whole (their comments go), the ports into the settings, then the active
+/// zapret2 strategy installed again: the engine reads the lists at its start, and Linux's
+/// nftables queue takes the ports.
+pub fn save_exclusions(app: &AppHandle, exclusions: Exclusions) -> anyhow::Result<()> {
+    let state = state(app);
+    let engine = state.engine2_required()?;
+    check_entries(EXCLUDE_DOMAINS, &exclusions.domains)?;
+    check_entries(EXCLUDE_IPS, &exclusions.ips)?;
+    let ports: Vec<String> = exclusions
+        .ports
+        .iter()
+        .map(|port| port.trim().to_owned())
+        .collect();
+    // Refuses a bad port before anything is written.
+    engine.clone().with_excluded_ports(&ports)?;
+    anyhow::ensure!(!state.testing(), crate::state::TESTING);
+    let lists = zapret2::strategies::lists_dir(&engine);
+    std::fs::create_dir_all(&lists).with_context(|| lists.display().to_string())?;
+    for (name, entries) in [
+        (EXCLUDE_DOMAINS, &exclusions.domains),
+        (EXCLUDE_IPS, &exclusions.ips),
+    ] {
+        let path = lists.join(name);
+        let text: String = entries
+            .iter()
+            .map(|entry| {
+                format!(
+                    "{}
+",
+                    entry.trim()
+                )
+            })
+            .collect();
+        std::fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
+    }
+    {
+        let _saving = state.saving();
+        let mut settings = state.settings();
+        if settings.excluded_ports != ports {
+            settings.excluded_ports = ports;
+            crate::settings::save(&state.paths.settings(), &settings)?;
+            state.set_settings(settings);
+        }
+    }
+    let installed = zapret::service::state(SERVICE2) != SvcState::NotInstalled;
+    if let Some(active) = zapret::service::strategy().filter(|_| installed) {
+        apply(app, &active)?;
+    }
+    changed(app);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_list_is_its_entries_without_blanks_and_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("list.txt");
+        std::fs::write(
+            &path,
+            "# mine
+example.com
+
+  vk.com  
+",
+        )
+        .unwrap();
+        assert_eq!(read_list(&path), ["example.com", "vk.com"]);
+        assert!(read_list(&dir.path().join("none.txt")).is_empty());
+        let ok = ["example.com".to_owned(), "10.0.0.0/8".to_owned()];
+        assert!(check_entries("x", &ok).is_ok());
+        for bad in [
+            "", "a b", "a#b", "a
+b",
+        ] {
+            assert!(check_entries("x", &[bad.to_owned()]).is_err(), "{bad:?}");
+        }
+    }
 
     #[test]
     fn the_move_off_flowseal_keeps_a_zapret2_strategy_and_switches_only_flowseal() {

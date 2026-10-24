@@ -17,11 +17,11 @@ use zapret::checks::{CheckAction, SystemCheck};
 use zapret::discord_cache::CacheReport;
 use zapret::hosts::HostsPlan;
 use zapret::release::{Downloaded, Engine};
-use zapret::service::QuickCheck;
+use zapret::service::{QuickCheck, active};
 
 use crate::actions::{self, state as app};
 use crate::dto::{
-    Candidates, Detected, DownloadProgress, FolderKind, LiveRun, Notice, Overview,
+    Candidates, Detected, DownloadProgress, Exclusions, FolderKind, LiveRun, Notice, Overview,
 };
 use crate::settings::Settings;
 use crate::state::AppState;
@@ -450,6 +450,72 @@ pub async fn remove_service(handle: AppHandle) -> Answer<()> {
         done
     })
     .await
+}
+
+/// The zapret2 service by hand: `how` takes its name. Routing pauses around it, as around every
+/// change of the service (router spec 11).
+async fn service(handle: AppHandle, how: fn(&str) -> anyhow::Result<()>) -> Answer<()> {
+    blocking(move || {
+        let done = routing::paused(&handle, || app(&handle).in_turn(|| how(active().0)));
+        actions::changed(&handle);
+        done
+    })
+    .await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn start_service(handle: AppHandle) -> Answer<()> {
+    service(handle, zapret::service::start).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn stop_service(handle: AppHandle) -> Answer<()> {
+    service(handle, zapret::service::stop).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn restart_service(handle: AppHandle) -> Answer<()> {
+    service(handle, zapret::service::restart).await
+}
+
+/// The service's journal (Linux; Windows keeps none).
+#[tauri::command]
+#[specta::specta]
+pub async fn service_logs() -> Answer<String> {
+    blocking(|| zapret::service::logs(active().0)).await
+}
+
+/// The nftables table the engine's queue runs through (Linux).
+#[tauri::command]
+#[specta::specta]
+pub async fn nft_rules() -> Answer<String> {
+    #[cfg(target_os = "linux")]
+    let rules = blocking(zapret2::nft::rules).await;
+    #[cfg(not(target_os = "linux"))]
+    let rules = Err("nftables is on Linux only: Windows has WinDivert".to_owned());
+    rules
+}
+
+/// The system's DNS cache, so the hosts file and a new strategy take effect at once.
+#[tauri::command]
+#[specta::specta]
+pub async fn flush_dns() -> Answer<()> {
+    blocking(zapret::hosts::flush_dns).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_exclusions(handle: AppHandle) -> Answer<Exclusions> {
+    blocking(move || actions::exclusions(&handle)).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn save_exclusions(handle: AppHandle, exclusions: Exclusions) -> Answer<()> {
+    blocking(move || actions::save_exclusions(&handle, exclusions)).await
 }
 
 #[tauri::command]

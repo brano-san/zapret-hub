@@ -41,6 +41,10 @@ pub struct Settings {
     /// The game filter: the built-in strategies' `%GameFilter*%` ports open the unprivileged range
     /// (`zapret2::Engine::with_game_filter`).
     pub game_filter: bool,
+    /// Ports whose traffic never reaches the engine (`51413`, `6881-6889`): Linux's nftables
+    /// queue leaves them out (`zapret2::Engine::with_excluded_ports`); only `save_exclusions`
+    /// writes them.
+    pub excluded_ports: Vec<String>,
 }
 
 impl Default for Settings {
@@ -58,6 +62,7 @@ impl Default for Settings {
             diag_budget_min: 10,
             nekobox_dir: None,
             game_filter: true,
+            excluded_ports: Vec::new(),
         }
     }
 }
@@ -97,10 +102,11 @@ pub fn load_or_default(path: &Path) -> (Settings, Option<String>) {
 /// zapret-hub-cli (`pipe`) never turns the CLI on: a save that passed the gate just before the user
 /// turned the CLI off must not turn it back on (CLI spec 7.2). Nor does it move the zapret2 folder:
 /// the SYSTEM service runs winws2.exe from it, so any program of the user could pick what SYSTEM
-/// runs (CLI spec 5, zapret2 spec 10). Neither one changes
-/// `router_enabled`: a Settings tab opened before the switch must not undo it (`routing::set_enabled`).
+/// runs (CLI spec 5, zapret2 spec 10). Neither one changes `router_enabled` or the excluded ports:
+/// their own commands write them, and a Settings tab opened before must not undo them.
 pub fn to_save(current: &Settings, mut sent: Settings, pipe: bool) -> anyhow::Result<Settings> {
     sent.router_enabled = current.router_enabled;
+    sent.excluded_ports.clone_from(&current.excluded_ports);
     if pipe {
         anyhow::ensure!(
             sent.zapret2_dir == current.zapret2_dir,
@@ -132,6 +138,7 @@ pub fn diag_reads_changed(old: &Settings, new: &Settings) -> bool {
         || old.diag_observe_secs != new.diag_observe_secs
         || old.diag_budget_min != new.diag_budget_min
         || old.game_filter != new.game_filter
+        || old.excluded_ports != new.excluded_ports
 }
 
 /// `zapret_dir` of a settings file 0.8.0 wrote: the Flowseal folder of a user who ran Flowseal.
@@ -249,6 +256,7 @@ mod tests {
             diag_budget_min: 7,
             nekobox_dir: Some(r"E:\nekoray".into()),
             game_filter: false,
+            excluded_ports: vec!["51413".into(), "6881-6889".into()],
         };
         save(&path, &settings).unwrap();
         assert_eq!(load(&path).unwrap(), settings);
@@ -269,6 +277,29 @@ mod tests {
         assert!(notice.unwrap().contains("zapret-hub.toml.broken"));
         assert!(dir.path().join("zapret-hub.toml.broken").exists());
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_settings_save_keeps_what_its_own_commands_write() {
+        let current = Settings {
+            excluded_ports: vec!["51413".into()],
+            ..Settings::default()
+        };
+        let stale = Settings {
+            theme: Theme::Dark,
+            ..Settings::default()
+        };
+        for pipe in [false, true] {
+            let saved = to_save(&current, stale.clone(), pipe).unwrap();
+            assert_eq!(
+                saved,
+                Settings {
+                    theme: Theme::Dark,
+                    ..current.clone()
+                },
+                "pipe: {pipe}"
+            );
+        }
     }
 
     #[test]
@@ -356,6 +387,7 @@ diag_budget_min = 10
         assert_eq!(settings.socks5.as_deref(), Some("127.0.0.1:18082"));
         assert!(settings.wizard_done && settings.cli_enabled && settings.router_enabled);
         assert!(settings.game_filter, "a new field takes its default");
+        assert!(settings.excluded_ports.is_empty());
         assert_eq!(flowseal_dir(&path), Some(PathBuf::from(r"E:\Zapret")));
         save(&path, &settings).unwrap();
         assert_eq!(flowseal_dir(&path), None, "the migration runs once");

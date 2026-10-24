@@ -171,12 +171,17 @@ impl AppState {
         lock(&self.settings).socks5.clone()
     }
 
-    /// The zapret2 engine with the settings' game filter; `None` while `zapret2_dir` is empty
-    /// (zapret2 spec 4).
+    /// The zapret2 engine with the settings' game filter and excluded ports; `None` while
+    /// `zapret2_dir` is empty (zapret2 spec 4).
     pub fn engine2(&self) -> anyhow::Result<Option<zapret2::Engine>> {
-        let dir = lock(&self.settings).zapret2_dir.clone();
-        let game_filter = lock(&self.settings).game_filter;
-        dir.map(|dir| Ok(zapret2::Engine::open(dir)?.with_game_filter(game_filter)))
+        let settings = self.settings();
+        settings
+            .zapret2_dir
+            .map(|dir| {
+                zapret2::Engine::open(dir)?
+                    .with_game_filter(settings.game_filter)
+                    .with_excluded_ports(&settings.excluded_ports)
+            })
             .transpose()
     }
 

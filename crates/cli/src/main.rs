@@ -114,6 +114,13 @@ enum Command {
     /// The zapret2 service.
     #[command(subcommand)]
     Service(ServiceCommand),
+    /// The nftables table the engine's queue runs through (Linux).
+    Nft,
+    /// Flush the system's DNS cache.
+    DnsFlush,
+    /// What zapret2 leaves alone: domains, addresses and (Linux) ports.
+    #[command(subcommand)]
+    Exclusions(ExclusionsCommand),
     /// Route UDP through the local SOCKS5 proxy.
     #[command(subcommand)]
     Router(RouterCommand),
@@ -427,6 +434,33 @@ impl From<PresetArg> for Preset {
 enum ServiceCommand {
     /// Remove the zapret2 service (and Flowseal's zapret) and WinDivert (needs --yes).
     Remove,
+    Start,
+    Stop,
+    Restart,
+    /// The last lines of its journal (Linux).
+    Logs,
+}
+
+#[derive(Debug, Subcommand)]
+enum ExclusionsCommand {
+    /// The domains (list-exclude-user.txt), addresses (ipset-exclude-user.txt) and ports.
+    Show,
+    /// Add an entry, then install the active strategy again.
+    Add { list: ExclusionList, value: String },
+    /// Remove an entry, then install the active strategy again.
+    Remove { list: ExclusionList, value: String },
+    /// Empty all three (needs --yes).
+    Reset,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ExclusionList {
+    /// A domain and its subdomains.
+    Domains,
+    /// An IPv4 address or subnet.
+    Ips,
+    /// A port or a range (6881-6889) whose traffic skips the engine (Linux).
+    Ports,
 }
 
 /// The keys of zapret-hub.toml the CLI may change (spec 7.2). Not `zapret2_dir`: the SYSTEM
@@ -599,6 +633,7 @@ fn needs_yes(command: &Command) -> bool {
             }
             | Command::Discord(DiscordCommand::ClearCache)
             | Command::Service(ServiceCommand::Remove)
+            | Command::Exclusions(ExclusionsCommand::Reset)
             | Command::Routes(RoutesCommand::Remove { .. })
             | Command::Diag(DiagCommand::Apply { .. })
     )
@@ -778,6 +813,43 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
         },
         Command::Discord(DiscordCommand::ClearCache) => Request::ClearDiscordCache,
         Command::Service(ServiceCommand::Remove) => Request::RemoveService,
+        Command::Service(ServiceCommand::Start) => Request::StartService,
+        Command::Service(ServiceCommand::Stop) => Request::StopService,
+        Command::Service(ServiceCommand::Restart) => Request::RestartService,
+        Command::Service(ServiceCommand::Logs) => return text(call(Request::ServiceLogs)?),
+        Command::Nft => return text(call(Request::NftRules)?),
+        Command::DnsFlush => Request::FlushDns,
+        Command::Exclusions(ExclusionsCommand::Show) => Request::GetExclusions,
+        Command::Exclusions(ExclusionsCommand::Add { list, value }) => {
+            let value = exclusion(list, &value)?;
+            let mut exclusions = call(Request::GetExclusions)?;
+            let mut entries = entries(&exclusions, list)?;
+            if entries
+                .iter()
+                .any(|entry| entry.eq_ignore_ascii_case(&value))
+            {
+                return Err(Fail::new(FAILED, format!("{value} is excluded already")));
+            }
+            entries.push(value);
+            exclusions[list_name(list)] = json!(entries);
+            Request::SaveExclusions { exclusions }
+        }
+        Command::Exclusions(ExclusionsCommand::Remove { list, value }) => {
+            let mut exclusions = call(Request::GetExclusions)?;
+            let entries = entries(&exclusions, list)?;
+            let left: Vec<&String> = entries
+                .iter()
+                .filter(|entry| !entry.eq_ignore_ascii_case(value.trim()))
+                .collect();
+            if left.len() == entries.len() {
+                return Err(Fail::new(FAILED, format!("{value} is not excluded")));
+            }
+            exclusions[list_name(list)] = json!(left);
+            Request::SaveExclusions { exclusions }
+        }
+        Command::Exclusions(ExclusionsCommand::Reset) => Request::SaveExclusions {
+            exclusions: json!({ "domains": [], "ips": [], "ports": [] }),
+        },
         Command::Router(RouterCommand::On) => Request::SetRouterEnabled { enabled: true },
         Command::Router(RouterCommand::Off) => Request::SetRouterEnabled { enabled: false },
         Command::Router(RouterCommand::Status) => Request::RouterStatus,
@@ -820,6 +892,58 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
             data
         })
     })
+}
+
+/// A text the app answers with (a journal, a table), printed as it is.
+fn text(data: Value) -> Result<Done, Fail> {
+    Ok(Done::Text(read(data)?))
+}
+
+fn list_name(list: ExclusionList) -> &'static str {
+    match list {
+        ExclusionList::Domains => "domains",
+        ExclusionList::Ips => "ips",
+        ExclusionList::Ports => "ports",
+    }
+}
+
+/// One list of the app's exclusions.
+fn entries(exclusions: &Value, list: ExclusionList) -> Result<Vec<String>, Fail> {
+    read(exclusions[list_name(list)].clone())
+}
+
+/// An entry of `list`, checked before the app is asked.
+fn exclusion(list: ExclusionList, value: &str) -> Result<String, Fail> {
+    let value = value.trim();
+    let ok = match list {
+        ExclusionList::Domains => {
+            let labels: Vec<&str> = value.trim_end_matches('.').split('.').collect();
+            labels.len() >= 2
+                && labels.iter().all(|label| {
+                    (1..=63).contains(&label.len())
+                        && !label.starts_with('-')
+                        && !label.ends_with('-')
+                        && label
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                })
+        }
+        ExclusionList::Ips => router::rules::parse_net(value).is_some(),
+        ExclusionList::Ports => zapret2::port_range(value),
+    };
+    if ok {
+        Ok(value.to_owned())
+    } else {
+        let what = match list {
+            ExclusionList::Domains => "a domain like example.com",
+            ExclusionList::Ips => "an IPv4 address or subnet like 10.0.0.0/8",
+            ExclusionList::Ports => "a port or a range like 6881-6889",
+        };
+        Err(Fail::new(
+            USAGE,
+            format!("{} takes {what}, not {value:?}", list_name(list)),
+        ))
+    }
 }
 
 fn key_name(key: Key) -> String {
@@ -1579,10 +1703,88 @@ mod tests {
                 Request::ClearDiscordCache,
             ),
             (&["service", "remove", "--yes"], Request::RemoveService),
+            (&["service", "start"], Request::StartService),
+            (&["service", "stop"], Request::StopService),
+            (&["service", "restart"], Request::RestartService),
+            (&["service", "logs"], Request::ServiceLogs),
+            (&["nft"], Request::NftRules),
+            (&["dns-flush"], Request::FlushDns),
+            (&["exclusions", "show"], Request::GetExclusions),
+            (
+                &["exclusions", "reset", "--yes"],
+                Request::SaveExclusions {
+                    exclusions: json!({ "domains": [], "ips": [], "ports": [] }),
+                },
+            ),
         ];
         for (args, expected) in table {
             let (_, asked) = drive(args, Vec::new());
             assert_eq!(asked, [expected], "{args:?}");
+        }
+    }
+
+    #[test]
+    fn logs_and_nft_print_the_text_the_app_sends() {
+        let (outcome, asked) = drive(&["service", "logs"], vec![Ok(json!("line 1\nline 2"))]);
+        assert_eq!(asked, [Request::ServiceLogs]);
+        assert_eq!(outcome, Ok(Done::Text("line 1\nline 2".into())));
+        let (outcome, _) = drive(&["nft"], vec![Ok(json!("table inet zapret_hub {}"))]);
+        assert_eq!(outcome, Ok(Done::Text("table inet zapret_hub {}".into())));
+    }
+
+    #[test]
+    fn exclusions_are_read_changed_and_written_back() {
+        let held = || {
+            Ok(json!({
+                "domains": ["vk.com"],
+                "ips": ["10.0.0.0/8"],
+                "ports": ["51413"],
+            }))
+        };
+        let saved = |asked: &[Request]| -> Value {
+            let [
+                Request::GetExclusions,
+                Request::SaveExclusions { exclusions },
+            ] = asked
+            else {
+                panic!("{asked:?}")
+            };
+            exclusions.clone()
+        };
+        let (_, asked) = drive(
+            &["exclusions", "add", "domains", "example.com"],
+            vec![held()],
+        );
+        assert_eq!(saved(&asked)["domains"], json!(["vk.com", "example.com"]));
+        assert_eq!(saved(&asked)["ports"], json!(["51413"]), "the rest stays");
+        let (_, asked) = drive(&["exclusions", "add", "ports", "6881-6889"], vec![held()]);
+        assert_eq!(saved(&asked)["ports"], json!(["51413", "6881-6889"]));
+        let (_, asked) = drive(&["exclusions", "remove", "domains", "VK.com"], vec![held()]);
+        assert_eq!(saved(&asked)["domains"], json!([]));
+        // Already there, or not there: nothing is saved.
+        let (outcome, asked) = drive(&["exclusions", "add", "ips", "10.0.0.0/8"], vec![held()]);
+        assert_eq!(
+            (code(outcome), asked),
+            (FAILED, vec![Request::GetExclusions])
+        );
+        let (outcome, asked) = drive(&["exclusions", "remove", "ips", "1.2.3.4"], vec![held()]);
+        assert_eq!(
+            (code(outcome), asked),
+            (FAILED, vec![Request::GetExclusions])
+        );
+        // Not an entry of its list: refused before the app is asked.
+        for (list, value) in [
+            ("domains", "localhost"),
+            ("domains", "a b.com"),
+            ("ips", "example.com"),
+            ("ips", "10.0.0.0/33"),
+            ("ports", "0"),
+            ("ports", "9-1"),
+            ("ports", "http"),
+        ] {
+            let (outcome, asked) = drive(&["exclusions", "add", list, value], Vec::new());
+            assert_eq!(code(outcome), USAGE, "{list} {value}");
+            assert!(asked.is_empty(), "{list} {value}");
         }
     }
 
@@ -1596,6 +1798,7 @@ mod tests {
             &["discord", "clear-cache"],
             &["service", "remove"],
             &["routes", "remove", "v"],
+            &["exclusions", "reset"],
         ] {
             let (outcome, asked) = drive(args, Vec::new());
             assert_eq!(code(outcome), USAGE, "{args:?}");

@@ -39,6 +39,15 @@ pub struct Overview {
     pub platform: Platform,
 }
 
+/// The exclusions card: the zapret2 exclude lists the strategies read (`list-exclude-user.txt`,
+/// `ipset-exclude-user.txt`, one entry per line) and the ports that skip the engine (Linux).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct Exclusions {
+    pub domains: Vec<String>,
+    pub ips: Vec<String>,
+    pub ports: Vec<String>,
+}
+
 /// SOCKS5 ports that answer, for the wizard (spec 9.2).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct Candidates {

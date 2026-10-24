@@ -85,6 +85,19 @@ pub enum Request {
     },
     ClearDiscordCache,
     RemoveService,
+    StartService,
+    StopService,
+    RestartService,
+    /// The service's journal (Linux).
+    ServiceLogs,
+    /// The nftables table of the engine's queue (Linux).
+    NftRules,
+    FlushDns,
+    GetExclusions,
+    /// The app's `Exclusions` as JSON (`domains`, `ips`, `ports`), checked on arrival.
+    SaveExclusions {
+        exclusions: Value,
+    },
     QuickCheck,
     SetRouterEnabled {
         enabled: bool,
@@ -332,6 +345,16 @@ mod tests {
             },
             Request::ClearDiscordCache,
             Request::RemoveService,
+            Request::StartService,
+            Request::StopService,
+            Request::RestartService,
+            Request::ServiceLogs,
+            Request::NftRules,
+            Request::FlushDns,
+            Request::GetExclusions,
+            Request::SaveExclusions {
+                exclusions: json!({ "domains": [], "ips": [], "ports": ["51413"] }),
+            },
             Request::QuickCheck,
             Request::SetRouterEnabled { enabled: true },
             Request::RouterStatus,

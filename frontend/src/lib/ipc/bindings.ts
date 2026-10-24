@@ -80,6 +80,17 @@ export const commands = {
 	/**  Not a change to zapret: no queue. */
 	clearDiscordCache: () => typedError<CacheReport[], string>(__TAURI_INVOKE("clear_discord_cache")),
 	removeService: () => typedError<null, string>(__TAURI_INVOKE("remove_service")),
+	startService: () => typedError<null, string>(__TAURI_INVOKE("start_service")),
+	stopService: () => typedError<null, string>(__TAURI_INVOKE("stop_service")),
+	restartService: () => typedError<null, string>(__TAURI_INVOKE("restart_service")),
+	/**  The service's journal (Linux; Windows keeps none). */
+	serviceLogs: () => typedError<string, string>(__TAURI_INVOKE("service_logs")),
+	/**  The nftables table the engine's queue runs through (Linux). */
+	nftRules: () => typedError<string, string>(__TAURI_INVOKE("nft_rules")),
+	/**  The system's DNS cache, so the hosts file and a new strategy take effect at once. */
+	flushDns: () => typedError<null, string>(__TAURI_INVOKE("flush_dns")),
+	getExclusions: () => typedError<Exclusions, string>(__TAURI_INVOKE("get_exclusions")),
+	saveExclusions: (exclusions: Exclusions) => typedError<null, string>(__TAURI_INVOKE("save_exclusions", { exclusions })),
 	quickCheck: () => typedError<QuickCheck, string>(__TAURI_INVOKE("quick_check")),
 	takeNotices: () => __TAURI_INVOKE<Notice[]>("take_notices"),
 	/**  The only command that writes `router_enabled` (`routing::set_enabled`). */
@@ -443,6 +454,16 @@ export type DpiTargetResult = {
 };
 
 export type Engine = "Zapret2";
+
+/**
+ *  The exclusions card: the zapret2 exclude lists the strategies read (`list-exclude-user.txt`,
+ *  `ipset-exclude-user.txt`, one entry per line) and the ports that skip the engine (Linux).
+ */
+export type Exclusions = {
+	domains: string[],
+	ips: string[],
+	ports: string[],
+};
 
 /**  One fact: a stable code, its arguments, and the text for a person. */
 export type Fact = {
@@ -906,6 +927,12 @@ export type Settings = {
 	 *  (`zapret2::Engine::with_game_filter`).
 	 */
 	game_filter?: boolean,
+	/**
+	 *  Ports whose traffic never reaches the engine (`51413`, `6881-6889`): Linux's nftables
+	 *  queue leaves them out (`zapret2::Engine::with_excluded_ports`); only `save_exclusions`
+	 *  writes them.
+	 */
+	excluded_ports?: string[],
 };
 
 /**  zapret, the settings or the history changed: the page reads what it shows again. */
