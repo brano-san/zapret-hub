@@ -123,7 +123,7 @@ pub fn refresh(app: &AppHandle) {
 }
 
 /// «Открыть»; «Стратегия: <имя>» → «Переключить на» and the top five; «Перезапустить zapret»;
-/// «Быстрая проверка»; «Диагностика…»; «Маршрутизация: вкл/выкл» (Windows); «Выход» (spec 9.3,
+/// «Быстрая проверка»; «Диагностика…»; «Маршрутизация: вкл/выкл»; «Выход» (spec 9.3,
 /// router spec 8, diag spec 10). Linux's ayatana tray opens this menu on any click: «Открыть»
 /// is the way to the window there.
 fn menu(
@@ -157,13 +157,19 @@ fn menu(
     let router = MenuItem::with_id(app, "router", label, true, None::<&str>)?;
     let gap = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", texts::QUIT, true, None::<&str>)?;
-    let mut items: Vec<&dyn IsMenuItem<Wry>> = vec![&open, &current, &restart, &quick, &diag];
-    // The router is Windows only (WinDivert).
-    if cfg!(windows) {
-        items.push(&router);
-    }
-    items.extend([&gap as &dyn IsMenuItem<Wry>, &quit]);
-    Menu::with_items(app, &items)
+    Menu::with_items(
+        app,
+        &[
+            &open as &dyn IsMenuItem<Wry>,
+            &current,
+            &restart,
+            &quick,
+            &diag,
+            &router,
+            &gap,
+            &quit,
+        ],
+    )
 }
 
 fn on_menu(app: &AppHandle, id: &str) {
@@ -222,7 +228,7 @@ fn switch_routing(app: &AppHandle) {
 
 /// «Выход». A test run is canceled and puts zapret back; any other change finishes first. The wait
 /// is on another thread (menu events come on the event-loop one).
-fn quit(app: &AppHandle) {
+pub fn quit(app: &AppHandle) {
     actions::state(app).cancel_tests();
     actions::state(app).cancel_diag();
     let app = app.clone();
@@ -298,6 +304,7 @@ mod tests {
             proxy,
             totals: Totals::default(),
             rules_error: None,
+            needs_grant: false,
         };
         let down = || ProxyState::Down {
             error: "refused".into(),

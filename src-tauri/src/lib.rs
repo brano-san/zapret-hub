@@ -98,6 +98,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::quick_check,
             commands::take_notices,
             commands::set_router_enabled,
+            commands::grant_routing,
             commands::router_status,
             commands::list_routes,
             commands::get_route,
@@ -255,19 +256,63 @@ pub fn run() -> anyhow::Result<()> {
             if !(autostarted && settings.start_minimized && settings.wizard_done) {
                 window::show(app.handle());
             }
+            #[cfg(target_os = "linux")]
+            quit_on_signals(app.handle());
             jobs::start(app.handle(), flowseal);
             cli::start(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())?
-        .run(|_app, event| {
+        .run(|app, event| match event {
             // The close button leaves the app in the tray; only «Выход» ends it (spec 4.2).
-            if let tauri::RunEvent::ExitRequested {
+            tauri::RunEvent::ExitRequested {
                 code: None, api, ..
-            } = event
-            {
-                api.prevent_exit();
-            }
+            } => api.prevent_exit(),
+            tauri::RunEvent::Exit => routing::stop_on_exit(&app.state::<AppState>()),
+            _ => {}
         });
     Ok(())
+}
+
+/// SIGTERM (logout, `kill`), SIGINT (Ctrl+C) and SIGHUP end the app as «Выход» does, routing
+/// stopped first: its table and rules outlive the process. A second signal kills at once.
+#[cfg(target_os = "linux")]
+fn quit_on_signals(app: &tauri::AppHandle) {
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    static WRITE: AtomicI32 = AtomicI32::new(-1);
+    extern "C" fn wake(_: libc::c_int) {
+        let byte = 0u8;
+        // SAFETY: write(2) is async-signal-safe; the pipe stays open for the process's life.
+        unsafe { libc::write(WRITE.load(Ordering::Relaxed), (&raw const byte).cast(), 1) };
+    }
+
+    let mut fds = [0; 2];
+    // SAFETY: plain syscalls on a local array and a static handler.
+    unsafe {
+        if libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) != 0 {
+            log::warn!(
+                "cannot watch for signals: {}",
+                std::io::Error::last_os_error()
+            );
+            return;
+        }
+        WRITE.store(fds[1], Ordering::Relaxed);
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = wake as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        action.sa_flags = libc::SA_RESETHAND | libc::SA_RESTART;
+        for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+            libc::sigaction(signal, &raw const action, std::ptr::null_mut());
+        }
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let mut byte = 0u8;
+        // SAFETY: reads one byte into a local.
+        if unsafe { libc::read(fds[0], (&raw mut byte).cast(), 1) } == 1 {
+            log::info!("quitting on a signal");
+            routing::stop_on_exit(&app.state::<AppState>());
+            tray::quit(&app);
+        }
+    });
 }

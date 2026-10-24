@@ -1,5 +1,5 @@
-//! The router in the app (router spec 3, 7): its setup from the settings, the switch, and the
-//! pauses for what changes the WinDivert driver under it.
+//! The router in the app (router spec 3, 7): its setup from the settings, the switch, the pauses
+//! for what changes the WinDivert driver under it, and on Linux the capabilities and the cleanup.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -13,13 +13,48 @@ use crate::actions::{self, state};
 use crate::settings::Settings;
 use crate::state::{AppState, lock};
 
-/// zapret2's DLL (spec 3.1) and the proxy from the settings.
+/// zapret2's DLL (spec 3.1; Windows, Linux routes with nftables) and the proxy from the settings.
 pub fn setup(state: &AppState) -> anyhow::Result<Setup> {
     let proxy = parse_proxy(state.settings().socks5.as_deref())?;
-    Ok(Setup {
-        dll: dll(state)?,
-        proxy,
-    })
+    let dll = if cfg!(windows) {
+        dll(state)?
+    } else {
+        PathBuf::new()
+    };
+    Ok(Setup { dll, proxy })
+}
+
+/// Linux: gives the hub's exe the capabilities routing needs (one root step); they take effect
+/// on its next start.
+pub fn grant() -> anyhow::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let exe = std::env::current_exe()?;
+        router::linux::caps::grant(&exe)?;
+        log::info!("routing capabilities granted to {}", exe.display());
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    anyhow::bail!("only Linux routing needs capabilities")
+}
+
+/// Before anything routes: what a crashed session left (Linux) goes, so rule traffic is never
+/// sent to a dead acceptor.
+pub fn clear_stale() {
+    if router::clear_stale() {
+        log::info!("cleared the routing a previous session left");
+    }
+}
+
+/// On the way out (`RunEvent::Exit`, a signal): Linux routing is the system's table and rules,
+/// which outlive the process; Windows' handles close with it.
+pub fn stop_on_exit(state: &AppState) {
+    if cfg!(target_os = "linux") {
+        // The app is ending: nothing to tell the window or the tray.
+        state.router.on_change(|| {});
+        state.router.stop();
+        log::info!("routing stopped on exit");
+    }
 }
 
 /// zapret2's WinDivert DLL; a zapret2 folder that does not open counts as none.

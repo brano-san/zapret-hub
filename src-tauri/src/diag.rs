@@ -545,7 +545,7 @@ impl AppEnv {
         {
             rule.apps.push(exe);
         }
-        rule.apps.push("curl.exe".into());
+        rule.apps.push(probe::curl::CURL.into());
         for ip in group.representatives.iter().filter_map(ipv4_of) {
             let ip = ip.to_string();
             if !rule.ips.contains(&ip) {

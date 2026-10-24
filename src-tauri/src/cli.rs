@@ -150,6 +150,7 @@ fn dispatch(app: &AppHandle, request: Request) -> Result<Value, String> {
         Request::SetRouterEnabled { enabled } => {
             json(block_on(commands::set_router_enabled(handle, enabled))?)
         }
+        Request::GrantRouting => json(block_on(commands::grant_routing())?),
         Request::RouterStatus => json(commands::router_status(state)),
         Request::ListRoutes => json(block_on(commands::list_routes(handle))),
         Request::GetRoute { name } => json(block_on(commands::get_route(handle, name))?),

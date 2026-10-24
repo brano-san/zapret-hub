@@ -576,6 +576,13 @@ pub async fn set_router_enabled(handle: AppHandle, enabled: bool) -> Answer<Rout
     blocking(move || routing::set_enabled(&handle, enabled)).await
 }
 
+/// Linux: «Разрешить маршрутизацию» (`routing::grant`); the hub routes after a restart.
+#[tauri::command]
+#[specta::specta]
+pub async fn grant_routing() -> Answer<()> {
+    blocking(routing::grant).await
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn router_status(state: State<'_, AppState>) -> RouterStatus {

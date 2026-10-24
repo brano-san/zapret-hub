@@ -408,6 +408,8 @@ enum RoutesCommand {
         #[arg(long)]
         all: bool,
     },
+    /// Linux: give Zapret Hub the capabilities routing needs (asks for the password once); restart it then.
+    Grant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -919,6 +921,7 @@ fn run(args: Cli, call: Call, note: Note) -> Result<Done, Fail> {
             preset: preset.into(),
         },
         Command::Routes(RoutesCommand::Flows { all }) => Request::RouteFlows { all },
+        Command::Routes(RoutesCommand::Grant) => Request::GrantRouting,
         Command::Diag(DiagCommand::Profiles) => Request::DiagProfiles,
         Command::Diag(DiagCommand::Answer { answer }) => Request::DiagAnswer {
             answer: answer.into(),
@@ -1674,6 +1677,7 @@ mod tests {
                 },
             ),
             (&["routes", "flows"], Request::RouteFlows { all: false }),
+            (&["routes", "grant"], Request::GrantRouting),
             (
                 &["routes", "flows", "--all"],
                 Request::RouteFlows { all: true },

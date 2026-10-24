@@ -103,6 +103,8 @@ export const commands = {
 	takeNotices: () => __TAURI_INVOKE<Notice[]>("take_notices"),
 	/**  The only command that writes `router_enabled` (`routing::set_enabled`). */
 	setRouterEnabled: (enabled: boolean) => typedError<RouterStatus, string>(__TAURI_INVOKE("set_router_enabled", { enabled })),
+	/**  Linux: «Разрешить маршрутизацию» (`routing::grant`); the hub routes after a restart. */
+	grantRouting: () => typedError<null, string>(__TAURI_INVOKE("grant_routing")),
 	routerStatus: () => __TAURI_INVOKE<RouterStatus>("router_status"),
 	/**  Reading the rules may reopen the filter, up to a second: off the main thread. */
 	listRoutes: () => __TAURI_INVOKE<RoutesView>("list_routes"),
@@ -850,6 +852,8 @@ export type RouterStatus = {
 	proxy: ProxyState,
 	totals: Totals,
 	rules_error: string | null,
+	/**  Linux: this process lacks the capabilities routing needs; `grant` and a restart fix it. */
+	needs_grant: boolean,
 };
 
 export type RoutesView = {

@@ -112,6 +112,8 @@ pub enum Request {
     SetRouterEnabled {
         enabled: bool,
     },
+    /// Linux: the capabilities routing needs, on the app's exe.
+    GrantRouting,
     RouterStatus,
     ListRoutes,
     GetRoute {
@@ -395,6 +397,7 @@ mod tests {
                 preset: Preset::DiscordVoice,
             },
             Request::RouteFlows { all: true },
+            Request::GrantRouting,
             Request::DiagProfiles,
             Request::StartDiag {
                 request: DiagRequest {
