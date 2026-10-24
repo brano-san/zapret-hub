@@ -108,9 +108,18 @@ pub fn ruleset(
         } else {
             String::new()
         };
+        // Answers to multicast (mDNS, SSDP) and broadcast never come back to a relay.
+        // ponytail: a subnet broadcast (192.168.1.255) is not told apart; `fib daddr type` would,
+        // but needs nft_fib, which some kernels (WSL) lack.
+        let cast = if proto == "udp" {
+            "        ip daddr { 224.0.0.0/4, 255.255.255.255 } return\n"
+        } else {
+            ""
+        };
         format!(
             "        meta nfproto ipv6 return\n\
              \x20       oifname \"lo\" return\n\
+             {cast}\
              \x20       meta mark & {MARK_OWN:#x} != 0 return\n\
              {group}\
              \x20       ip daddr {} {proto} dport {} return\n\
@@ -220,6 +229,7 @@ mod tests {
              \x20       type route hook output priority mangle; policy accept;\n\
              \x20       meta nfproto ipv6 return\n\
              \x20       oifname \"lo\" return\n\
+             \x20       ip daddr { 224.0.0.0/4, 255.255.255.255 } return\n\
              \x20       meta mark & 0x20000000 != 0 return\n\
              \x20       meta skgid zapret-bypass return\n\
              \x20       ip daddr 127.0.0.1 udp dport 2080 return\n\
