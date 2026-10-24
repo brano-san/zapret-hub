@@ -336,6 +336,26 @@ pub fn stop(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The last 100 lines of the unit's journal: as this user (enough in the `systemd-journal` or
+/// `adm` group), else as root without a dialog (`sudo -n`).
+pub fn logs(name: &str) -> anyhow::Result<String> {
+    let unit = unit_name(name);
+    let args = ["-u", unit.as_str(), "-n", "100", "--no-pager"];
+    let lines = |out: exec::Output| {
+        let text = out.stdout.trim().to_owned();
+        (out.success() && !text.is_empty() && !text.contains("-- No entries --")).then_some(text)
+    };
+    cmd("journalctl", &args)
+        .ok()
+        .and_then(lines)
+        .or_else(|| crate::root::run_unprompted("journalctl", &args).and_then(lines))
+        .with_context(|| {
+            format!(
+                "the journal of {unit} is empty or unreadable for this user:                  run `journalctl -u {unit}` as root or join the systemd-journal group"
+            )
+        })
+}
+
 /// `net.ipv4.tcp_timestamps`; `None` when unreadable.
 pub fn tcp_timestamps() -> Option<bool> {
     parse_timestamps(&std::fs::read_to_string("/proc/sys/net/ipv4/tcp_timestamps").ok()?)

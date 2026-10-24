@@ -19,14 +19,32 @@ use std::path::PathBuf;
 /// `$XDG_DATA_HOME` when set and absolute, else `~/.local/share` (empty when `HOME` is unset).
 #[cfg(target_os = "linux")]
 pub fn data_home() -> PathBuf {
-    data_home_of(std::env::var_os("XDG_DATA_HOME"), std::env::var_os("HOME"))
+    xdg_dir(
+        std::env::var_os("XDG_DATA_HOME"),
+        std::env::var_os("HOME"),
+        ".local/share",
+    )
+}
+
+/// `$XDG_CONFIG_HOME` when set and absolute, else `~/.config` (empty when `HOME` is unset).
+#[cfg(target_os = "linux")]
+pub fn config_home() -> PathBuf {
+    xdg_dir(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("HOME"),
+        ".config",
+    )
 }
 
 #[cfg(target_os = "linux")]
-fn data_home_of(xdg: Option<std::ffi::OsString>, home: Option<std::ffi::OsString>) -> PathBuf {
+fn xdg_dir(
+    xdg: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+    under_home: &str,
+) -> PathBuf {
     xdg.map(PathBuf::from)
         .filter(|dir| dir.is_absolute())
-        .or_else(|| home.map(|home| PathBuf::from(home).join(".local/share")))
+        .or_else(|| home.map(|home| PathBuf::from(home).join(under_home)))
         .unwrap_or_default()
 }
 
@@ -186,14 +204,14 @@ mod tests {
     fn data_home_prefers_an_absolute_xdg_then_home() {
         let some = |s: &str| Some(std::ffi::OsString::from(s));
         assert_eq!(
-            data_home_of(some("/data"), some("/home/me")),
+            xdg_dir(some("/data"), some("/home/me"), ".local/share"),
             PathBuf::from("/data")
         );
         assert_eq!(
-            data_home_of(some("rel"), some("/home/me")),
+            xdg_dir(some("rel"), some("/home/me"), ".local/share"),
             PathBuf::from("/home/me/.local/share")
         );
-        assert_eq!(data_home_of(None, None), PathBuf::new());
+        assert_eq!(xdg_dir(None, None, ".config"), PathBuf::new());
     }
 
     fn read(bytes: &[u8]) -> String {

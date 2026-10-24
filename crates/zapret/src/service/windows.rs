@@ -252,6 +252,11 @@ pub fn stop(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Windows services keep no journal of their own: `--debug` output goes nowhere a reader sees.
+pub fn logs(_name: &str) -> anyhow::Result<String> {
+    anyhow::bail!("a service's journal is on Linux only: Windows keeps none for zapret2")
+}
+
 /// `netsh interface tcp show global`, the `RFC 1323 Timestamps` line. Labels are translated, the
 /// RFC number and the value are not. `None` when the line is missing.
 pub fn tcp_timestamps() -> Option<bool> {

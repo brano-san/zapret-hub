@@ -413,9 +413,9 @@ fn expand(zip: &Path, dest: &Path, cancel: &AtomicBool) -> anyhow::Result<()> {
     anyhow::bail!("neither bsdtar nor unzip was found: install one of them to unpack the release")
 }
 
-/// `Expand-Archive` of Windows PowerShell 5.1.
+/// `Expand-Archive` of Windows PowerShell 5.1 (TG WS Proxy's zip goes through it too).
 #[cfg(windows)]
-fn expand(zip: &Path, dest: &Path, cancel: &AtomicBool) -> anyhow::Result<()> {
+pub fn expand(zip: &Path, dest: &Path, cancel: &AtomicBool) -> anyhow::Result<()> {
     let quote = |path: &Path| format!("'{}'", path.display().to_string().replace('\'', "''"));
     let script = format!(
         "$ProgressPreference='SilentlyContinue'; $ErrorActionPreference='Stop'; \
