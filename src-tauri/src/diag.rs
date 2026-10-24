@@ -33,6 +33,7 @@ use crate::state::{AppState, DiagEnds};
 use crate::{notify, routing, texts, window};
 
 mod apply;
+mod context;
 mod evidence;
 
 pub use apply::apply;
@@ -353,6 +354,13 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
         &ctx,
         exec::LocalTime::now().stamp(),
         observe_secs,
+    );
+    context::fill(
+        &state,
+        &ctx,
+        folder.as_ref(),
+        engine2.as_ref(),
+        &mut summary,
     );
     summary.sources_missing = missing;
     summary.explanations.extend(summary::check_lines(&checks));
@@ -1243,7 +1251,10 @@ mod tests {
             [
                 "Discord: discord.com",
                 "Dead by Daylight: steam.live.bhvrdbd.com",
-                "YouTube: www.youtube.com"
+                "YouTube: www.youtube.com",
+                "Steam: store.steampowered.com",
+                "Steam: steamcommunity.com",
+                "Discord: демонстрация экрана: discord.com"
             ]
         );
     }

@@ -301,6 +301,8 @@ export type Context = {
 	strategy: string | null,
 	engine_running: boolean,
 	flowseal_outdated: boolean,
+	/**  The Flowseal folder's version, for the changes since the last report. */
+	flowseal_version: string | null,
 	routing: string,
 	proxy: string | null,
 	proxy_alive: boolean | null,

@@ -1,0 +1,20 @@
+id = "steam"
+name = "Steam"
+apps = ["steam.exe", "steamwebhelper.exe"]
+hint = "Откройте магазин или начните загрузку"
+domains = [
+    "steampowered.com",
+    "steamcommunity.com",
+    "steamstatic.com",
+    "steamcontent.com",
+    "steamserver.net",
+    "akamaihd.net",
+]
+
+[[probe]]
+kind = "https"
+target = "store.steampowered.com"
+
+[[probe]]
+kind = "https"
+target = "steamcommunity.com"

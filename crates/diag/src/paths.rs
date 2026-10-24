@@ -135,7 +135,7 @@ fn point_rule(group: &Group, ctx: &Ctx) -> Rule {
 
 /// The enabled rule that sends the group through the proxy now: by address or name, or as a flow
 /// of the profile's program.
-fn routed_by(group: &Group, ctx: &Ctx) -> Option<String> {
+pub fn routed_by(group: &Group, ctx: &Ctx) -> Option<String> {
     let v4 = |dst: &str| match dst.parse() {
         Ok(SocketAddr::V4(a)) => Some(a),
         _ => None,

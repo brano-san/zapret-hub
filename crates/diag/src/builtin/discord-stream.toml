@@ -1,0 +1,13 @@
+id = "discord-stream"
+name = "Discord: демонстрация экрана"
+apps = ["Discord.exe", "DiscordPTB.exe", "DiscordCanary.exe"]
+hint = "Начните демонстрацию экрана или откройте чужую трансляцию"
+domains = ["discord.com", "discord.gg", "discord.media", "discordapp.com", "discordapp.net"]
+
+[[probe]]
+kind = "https"
+target = "discord.com"
+
+[[probe]]
+kind = "discord-ip-discovery"
+target = "observed"

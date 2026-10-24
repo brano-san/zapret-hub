@@ -1,7 +1,9 @@
 pub mod agent;
 pub mod candidates;
 pub mod circular_store;
+pub mod compare;
 pub mod cover;
+pub mod coverage;
 pub mod culprits;
 pub mod evaluate;
 pub mod logs;
