@@ -500,14 +500,43 @@ const EXCLUDE_DOMAINS: &str = "list-exclude-user.txt";
 const EXCLUDE_IPS: &str = "ipset-exclude-user.txt";
 
 /// One entry per line; blank lines and `#` comments are not entries.
+fn is_entry(line: &str) -> bool {
+    let line = line.trim();
+    !line.is_empty() && !line.starts_with('#')
+}
+
 fn read_list(path: &Path) -> Vec<String> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
         .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(str::to_owned)
+        .filter(|line| is_entry(line))
+        .map(|line| line.trim().to_owned())
         .collect()
+}
+
+/// The user's list file `old` with `entries` as its entries: blank lines, comments and kept
+/// entries stay where they are (with the file's line ends), removed entries go, new ones are
+/// appended. `None` when the file already has exactly these entries: nothing to write.
+fn merge_list(old: &str, entries: &[String]) -> Option<String> {
+    let wanted: Vec<&str> = entries.iter().map(|entry| entry.trim()).collect();
+    let current: Vec<&str> = old.lines().filter(|l| is_entry(l)).map(str::trim).collect();
+    if current == wanted {
+        return None;
+    }
+    let eol = if old.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut text = String::new();
+    let kept = old
+        .lines()
+        .filter(|line| !is_entry(line) || wanted.contains(&line.trim()));
+    let added = wanted
+        .iter()
+        .copied()
+        .filter(|entry| !current.contains(entry));
+    for line in kept.chain(added) {
+        text.push_str(line);
+        text.push_str(eol);
+    }
+    Some(text)
 }
 
 /// An entry is one line of text the engine reads as one entry: not empty, no comment.
@@ -534,7 +563,8 @@ pub fn exclusions(app: &AppHandle) -> anyhow::Result<Exclusions> {
     })
 }
 
-/// The lists written whole (their comments go), the ports into the settings, then the active
+/// The lists merged into their files (comments stay, an unchanged file is not written), the
+/// ports into the settings, then the active
 /// zapret2 strategy installed again: the engine reads the lists at its start, and Linux's
 /// nftables queue takes the ports.
 pub fn save_exclusions(app: &AppHandle, exclusions: Exclusions) -> anyhow::Result<()> {
@@ -557,17 +587,14 @@ pub fn save_exclusions(app: &AppHandle, exclusions: Exclusions) -> anyhow::Resul
         (EXCLUDE_IPS, &exclusions.ips),
     ] {
         let path = lists.join(name);
-        let text: String = entries
-            .iter()
-            .map(|entry| {
-                format!(
-                    "{}
-",
-                    entry.trim()
-                )
-            })
-            .collect();
-        std::fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
+        let old = std::fs::read_to_string(&path).unwrap_or_default();
+        let Some(text) = merge_list(&old, entries) else {
+            continue;
+        };
+        let temp = path.with_extension("txt.tmp");
+        std::fs::write(&temp, text).with_context(|| format!("cannot write {}", temp.display()))?;
+        std::fs::rename(&temp, &path)
+            .with_context(|| format!("cannot replace {}", path.display()))?;
     }
     {
         let _saving = state.saving();
@@ -594,25 +621,33 @@ mod tests {
     fn a_list_is_its_entries_without_blanks_and_comments() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("list.txt");
-        std::fs::write(
-            &path,
-            "# mine
-example.com
-
-  vk.com  
-",
-        )
-        .unwrap();
+        std::fs::write(&path, "# mine\nexample.com\n\n  vk.com  \n").unwrap();
         assert_eq!(read_list(&path), ["example.com", "vk.com"]);
         assert!(read_list(&dir.path().join("none.txt")).is_empty());
         let ok = ["example.com".to_owned(), "10.0.0.0/8".to_owned()];
         assert!(check_entries("x", &ok).is_ok());
-        for bad in [
-            "", "a b", "a#b", "a
-b",
-        ] {
+        for bad in ["", "a b", "a#b", "a\nb"] {
             assert!(check_entries("x", &[bad.to_owned()]).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_saved_list_keeps_the_users_comments_and_an_unchanged_one_is_not_written() {
+        let old = "# work\r\nexample.com\r\n\r\n# games\r\n  vk.com  \r\nold.org\r\n";
+        let entries = |list: &[&str]| list.iter().map(|e| (*e).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            merge_list(old, &entries(&["example.com", "vk.com", "old.org"])),
+            None
+        );
+        assert_eq!(
+            merge_list(old, &entries(&["vk.com", "example.com", "new.net"])).as_deref(),
+            Some("# work\r\nexample.com\r\n\r\n# games\r\n  vk.com  \r\nnew.net\r\n")
+        );
+        assert_eq!(
+            merge_list("", &entries(&["a.com"])).as_deref(),
+            Some("a.com\n")
+        );
+        assert_eq!(merge_list("# only\n", &[]), None);
     }
 
     #[test]
