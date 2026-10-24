@@ -81,6 +81,41 @@ fn a_run_saved_before_zapret2_still_loads() {
 }
 
 #[test]
+fn a_0_8_0_ranking_names_the_zapret2_copies() {
+    let dir = tempfile::tempdir().unwrap();
+    history::save(
+        dir.path(),
+        &run(
+            "2026-10-09_10-00-00",
+            Suite::Standard,
+            false,
+            vec![
+                result("general (ALT)", "a"),
+                result("my own.bat", "b"),
+                result("zapret2:general", "c"),
+                result("general (ALT2)", "d"),
+            ],
+        ),
+    )
+    .unwrap();
+    let names: Vec<String> = history::latest_ranking(dir.path())
+        .unwrap()
+        .unwrap()
+        .strategies
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "zapret2:general (ALT)",
+            "zapret2:general",
+            "zapret2:general (ALT2)"
+        ]
+    );
+}
+
+#[test]
 fn latest_result_per_strategy_and_the_latest_full_ranking() {
     let dir = tempfile::tempdir().unwrap();
     history::save(

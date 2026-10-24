@@ -139,8 +139,21 @@ pub fn latest_results(dir: &Path) -> anyhow::Result<HashMap<String, Latest>> {
 }
 
 /// The newest standard run that finished: «Применить лучшую», the overview, the tray's top five.
+/// A 0.8.0 run names Flowseal `.bat`s: each stands as its zapret2 copy
+/// (`zapret2::strategies::flowseal_copy`), the first of several landing on one name kept.
 pub fn latest_ranking(dir: &Path) -> anyhow::Result<Option<TestRun>> {
-    Ok(all(dir)?
+    let Some(mut run) = all(dir)?
         .into_iter()
-        .find(|run| run.suite == Suite::Standard && !run.canceled))
+        .find(|run| run.suite == Suite::Standard && !run.canceled)
+    else {
+        return Ok(None);
+    };
+    let mut seen = std::collections::HashSet::new();
+    run.strategies.retain_mut(|s| {
+        if zapret2::strip_prefix(&s.name).is_none() {
+            s.name = zapret2::strategies::flowseal_copy(&s.name);
+        }
+        seen.insert(s.name.to_lowercase())
+    });
+    Ok(Some(run))
 }
