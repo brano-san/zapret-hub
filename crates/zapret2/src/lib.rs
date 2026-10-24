@@ -1,8 +1,11 @@
-//! bol-van/zapret2 (`winws2.exe`, strategies in Lua) as Zapret Hub's second engine (zapret2
-//! spec): its folder and version here, its strategies in `strategies`, the check that runs winws2
-//! and the `zapret2` service in `service`.
+//! bol-van/zapret2 (`winws2.exe` on Windows, `nfqws2` on Linux, strategies in Lua) as Zapret
+//! Hub's engine (zapret2 spec): its folder and version here, its strategies in `strategies`, the
+//! check that runs the engine and the `zapret2` service in `service`, and on Linux the nftables
+//! queue that feeds it in `nft`.
 
 pub mod circular;
+#[cfg(target_os = "linux")]
+pub mod nft;
 pub mod service;
 pub mod strategies;
 
@@ -22,14 +25,26 @@ pub fn strip_prefix(name: &str) -> Option<&str> {
         .then(|| &name[PREFIX.len()..])
 }
 
-/// Where `winws2.exe` may be under the root: zapret-win-bundle, a `bin\`, the release zip.
+/// The engine's file name.
+#[cfg(windows)]
+pub const EXE: &str = "winws2.exe";
+#[cfg(target_os = "linux")]
+pub const EXE: &str = "nfqws2";
+/// Where the engine may be under the root: zapret-win-bundle, a `bin\`, the release zip.
+#[cfg(windows)]
 const EXE_DIRS: [&str; 3] = ["", "bin", r"binaries\windows-x86_64"];
+/// Where the engine may be under the root: the release zip, a build's `bin/` or root.
+#[cfg(target_os = "linux")]
+const EXE_DIRS: [&str; 4] = ["binaries/linux-x86_64", "binaries/x86_64", "bin", ""];
 /// What `winws2.exe` needs next to it.
+#[cfg(windows)]
 const BESIDE_EXE: [&str; 3] = ["cygwin1.dll", "WinDivert.dll", "WinDivert64.sys"];
+#[cfg(target_os = "linux")]
+const BESIDE_EXE: [&str; 0] = [];
 /// What every strategy loads from `lua\`.
 const LUA_FILES: [&str; 2] = ["zapret-lib.lua", "zapret-antidpi.lua"];
 
-/// A zapret2 folder with what `winws2.exe` needs (zapret2 spec 4).
+/// A zapret2 folder with what the engine needs (zapret2 spec 4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Engine {
     root: PathBuf,
@@ -37,6 +52,10 @@ pub struct Engine {
     /// The game filter: the `%GameFilter*%` placeholders open the game ports when it is on
     /// (`strategies::tail`). On unless the settings say otherwise.
     game_filter: bool,
+    /// Ports whose traffic never reaches the engine (`51413`, `6881-6889`): Linux's nftables
+    /// queue leaves them out (`nft::table`), as it does every process of the `zapret-bypass`
+    /// group. Windows filters nothing out by them.
+    excluded_ports: Vec<String>,
 }
 
 /// What `winws2.exe --version` says, checked against the Lua files.
@@ -46,6 +65,21 @@ pub struct Version {
     pub text: String,
     /// `lua_compat_ver`.
     pub compat: u32,
+}
+
+/// `443` or `6881-6889`: ports 1-65535, a range from low to high.
+pub fn port_range(text: &str) -> bool {
+    let port = |p: &str| {
+        !p.is_empty()
+            && p.bytes().all(|b| b.is_ascii_digit())
+            && p.parse::<u16>().is_ok_and(|p| p > 0)
+    };
+    match text.trim().split_once('-') {
+        Some((from, to)) => {
+            port(from) && port(to) && from.parse::<u16>().ok() <= to.parse::<u16>().ok()
+        }
+        None => port(text.trim()),
+    }
 }
 
 /// What `version` is cached for: the exe, and when it and `lua\zapret-lib.lua` last changed.
@@ -66,7 +100,7 @@ impl Engine {
             .components()
             .collect();
         anyhow::ensure!(
-            !zapret::checks::has_cyrillic(&root.to_string_lossy()),
+            !cfg!(windows) || !zapret::checks::has_cyrillic(&root.to_string_lossy()),
             "{} has Cyrillic letters, which winws2 (a Cygwin program) cannot use: move zapret2 to a folder with a Latin path",
             root.display()
         );
@@ -78,7 +112,7 @@ impl Engine {
         let exe_dir = EXE_DIRS
             .iter()
             .map(|sub| root.join(sub))
-            .find(|dir| dir.join("winws2.exe").is_file());
+            .find(|dir| dir.join(EXE).is_file());
         let mut missing = Vec::new();
         match &exe_dir {
             Some(exe_dir) => {
@@ -89,7 +123,7 @@ impl Engine {
                     }
                 }
             }
-            None => missing.push("winws2.exe".to_owned()),
+            None => missing.push(EXE.to_owned()),
         }
         for file in LUA_FILES {
             let path = Path::new("lua").join(file);
@@ -98,7 +132,7 @@ impl Engine {
             }
         }
         let exe = match exe_dir {
-            Some(exe_dir) if missing.is_empty() => exe_dir.join("winws2.exe"),
+            Some(exe_dir) if missing.is_empty() => exe_dir.join(EXE),
             _ => anyhow::bail!(
                 "{} is not a zapret2 folder: missing {}",
                 root.display(),
@@ -109,6 +143,7 @@ impl Engine {
             root,
             exe,
             game_filter: true,
+            excluded_ports: Vec::new(),
         })
     }
 
@@ -127,6 +162,24 @@ impl Engine {
 
     pub fn game_filter(&self) -> bool {
         self.game_filter
+    }
+
+    /// The engine with the excluded ports of the settings: each a port or a `from-to` range.
+    pub fn with_excluded_ports(self, ports: &[String]) -> anyhow::Result<Self> {
+        for port in ports {
+            anyhow::ensure!(
+                port_range(port),
+                "{port:?} is not a port or a port range like 6881-6889"
+            );
+        }
+        Ok(Self {
+            excluded_ports: ports.iter().map(|port| port.trim().to_owned()).collect(),
+            ..self
+        })
+    }
+
+    pub fn excluded_ports(&self) -> &[String] {
+        &self.excluded_ports
     }
 
     pub fn exe(&self) -> &Path {
@@ -191,13 +244,13 @@ fn cached(
 /// no banner, no required level and two different levels are errors.
 fn verdict(output: &exec::Output, lib: &Path, lib_text: &str) -> anyhow::Result<Version> {
     let (text, compat) = parse_banner(&output.stdout)
-        .ok_or_else(|| anyhow::anyhow!("winws2.exe printed no version:\n{}", output.describe()))?;
+        .ok_or_else(|| anyhow::anyhow!("{EXE} printed no version:\n{}", output.describe()))?;
     let required = required_compat(lib_text).ok_or_else(|| {
         anyhow::anyhow!("{} has no NFQWS2_COMPAT_VER_REQUIRED line", lib.display())
     })?;
     anyhow::ensure!(
         compat == required,
-        "winws2.exe {text} has lua_compat_ver {compat}, but {} requires {required}: the engine and the Lua files come from different zapret2 releases",
+        "{EXE} {text} has lua_compat_ver {compat}, but {} requires {required}: the engine and the Lua files come from different zapret2 releases",
         lib.display()
     );
     Ok(Version { text, compat })
@@ -242,7 +295,7 @@ pub struct Info {
     pub error: Option<String>,
 }
 
-/// Whether `dir` (or its `zapret-winws`) has `winws2.exe` and `lua\zapret-lib.lua`: the cheap
+/// Whether `dir` (or its `zapret-winws`) has the engine and `lua\zapret-lib.lua`: the cheap
 /// half of `Engine::open`, for searching.
 pub fn looks_like_zapret2(dir: &Path) -> bool {
     [dir.to_path_buf(), dir.join("zapret-winws")]
@@ -251,7 +304,7 @@ pub fn looks_like_zapret2(dir: &Path) -> bool {
             root.join("lua").join("zapret-lib.lua").is_file()
                 && EXE_DIRS
                     .iter()
-                    .any(|sub| root.join(sub).join("winws2.exe").is_file())
+                    .any(|sub| root.join(sub).join(EXE).is_file())
         })
 }
 
@@ -279,6 +332,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(windows)]
     #[test]
     fn a_release_is_found_by_its_exe_and_lua() {
         let tmp = tempfile::tempdir().unwrap();
@@ -300,6 +354,52 @@ mod tests {
             find_zapret2(&[empty, bundle.clone(), release]),
             Some(bundle)
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_release_is_found_by_nfqws2_and_lua() {
+        let tmp = tempfile::tempdir().unwrap();
+        let touch = |path: &Path| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        };
+        let dir = tmp.path().join("zapret2-v0.9.4");
+        touch(&dir.join("binaries/linux-x86_64/nfqws2"));
+        touch(&dir.join("binaries/windows-x86_64/winws2.exe"));
+        touch(&dir.join("lua/zapret-lib.lua"));
+        assert!(looks_like_zapret2(&dir));
+        let err = Engine::open(&dir).unwrap_err().to_string();
+        assert!(err.ends_with("missing lua/zapret-antidpi.lua"), "{err}");
+        touch(&dir.join("lua/zapret-antidpi.lua"));
+        let engine = Engine::open(&dir).unwrap();
+        assert_eq!(engine.exe(), dir.join("binaries/linux-x86_64/nfqws2"));
+        // Cyrillic is a Cygwin limit: nfqws2 takes it.
+        let ru = tmp.path().join("запрет");
+        touch(&ru.join("nfqws2"));
+        touch(&ru.join("lua/zapret-lib.lua"));
+        touch(&ru.join("lua/zapret-antidpi.lua"));
+        assert!(Engine::open(&ru).is_ok());
+    }
+
+    #[test]
+    fn excluded_ports_are_ports_or_ranges() {
+        for ok in ["443", " 51413 ", "6881-6889", "1-65535"] {
+            assert!(port_range(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "0",
+            "65536",
+            "80-",
+            "-80",
+            "90-80",
+            "80,443",
+            "443; flush ruleset",
+            "1 2",
+        ] {
+            assert!(!port_range(bad), "{bad}");
+        }
     }
 
     const LIB: &str = r"D:\zapret2\lua\zapret-lib.lua";
@@ -336,7 +436,7 @@ mod tests {
         let err = verdict(&output, Path::new(LIB), REQUIRES_6).unwrap_err();
         assert_eq!(
             err.to_string(),
-            format!("winws2.exe printed no version:\n{}", output.describe())
+            format!("{EXE} printed no version:\n{}", output.describe())
         );
     }
 
@@ -357,7 +457,7 @@ mod tests {
         assert_eq!(
             err.to_string(),
             format!(
-                "winws2.exe v1.0.5.2 (6b6c63e) has lua_compat_ver 5, but {LIB} requires 6: the engine and the Lua files come from different zapret2 releases"
+                "{EXE} v1.0.5.2 (6b6c63e) has lua_compat_ver 5, but {LIB} requires 6: the engine and the Lua files come from different zapret2 releases"
             )
         );
     }

@@ -5,6 +5,7 @@ use zapret2::Engine;
 use zapret2::service::{bin_path, dry_run_args, intercept_args, save, validate};
 use zapret2::strategies;
 
+#[cfg(windows)]
 #[test]
 fn winws2_gets_the_strategy_first_and_its_own_flags_last() {
     let tail = r#"--chdir="D:\zapret2" --wf-tcp-out=443 --lua-desync=fake:blob=fake_default_tls"#;
@@ -19,6 +20,21 @@ fn winws2_gets_the_strategy_first_and_its_own_flags_last() {
     assert_eq!(
         bin_path(&engine, tail),
         format!("\"{}\\bin\\winws2.exe\" {tail}", dir.path().display())
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn nfqws2_gets_the_strategy_first_and_its_own_flags_last() {
+    let tail = r#"--chdir="/opt/zapret2" --lua-desync=fake:blob=fake_default_tls --qnum=200"#;
+    assert_eq!(dry_run_args(tail), format!("{tail} --dry-run"));
+    assert_eq!(intercept_args(tail), format!("{tail} --intercept=0"));
+    let dir = tempfile::tempdir().unwrap();
+    common::fake_engine(dir.path(), "bin", common::LIB);
+    let engine = Engine::open(dir.path()).unwrap();
+    assert_eq!(
+        bin_path(&engine, tail),
+        format!("\"{}/bin/nfqws2\" {tail}", dir.path().display())
     );
 }
 
@@ -52,7 +68,7 @@ fn a_save_writes_nothing_until_the_check_passes() {
         "{:#}",
         save(&engine, data.path(), "mine", text, true).unwrap_err()
     );
-    assert!(err.contains("os error 193"), "{err}");
+    assert!(err.contains(common::CANNOT_RUN), "{err}");
     assert!(!file.exists());
     let err = format!(
         "{:#}",
@@ -79,7 +95,7 @@ fn a_bad_name_is_refused_before_any_file_is_written() {
             save(&engine, data.path(), name, "--wf-tcp-out=443", true).unwrap_err()
         );
         assert!(
-            err.contains(refusal) && !err.contains("os error 193"),
+            err.contains(refusal) && !err.contains(common::CANNOT_RUN),
             "{name}: {err}"
         );
     }

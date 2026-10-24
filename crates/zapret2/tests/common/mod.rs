@@ -3,13 +3,14 @@
 use std::fs;
 use std::path::Path;
 
-/// A zapret2 folder under `root` with `winws2.exe` and its DLLs in `exe_dir` (`""`, `bin`, ...)
-/// and `lua\`; `lib` is the text of `lua\zapret-lib.lua`. The files are empty: nothing runs them.
+/// A zapret2 folder under `root` with the engine (and on Windows its DLLs) in `exe_dir` (`""`,
+/// `bin`, ...) and `lua\`; `lib` is the text of `lua\zapret-lib.lua`. The files are empty:
+/// nothing runs them.
 pub fn fake_engine(root: &Path, exe_dir: &str, lib: &str) {
     let exe_dir = root.join(exe_dir);
     fs::create_dir_all(&exe_dir).unwrap();
     for file in [
-        "winws2.exe",
+        zapret2::EXE,
         "cygwin1.dll",
         "WinDivert.dll",
         "WinDivert64.sys",
@@ -20,6 +21,13 @@ pub fn fake_engine(root: &Path, exe_dir: &str, lib: &str) {
     fs::write(root.join("lua").join("zapret-lib.lua"), lib).unwrap();
     fs::write(root.join("lua").join("zapret-antidpi.lua"), "").unwrap();
 }
+
+/// How the system refuses to start an empty engine file: not a program (Windows), not executable
+/// (Linux).
+#[cfg(windows)]
+pub const CANNOT_RUN: &str = "(os error 193)";
+#[cfg(target_os = "linux")]
+pub const CANNOT_RUN: &str = "(os error 13)";
 
 /// `zapret-lib.lua` as a release starts it.
 pub const LIB: &str =

@@ -1,9 +1,11 @@
 mod common;
 
+#[cfg(windows)]
 use std::path::Path;
 
 use zapret2::{Engine, info, parse_banner, required_compat};
 
+#[cfg(windows)]
 #[test]
 fn winws2_is_found_in_every_layout() {
     for (exe_dir, exe) in [
@@ -22,6 +24,18 @@ fn winws2_is_found_in_every_layout() {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn nfqws2_is_found_in_every_layout() {
+    for exe_dir in ["", "bin", "binaries/linux-x86_64", "binaries/x86_64"] {
+        let dir = tempfile::tempdir().unwrap();
+        common::fake_engine(dir.path(), exe_dir, common::LIB);
+        let engine = Engine::open(dir.path()).unwrap();
+        assert_eq!(engine.root(), dir.path());
+        assert_eq!(engine.exe(), dir.path().join(exe_dir).join("nfqws2"));
+    }
+}
+
 #[test]
 fn the_bundle_root_is_its_zapret_winws_folder() {
     let dir = tempfile::tempdir().unwrap();
@@ -32,6 +46,7 @@ fn the_bundle_root_is_its_zapret_winws_folder() {
     assert_eq!(engine.lua(), root.join("lua"));
 }
 
+#[cfg(windows)]
 #[test]
 fn a_trailing_backslash_is_not_part_of_the_root() {
     let dir = tempfile::tempdir().unwrap();
@@ -41,10 +56,12 @@ fn a_trailing_backslash_is_not_part_of_the_root() {
     assert_eq!(engine.root().as_os_str(), dir.path().as_os_str());
 }
 
+#[cfg(windows)]
 fn error(dir: &Path) -> String {
     format!("{:#}", Engine::open(dir).unwrap_err())
 }
 
+#[cfg(windows)]
 #[test]
 fn every_missing_file_is_named() {
     let dir = tempfile::tempdir().unwrap();
@@ -67,6 +84,7 @@ fn every_missing_file_is_named() {
     );
 }
 
+#[cfg(windows)]
 #[test]
 fn a_cyrillic_path_is_refused() {
     let dir = tempfile::tempdir().unwrap();
@@ -75,6 +93,7 @@ fn a_cyrillic_path_is_refused() {
     assert!(error(&root).contains("Cyrillic"), "{}", error(&root));
 }
 
+#[cfg(windows)]
 #[test]
 fn a_drive_root_is_refused() {
     // `--chdir="C:\"` ends in `\"`, which winws2 reads as an escaped quote: no strategy would pass.
@@ -132,7 +151,7 @@ fn info_is_empty_without_a_folder_and_names_what_is_wrong() {
     assert_eq!(shown.dir.as_deref(), Some(path.as_str()));
     assert_eq!(shown.version, None);
     assert!(
-        shown.error.is_some_and(|err| err.contains("winws2.exe")),
+        shown.error.is_some_and(|err| err.contains(zapret2::EXE)),
         "the error names the missing engine"
     );
 }
@@ -142,11 +161,14 @@ fn a_start_that_fails_names_the_exe() {
     let dir = tempfile::tempdir().unwrap();
     common::fake_engine(dir.path(), "", common::LIB);
     let engine = Engine::open(dir.path()).unwrap();
-    // An empty winws2.exe is no program: Windows refuses to start it (os error 193).
+    // An empty engine file is no program: the system refuses to start it.
     let err = engine.version().unwrap_err().to_string();
     let exe = engine.exe().display().to_string();
     assert!(err.contains(&exe), "the error names the exe: {err}");
-    assert!(err.contains("(os error 193)"), "and keeps its cause: {err}");
+    assert!(
+        err.contains(common::CANNOT_RUN),
+        "and keeps its cause: {err}"
+    );
     let shown = info(Some(&dir.path().display().to_string()));
     assert_eq!(shown.error, Some(err), "the same text reaches Info");
 }

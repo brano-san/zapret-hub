@@ -125,6 +125,7 @@ fn a_byte_order_mark_does_not_turn_the_first_comment_into_arguments() {
     assert_eq!(args("\u{feff}--x\n# comment"), "--x");
 }
 
+#[cfg(windows)]
 #[test]
 fn a_file_that_cannot_be_read_is_skipped_and_the_rest_still_works() {
     use std::os::windows::fs::OpenOptionsExt as _;
@@ -164,13 +165,14 @@ fn the_command_line_fills_every_placeholder() {
                 --lua-init=@\"%LUA%zapret-lib.lua\" --blob=a:@\"%FILES%fake\\a.bin\"\n\
                 --hostlist=\"%LISTS%list-general.txt\" --blob=b:@\"%bin%stun.bin\" --filter-tcp=%GameFilter%";
     let root = engine.root().display().to_string();
+    let s = std::path::MAIN_SEPARATOR;
     let line = tail(&engine, text).unwrap();
     assert_eq!(
         line,
         format!(
             "--chdir=\"{root}\" --wf-tcp-out=443,1024-65535 --wf-udp-out=443,1024-65535 \
-             --lua-init=@\"{root}\\lua\\zapret-lib.lua\" --blob=a:@\"{root}\\files\\fake\\a.bin\" \
-             --hostlist=\"{root}\\lists\\list-general.txt\" --blob=b:@\"{root}\\bin\\stun.bin\" --filter-tcp=1024-65535"
+             --lua-init=@\"{root}{s}lua{s}zapret-lib.lua\" --blob=a:@\"{root}{s}files{s}fake\\a.bin\" \
+             --hostlist=\"{root}{s}lists{s}list-general.txt\" --blob=b:@\"{root}{s}bin{s}stun.bin\" --filter-tcp=1024-65535"
         )
     );
     let tokens = zapret::quoted_tokens(&line);
@@ -178,7 +180,7 @@ fn the_command_line_fills_every_placeholder() {
     assert_eq!(tokens[0], format!("--chdir=\"{root}\""));
     assert_eq!(
         tokens[5],
-        format!("--hostlist=\"{root}\\lists\\list-general.txt\"")
+        format!("--hostlist=\"{root}{s}lists{s}list-general.txt\"")
     );
     let off = tail(&engine.clone().with_game_filter(false), text).unwrap();
     assert!(
@@ -413,7 +415,7 @@ fn every_built_in_strategy_passes_the_static_check_and_names_files_that_exist() 
             .split('"')
             .skip(1)
             .step_by(2)
-            .filter(|quoted| quoted.contains(":\\"))
+            .filter(|quoted| Path::new(quoted).is_absolute())
             .collect();
         assert!(paths.len() > 10, "{}: {paths:?}", strategy.name);
         for path in paths {

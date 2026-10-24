@@ -478,12 +478,12 @@ const GAME_PORTS_OFF: &str = "12";
 
 /// The one command line of a text, for the test, the check and the service alike (spec 5.1):
 /// `--chdir="<root>"`, then the arguments with the placeholders filled in. Every path placeholder
-/// ends in `\`. `%LISTS%` and `%BIN%` are the zapret2 folder's `lists` and `bin` (their missing
+/// ends in the path separator. `%LISTS%` and `%BIN%` are the zapret2 folder's `lists` and `bin` (their missing
 /// files written first, `ensure_files`); `%GameFilter%`, `%GameFilterTCP%` and `%GameFilterUDP%`
 /// are the engine's game filter ports.
 pub fn tail(engine: &Engine, text: &str) -> anyhow::Result<String> {
     ensure_files(engine)?;
-    let dir = |path: PathBuf| format!("{}\\", path.display());
+    let dir = |path: PathBuf| format!("{}{}", path.display(), std::path::MAIN_SEPARATOR);
     let ports = if engine.game_filter() {
         GAME_PORTS
     } else {
