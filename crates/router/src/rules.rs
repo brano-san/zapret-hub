@@ -261,9 +261,9 @@ pub fn covers(domain: &str, name: &str) -> bool {
 /// Like `is_absolute`, but on Linux the Windows forms (`C:\`, `\\server`) count too: a rules file
 /// is written the same way on any OS.
 fn absolute_path(a: &str) -> bool {
-    Path::new(a).is_absolute()
-        || (cfg!(not(windows))
-            && (a.starts_with(r"\\") || (a.len() > 2 && a.as_bytes()[1] == b':')))
+    let drive =
+        matches!(a.as_bytes(), [letter, b':', b'\\' | b'/', ..] if letter.is_ascii_alphabetic());
+    Path::new(a).is_absolute() || (cfg!(not(windows)) && (a.starts_with(r"\\") || drive))
 }
 
 /// A file name or an absolute path ending in .exe; on Linux also a process name (`discord`) or
