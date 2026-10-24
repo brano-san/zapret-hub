@@ -14,6 +14,8 @@
   let flows = $state<FlowRow[]>([]);
   let all = $state(false);
   let editing = $state<{ rule: Rule; create: boolean } | null>(null);
+  /** The capabilities are granted; they take effect on the hub's next start. */
+  let granted = $state(false);
 
   /** The exclusions as read, and the fields as typed. */
   let exclusions = $state<Exclusions | null>(null);
@@ -31,9 +33,7 @@
 
   // Latency and flows announce nothing: read once a second while the tab is open and the window is shown.
   async function refresh(): Promise<void> {
-    // Linux has no router (it is WinDivert): nothing to read.
-    // Before the overview the system is unknown: wait for it.
-    if (document.hidden || !app.overview || app.linux) return;
+    if (document.hidden) return;
     const mine = ++asked;
     try {
       const answer = await Promise.all([commands.routerStatus(), commands.listRoutes(), commands.routeFlows(all)]);
@@ -92,6 +92,10 @@
     if (answer) status = answer;
   }
 
+  async function grant(): Promise<void> {
+    if ((await change(S.failed.grant, () => commands.grantRouting())) !== undefined) granted = true;
+  }
+
   async function setEnabled(event: Event & { currentTarget: HTMLInputElement }, name: string, enabled: boolean): Promise<void> {
     event.currentTarget.checked = !enabled;
     await change(S.failed.route, () => commands.setRouteEnabled(name, enabled));
@@ -135,13 +139,21 @@
   }
 </script>
 
-{#if app.linux}
-  <section class="card">
-    <h2>{S.routes.title}</h2>
-    <p class="muted">{S.routes.linuxOff}</p>
-  </section>
-{:else if status}
+{#if status}
   {@const state = stateLabel(status.state)}
+  {#if status.needs_grant}
+    <section class="card">
+      <h2>{S.routes.grant.title}</h2>
+      <p class="muted">{S.routes.grant.text}</p>
+      {#if granted}
+        <p class="ok">{S.routes.grant.done}</p>
+      {:else}
+        <div class="buttons">
+          <button class="primary" disabled={app.busy} onclick={grant}>{S.routes.grant.button}</button>
+        </div>
+      {/if}
+    </section>
+  {/if}
   <section class="card">
     <div class="row">
       <label class="inline">
