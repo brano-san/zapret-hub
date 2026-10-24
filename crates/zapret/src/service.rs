@@ -75,6 +75,13 @@ pub fn stop_and_delete(name: &str) -> anyhow::Result<()> {
     if state(name) == SvcState::NotInstalled {
         return Ok(());
     }
+    // A unit the hub did not write (bol-van's `zapret`) is the user's: stopped, never disabled
+    // or deleted.
+    #[cfg(target_os = "linux")]
+    if !ours(name) {
+        stop(name)?;
+        anyhow::bail!("{}", not_ours(name));
+    }
     request_delete(name);
     anyhow::ensure!(
         wait_until(Duration::from_secs(10), || state(name)

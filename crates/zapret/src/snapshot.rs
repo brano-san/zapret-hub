@@ -44,6 +44,11 @@ pub struct Snapshot {
     /// was: its ports belong to the recorded `ExecStart`. `None` without one, and on Windows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nft: Option<String>,
+    /// Linux: bol-van/zapret's own `zapret` unit ran. A test run stops it; the restore starts it
+    /// again (the user's, never removed by the hub). Always false on Windows, where Flowseal's
+    /// `zapret` is a conflict and stays stopped.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub foreign_running: bool,
 }
 
 /// `data/state/pending.json`
@@ -98,6 +103,11 @@ impl Snapshot {
             nft: None,
             #[cfg(target_os = "linux")]
             nft: std::fs::read_to_string(service::NFT_CONFIG).ok(),
+            foreign_running: cfg!(target_os = "linux")
+                && matches!(
+                    service::state(service::SERVICE),
+                    SvcState::Running | SvcState::StartPending
+                ),
         })
     }
 
@@ -210,6 +220,9 @@ impl Snapshot {
             )?,
             None => service::add_remove(batch, SERVICE2),
         }
+        if self.foreign_running {
+            batch.run(&["systemctl", "start", "zapret.service"]);
+        }
         Ok(())
     }
 }
@@ -303,6 +316,7 @@ mod tests {
 "
                 .into(),
             ),
+            foreign_running: false,
         };
         let mut batch = crate::root::Batch::new();
         snap.add_restore(&mut batch).unwrap();
@@ -331,6 +345,22 @@ mod tests {
         assert!(
             script.contains("'rm' '-f' '--' '/etc/systemd/system/zapret2.service'"),
             "{script}"
+        );
+        assert!(!script.contains("'zapret.service'"), "{script}");
+
+        // bol-van's `zapret` ran before a test run stopped it: it runs again, last.
+        let foreign = Snapshot {
+            foreign_running: true,
+            ..gone
+        };
+        let mut batch = crate::root::Batch::new();
+        foreign.add_restore(&mut batch).unwrap();
+        assert!(
+            batch
+                .script()
+                .ends_with("'systemctl' 'start' 'zapret.service'\n"),
+            "{}",
+            batch.script()
         );
     }
 }

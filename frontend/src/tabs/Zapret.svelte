@@ -104,7 +104,7 @@
     if (RISKY.includes(action)) {
       const sure = await confirmation.ask({
         title: S.checks.actions[action],
-        text: S.checks.confirm(action, check.detail),
+        text: S.checks.confirm(action, check.detail, app.linux),
         yes: S.checks.actions[action],
         danger: true,
       });
@@ -216,7 +216,7 @@
         <strong>{S.checks.names[check.id]}</strong>
         <span class="muted">— {S.checks.level[check.level]}</span>
         {#if check.level !== "Ok"}
-          <p class="hint">{S.checks.hints[check.id]}</p>
+          <p class="hint">{S.checks.hint(check.id, app.linux)}</p>
           {#if check.detail}<pre>{check.detail}</pre>{/if}
           <div class="buttons">
             {#if S.checks.links[check.id]}

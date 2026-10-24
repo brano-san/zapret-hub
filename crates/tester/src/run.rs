@@ -222,8 +222,9 @@ fn run_strategies(
     cancel: &AtomicBool,
     progress: &(dyn Fn(Progress) + Sync),
 ) -> anyhow::Result<Vec<StrategyResult>> {
-    // Flowseal's service too, when it is still there: nothing else may filter while a strategy is
-    // measured. It is a conflict (the system checks), so it is not started again afterwards.
+    // `zapret` too, when it is there: nothing else may filter while a strategy is measured. On
+    // Windows it is Flowseal's, a conflict (the system checks) not started again afterwards; on
+    // Linux bol-van's own, which the snapshot starts again if it ran (`foreign_running`).
     for service in [SERVICE, SERVICE2] {
         zapret::service::stop(service)?;
     }

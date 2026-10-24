@@ -1017,6 +1017,7 @@ mod tests {
             zapret2: true,
             router: None,
             nft: None,
+            foreign_running: false,
         };
         assert_eq!(
             router_after_restore(&snapshot),

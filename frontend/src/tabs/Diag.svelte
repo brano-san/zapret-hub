@@ -245,7 +245,7 @@
           <p>
             <strong>{S.checks.names[check.id]}</strong>
             <span class="muted">— {S.checks.level[check.level]}{#if check.detail}: {check.detail}{/if}</span>
-            <br />{S.checks.hints[check.id]}
+            <br />{S.checks.hint(check.id, app.linux)}
           </p>
         {/each}
       {/if}

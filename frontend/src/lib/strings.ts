@@ -566,6 +566,12 @@ export const S = {
       ForeignEngines: "Посторонний nfqws или tpws забирает пакеты вместе с zapret2: остановите его или его службу.",
       ForeignTables: "Таблица nftables другого обхода фильтрует трафик вместе с хабом: удалите её или остановите программу, которая её создала.",
     } satisfies Record<CheckId, string>,
+    /** Where Linux differs from `hints`. */
+    hintsLinux: {
+      Conflicts:
+        "Найдена служба zapret из bol-van/zapret: её nfqws забирает пакеты вместе с zapret2. Хаб её не удаляет: «Удалить службы» только остановит её до перезагрузки, удалите её через uninstall_easy.sh из папки zapret.",
+    } as Partial<Record<CheckId, string>>,
+    hint: (id: CheckId, linux: boolean): string => (linux ? S.checks.hintsLinux[id] : undefined) ?? S.checks.hints[id],
     /** The issues `service.bat` links to. */
     links: {
       Adguard: "https://github.com/Flowseal/zapret-discord-youtube/issues/417",
@@ -578,9 +584,11 @@ export const S = {
       RemoveConflicts: "Удалить службы",
       GrantCapabilities: "Выдать права",
     } satisfies Record<CheckAction, string>,
-    confirm: (action: CheckAction, detail: string) =>
+    confirm: (action: CheckAction, detail: string, linux = false) =>
       action === "RemoveConflicts"
-        ? `Службы ${detail} будут остановлены и удалены, затем WinDivert.`
+        ? linux
+          ? `Службы ${detail} будут остановлены. Удалены будут только те, что установил хаб.`
+          : `Службы ${detail} будут остановлены и удалены, затем WinDivert.`
         : "Служба WinDivert будет остановлена и удалена. Если её держит другой обход, он перестанет работать.",
   },
   routes: {

@@ -21,6 +21,7 @@ fn sample() -> Snapshot {
         zapret2: true,
         router: None,
         nft: None,
+        foreign_running: false,
     }
 }
 

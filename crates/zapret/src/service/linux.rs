@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 
-use super::{SERVICE, SERVICE2, SvcConfig, SvcState, WINWS2, state, stop_and_delete};
+use super::{SERVICE2, SvcConfig, SvcState, WINWS2, state, stop_and_delete};
 
 /// The nftables table file the `zapret2` unit applies before the engine starts
 /// (`zapret2::nft` writes it).
@@ -308,10 +308,29 @@ pub(super) fn still_there(name: &str) -> String {
     )
 }
 
-/// The `zapret` and `zapret2` services and every engine process. Only the services have to go;
-/// a process that does not end goes to the journal as a warning.
+/// Whether the hub wrote `name`'s unit file (`/etc/systemd/system`, the hub's description): only
+/// such a unit is disabled and deleted. bol-van/zapret's `zapret` is the user's own install.
+pub fn ours(name: &str) -> bool {
+    std::fs::read_to_string(unit_path(name)).is_ok_and(|text| written_by_hub(&text))
+}
+
+fn written_by_hub(unit: &str) -> bool {
+    unit.lines()
+        .any(|line| line.trim().strip_prefix("Description=") == Some(DESCRIPTION))
+}
+
+/// Why `stop_and_delete` stopped `name` and left it in place.
+pub(super) fn not_ours(name: &str) -> String {
+    format!(
+        "{name}.service was not installed by Zapret Hub (bol-van/zapret's own unit?): it was \
+         stopped, not disabled or removed; uninstall it with the tool that installed it"
+    )
+}
+
+/// The `zapret2` service and every engine process. Only the service has to go; a process that
+/// does not end goes to the journal as a warning. bol-van's `zapret` is not the hub's: the
+/// system checks offer to deal with it.
 pub fn remove() -> anyhow::Result<()> {
-    stop_and_delete(SERVICE)?;
     stop_and_delete(SERVICE2)?;
     if let Err(err) = crate::procs::kill_all(WINWS2) {
         log::warn!(target: "exec", "{WINWS2} was not ended: {err:#}");
@@ -377,6 +396,17 @@ pub fn enable_tcp_timestamps() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_unit_the_hub_wrote_is_its_to_remove() {
+        let hub = unit(r#""/z/nfqws2""#, None).unwrap();
+        assert!(written_by_hub(&hub));
+        // bol-van/zapret's init.d/systemd/zapret.service
+        let bol_van = "[Unit]\nDescription=zapret\nAfter=network-online.target\n\n\
+                       [Service]\nType=forking\nExecStart=/opt/zapret/init.d/sysv/zapret start\n";
+        assert!(!written_by_hub(bol_van));
+        assert!(!written_by_hub(""));
+    }
 
     #[test]
     fn systemctl_show_gives_the_state_and_pid() {
