@@ -45,6 +45,8 @@ jobs:
           cache: npm
       - uses: Swatinem/rust-cache@v2
       - run: npm ci
+      # tauri::generate_context! needs frontend/dist, which the app's tests compile.
+      - run: npm run build
       - run: cargo test --workspace
       - run: bash tools/package.sh
       - uses: actions/upload-artifact@v4
