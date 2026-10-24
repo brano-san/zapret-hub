@@ -4,3 +4,4 @@
 
 pub mod caps;
 pub mod nft;
+pub mod sockopt;

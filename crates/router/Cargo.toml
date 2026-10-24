@@ -21,6 +21,7 @@ windows = { workspace = true, features = ["Win32_Foundation", "Win32_NetworkMana
 libc.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+socket2.workspace = true
 zapret.workspace = true
 
 [dev-dependencies]
