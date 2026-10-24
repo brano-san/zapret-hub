@@ -396,6 +396,12 @@ export type FlowCounters = {
 	sni: string | null,
 	ipv6: boolean,
 	via_system_proxy: boolean,
+	/**
+	 *  The hub's router takes this flow through the proxy and injects its replies itself. The
+	 *  sniff handle opens at the router's WinDivert priority and never sees injected packets, so
+	 *  `down_*` would stay 0: `down_bytes` holds the reply bytes the router counted (`mark_routed`).
+	 */
+	via_router: boolean,
 	up_packets: number,
 	down_packets: number,
 	up_bytes: number | null,
@@ -487,6 +493,8 @@ export type GroupSummary = {
 	/**  Index into `results`. */
 	best: number | null,
 	explanation: string,
+	/**  Paths left out or not checked and why, and how the paths were set. */
+	notes: string[],
 };
 
 export type HostsPlan = {

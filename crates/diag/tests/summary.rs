@@ -93,7 +93,7 @@ fn ctx() -> Ctx {
         ranking: vec![],
         strategies: vec![],
         zapret2: vec![],
-        app_rules: vec![Rule {
+        rules: vec![Rule {
             name: "DBD Process".into(),
             enabled: true,
             protocol: Protocol::Udp,

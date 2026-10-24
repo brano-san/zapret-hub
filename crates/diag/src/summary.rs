@@ -50,6 +50,8 @@ pub struct GroupSummary {
     /// Index into `results`.
     pub best: Option<u32>,
     pub explanation: String,
+    /// Paths left out or not checked and why, and how the paths were set.
+    pub notes: Vec<String>,
 }
 
 /// `Default` fills what a report from another version lacks (`report::load`).
@@ -409,6 +411,7 @@ pub fn summarize(
             } else {
                 explain(gr, best_path)
             },
+            notes: gr.skipped.iter().chain(&gr.not_checked).cloned().collect(),
         });
     }
     let mut explanations = vec![];

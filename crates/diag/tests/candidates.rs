@@ -1,4 +1,3 @@
-use diag::candidates::candidates;
 use diag::cover::{cover, covers, strategy_covers};
 use diag::culprits::{Fault, Group};
 use router::rules::Protocol;
@@ -15,6 +14,11 @@ fn group(key: &str, protocol: Protocol, port: u16) -> Group {
         representatives: vec![],
         fault: Fault::ResetEarly,
     }
+}
+
+/// The kept candidates only.
+fn candidates(strategies: &[(String, String)], group: &Group) -> Vec<diag::candidates::Candidate> {
+    diag::candidates::candidates(strategies, group).0
 }
 
 fn strategies(text: &str) -> Vec<(String, String)> {
@@ -132,5 +136,35 @@ fn filters_in_every_form() {
     assert_eq!(
         found[0].text,
         "--filter-tcp=443 --filter-l7=tls --hostlist-domains=x.com --lua-desync=fake"
+    );
+}
+
+#[test]
+fn copies_that_differ_in_unused_blobs_are_one_trick() {
+    // Live 2026-10-24: Flowseal copies with the same Discord profile, their globals listing other
+    // blobs too, were tried 9 times.
+    let with = |extra: &str| {
+        format!(
+            "--wf-udp-out=50000-50100 --blob=d:@d.bin {extra}\n--filter-udp=50000-50100 --hostlist=a.txt --lua-desync=fake:blob=d"
+        )
+    };
+    let g = group("35.217.19.0/24", Protocol::Udp, 50004);
+    let copies = vec![
+        ("zapret2:general (ALT)".to_owned(), with("--blob=q:@q.bin")),
+        ("zapret2:general (ALT2)".to_owned(), with("--blob=t:@t.bin")),
+        // Another file behind the blob it uses: another trick.
+        (
+            "zapret2:ALT11".to_owned(),
+            with("").replace("@d.bin", "@other.bin"),
+        ),
+    ];
+    let (kept, twins) = diag::candidates::candidates(&copies, &g);
+    let sources: Vec<&str> = kept.iter().map(|c| c.source.as_str()).collect();
+    assert_eq!(sources, ["zapret2:general (ALT)", "zapret2:ALT11"]);
+    assert_eq!(
+        twins,
+        [
+            "Приём zapret2: zapret2:general (ALT2), профиль 1: то же, что zapret2:general (ALT), профиль 1"
+        ]
     );
 }

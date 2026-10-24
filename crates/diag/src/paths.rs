@@ -1,6 +1,8 @@
 //! Which temporary configurations to try on a culprit, in order (spec section 6).
 
-use router::rules::{Protocol, Rule};
+use std::net::{Ipv4Addr, SocketAddr};
+
+use router::rules::{Protocol, Rule, Table};
 use serde::{Deserialize, Serialize};
 
 use crate::candidates::{Candidate, candidates, is_subnet};
@@ -75,8 +77,8 @@ pub struct Ctx {
     pub strategies: Vec<(String, String)>,
     /// (full name, text) for `candidates`.
     pub zapret2: Vec<(String, String)>,
-    /// Route rules with `apps`.
-    pub app_rules: Vec<Rule>,
+    /// The user's route rules.
+    pub rules: Vec<Rule>,
     pub profile: Profile,
 }
 
@@ -131,6 +133,41 @@ fn point_rule(group: &Group, ctx: &Ctx) -> Rule {
     }
 }
 
+/// The enabled rule that sends the group through the proxy now: by address or name, or as a flow
+/// of the profile's program.
+fn routed_by(group: &Group, ctx: &Ctx) -> Option<String> {
+    let v4 = |dst: &str| match dst.parse() {
+        Ok(SocketAddr::V4(a)) => Some(a),
+        _ => None,
+    };
+    let names: Vec<(Ipv4Addr, String)> = group
+        .members
+        .iter()
+        .filter_map(|f| Some((*v4(&f.dst)?.ip(), f.domain.clone().or(f.sni.clone())?)))
+        .collect();
+    let table = Table::new(&ctx.rules).with_names(&names);
+    let apps = ctx
+        .profile
+        .apps
+        .iter()
+        .map(|a| Some(a.as_str()))
+        .chain([None]);
+    let dsts: Vec<_> = group
+        .representatives
+        .iter()
+        .filter_map(|f| v4(&f.dst))
+        .collect();
+    apps.flat_map(|app| dsts.iter().map(move |dst| (app, *dst)))
+        .find_map(|(app, dst)| table.matches_flow(group.protocol, dst, app))
+        .map(str::to_owned)
+}
+
+pub fn routed_note(rule: &str) -> String {
+    format!(
+        "стратегии и приёмы zapret проверены с маршрутизацией на паузе: правило «{rule}» ведёт этот адрес через прокси, а там zapret не действует"
+    )
+}
+
 /// Paths in the spec's order, and the paths left out with the reason.
 pub fn plan(group: &Group, ctx: &Ctx) -> (Vec<PathKind>, Vec<String>) {
     let mut paths = vec![PathKind::Current, PathKind::Direct];
@@ -150,7 +187,7 @@ pub fn plan(group: &Group, ctx: &Ctx) -> (Vec<PathKind>, Vec<String>) {
         }
     }
     // Pattern R1: the program's rule lacks the culprit's protocol.
-    for rule in &ctx.app_rules {
+    for rule in &ctx.rules {
         let mine = rule
             .apps
             .iter()
@@ -182,7 +219,7 @@ pub fn plan(group: &Group, ctx: &Ctx) -> (Vec<PathKind>, Vec<String>) {
             ));
         }
     }
-    let tricks = candidates(&ctx.zapret2, group);
+    let (tricks, twins) = candidates(&ctx.zapret2, group);
     // Spec 5: circular counts only resent data, so it never sees an unanswered SYN.
     if matches!(group.fault, Fault::SynUnanswered { .. }) {
         if !tricks.is_empty() {
@@ -194,6 +231,14 @@ pub fn plan(group: &Group, ctx: &Ctx) -> (Vec<PathKind>, Vec<String>) {
                 .into_iter()
                 .map(|candidate| PathKind::Trick { candidate }),
         );
+        skipped.extend(twins);
+    }
+    // `AppEnv::start` pauses the router for every zapret path; the result should say why it matters.
+    let zapret = paths
+        .iter()
+        .any(|p| matches!(p, PathKind::Strategy { .. } | PathKind::Trick { .. }));
+    if zapret && let Some(rule) = routed_by(group, ctx) {
+        skipped.push(routed_note(&rule));
     }
     (paths, skipped)
 }

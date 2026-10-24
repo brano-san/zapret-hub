@@ -383,13 +383,12 @@ fn context(
         .filter(|s| s.name != circular_store::NAME)
         .map(|s| (s.full_name(), s.text))
         .collect();
-    let app_rules = state
+    let rules = state
         .router
         .rules()
         .rules
         .into_iter()
         .map(|row| row.rule)
-        .filter(|rule| !rule.apps.is_empty())
         .collect();
     Ctx {
         proxy_set,
@@ -397,7 +396,7 @@ fn context(
         ranking,
         strategies,
         zapret2,
-        app_rules,
+        rules,
         profile,
     }
 }

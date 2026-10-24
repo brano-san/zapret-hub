@@ -48,7 +48,7 @@ fn ctx(proxy_ok: bool) -> Ctx {
             ("C".into(), "--filter-tcp=80,443 --dpi-desync=split".into()),
         ],
         zapret2: vec![("zapret2/ALT11".into(), ALT11.into())],
-        app_rules: vec![],
+        rules: vec![],
         profile: profile(ProbeKind::Https),
     }
 }
@@ -198,7 +198,7 @@ fn proxy_paths_skipped_when_proxy_down() {
 #[test]
 fn extend_rule_for_udp_only_app_rule() {
     let mut c = ctx(true);
-    c.app_rules = vec![Rule {
+    c.rules = vec![Rule {
         name: "DBD Process".into(),
         enabled: true,
         protocol: Protocol::Udp,
@@ -547,7 +547,7 @@ fn a_udp_proxy_rule_takes_the_strategy_range() {
 #[test]
 fn extend_rule_comes_after_the_proxy_and_before_the_strategies() {
     let mut c = ctx(true);
-    c.app_rules = vec![Rule {
+    c.rules = vec![Rule {
         name: "DBD Process".into(),
         enabled: true,
         protocol: Protocol::Udp,
@@ -616,4 +616,39 @@ fn loss_counts_every_lost_attempt_not_the_worst_probe() {
     );
     let (_, s) = &out.per_group[0].results[0];
     assert_eq!((s.ok, s.total, s.loss_pct), (4, 9, Some(50)));
+}
+
+#[test]
+fn zapret_paths_on_a_routed_group_say_the_router_was_paused() {
+    let rule = |enabled, ips: &[&str]| Rule {
+        name: "discord.media".into(),
+        enabled,
+        protocol: Protocol::Udp,
+        ports: vec![],
+        ips: ips.iter().map(|s| s.to_string()).collect(),
+        domains: vec![],
+        apps: vec![],
+    };
+    let rep = FlowCounters {
+        protocol: Protocol::Udp,
+        dst: "35.217.19.82:50004".into(),
+        ..FlowCounters::default()
+    };
+    let g = Group {
+        key: "35.217.19.0/24".into(),
+        members: vec![rep.clone()],
+        representatives: vec![rep],
+        ..group(Protocol::Udp, 443)
+    };
+    let note = diag::paths::routed_note("discord.media");
+    let mut c = ctx(true);
+    c.rules = vec![rule(true, &["35.217.0.0/16"])];
+    assert!(plan(&g, &c).1.contains(&note));
+    c.rules = vec![rule(false, &["35.217.0.0/16"])];
+    assert!(
+        !plan(&g, &c).1.contains(&note),
+        "a rule turned off routes nothing"
+    );
+    c.rules = vec![rule(true, &["104.29.0.0/16"])];
+    assert!(!plan(&g, &c).1.contains(&note));
 }

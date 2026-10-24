@@ -257,6 +257,11 @@
         <p class="muted">{summary.seen}</p>
         <p>{summary.explanation}</p>
         {#if summary.results.length > 0}<PathTable results={summary.results} best={summary.best} />{/if}
+        {#if summary.notes.length > 0}
+          <ul class="muted">
+            {#each summary.notes as note, i (i)}<li>{note}</li>{/each}
+          </ul>
+        {/if}
       {/each}
 
       <div class="buttons">

@@ -118,7 +118,7 @@ pub fn detect(evidence: &Evidence, outcome: &Outcome, ctx: &Ctx) -> Vec<Pattern>
         for (path, score) in &gr.results {
             if let PathKind::ExtendRule { rule, .. } = path
                 && works(score)
-                && let Some(r) = ctx.app_rules.iter().find(|r| &r.name == rule)
+                && let Some(r) = ctx.rules.iter().find(|r| &r.name == rule)
             {
                 out.push(Pattern::R1RuleMissesProtocol {
                     rule: rule.clone(),

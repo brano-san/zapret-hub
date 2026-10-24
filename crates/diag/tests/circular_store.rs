@@ -29,7 +29,7 @@ fn voice_tricks() -> Vec<Trick> {
         representatives: vec![],
         fault: Fault::ResetEarly,
     };
-    let found = candidates(&[("zapret2/ALT11".into(), ALT11.into())], &group);
+    let found = candidates(&[("zapret2/ALT11".into(), ALT11.into())], &group).0;
     assert!(found.len() >= 2, "{found:?}");
     found.iter().map(|c| trick(&c.text, 3, Some(40))).collect()
 }
