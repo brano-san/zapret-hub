@@ -16,6 +16,7 @@ use crate::divert::{
     self, DNS_FILTER, Dll, FLAG_RECV_ONLY, FLAG_SNIFF, Handle, Layer, MAX_FILTER_RANGES, MAX_PACKET,
 };
 use crate::dns::{self, Names};
+use crate::flows::{FlowRow, Via};
 use crate::owner::Images;
 use crate::packet::{ACK, RST, SYN, Tcp, parse_tcp, parse_udp};
 use crate::rules::{Protocol, norm_app, runs};
@@ -31,6 +32,10 @@ pub struct FlowCounters {
     pub sni: Option<String>,
     pub ipv6: bool,
     pub via_system_proxy: bool,
+    /// The hub's router takes this flow through the proxy and injects its replies itself. The
+    /// sniff handle opens at the router's WinDivert priority and never sees injected packets, so
+    /// `down_*` would stay 0: `down_bytes` holds the reply bytes the router counted (`mark_routed`).
+    pub via_router: bool,
     pub up_packets: u32,
     pub down_packets: u32,
     pub up_bytes: f64,
@@ -410,6 +415,26 @@ pub fn sniff_filter(ports: &[u16]) -> Option<String> {
         "(ip or ipv6) and (tcp or udp) and ({})",
         parts.join(" or ")
     ))
+}
+
+/// Marks the flows the router proxies (any of `rows`, from `Router::flows` over time, not
+/// direct) and takes their reply bytes from it, the most it counted.
+pub fn mark_routed(flows: &mut [FlowCounters], rows: &[FlowRow]) {
+    for f in flows {
+        let protocol = match f.protocol {
+            Protocol::Tcp => "tcp",
+            Protocol::Udp | Protocol::Both => "udp",
+        };
+        for r in rows.iter().filter(|r| {
+            r.protocol == protocol
+                && r.local_port == f.local_port
+                && r.destination == f.dst
+                && !matches!(r.via, Via::Direct { .. })
+        }) {
+            f.via_router = true;
+            f.down_bytes = f.down_bytes.max(r.down);
+        }
+    }
 }
 
 /// Unlike `divert::SOCKET_FILTER`, loopback too: a program's connection to the system proxy is

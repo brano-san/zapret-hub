@@ -17,7 +17,8 @@ use diag::run::{Env, Live, Mode, Outcome, Progress, Request};
 use diag::summary::{self, Fix, Summary};
 use probe::curl::{CheckStatus, Via};
 use router::RouterState;
-use router::observe::{FlowCounters, Observer};
+use router::flows::{FlowRow, Via as RouterVia};
+use router::observe::{FlowCounters, Observer, mark_routed};
 use router::rules::{Protocol, Rule};
 use tauri::{AppHandle, Manager as _};
 use tauri_specta::Event as _;
@@ -183,7 +184,9 @@ fn finish(app: &AppHandle, outcome: anyhow::Result<Summary>, ends: DiagEnds<'_>)
     actions::changed(app);
 }
 
-/// The programs' flows over `secs`; `show` reports them each second.
+/// The programs' flows over `secs`; `show` reports them each second. The ones the router proxies
+/// get their replies from its flow table, read each second: a flow it closes stays there only
+/// `KEEP_CLOSED`, and the sniffer never sees what the router injects.
 fn watch(
     app: &AppHandle,
     apps: &[String],
@@ -196,23 +199,34 @@ fn watch(
         .ok()
         .map(|a| a.port());
     let observer = Observer::start(&dll, apps.to_vec(), proxy_port)?;
+    let mut routed: Vec<FlowRow> = Vec::new();
+    let read_router = |routed: &mut Vec<FlowRow>| {
+        let rows = state.router.flows(false).into_iter();
+        routed.extend(rows.filter(|r| !matches!(r.via, RouterVia::Direct { .. })));
+    };
     for left in (0..secs).rev() {
         std::thread::sleep(Duration::from_secs(1));
         if state.diag_canceled() {
             break;
         }
+        read_router(&mut routed);
         if show {
+            let mut flows = observer.snapshot();
+            mark_routed(&mut flows, &routed);
             progress(
                 app,
                 Progress::Observing {
                     secs_left: left,
-                    flows: observer.snapshot(),
+                    flows,
                 },
             );
         }
     }
     let dns = observer.has_dns();
-    Ok((observer.stop(), dns))
+    let mut flows = observer.stop();
+    read_router(&mut routed);
+    mark_routed(&mut flows, &routed);
+    Ok((flows, dns))
 }
 
 /// The groups to check: all of them in "auto", without a window, or when no choice comes in time.
@@ -919,6 +933,7 @@ mod tests {
             sni: sni.map(str::to_owned),
             ipv6: false,
             via_system_proxy: false,
+            via_router: false,
             up_packets: 5,
             down_packets: 0,
             up_bytes: 0.0,

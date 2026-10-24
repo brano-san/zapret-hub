@@ -6,6 +6,9 @@ use anyhow::{Context, ensure};
 
 use serde_json::Value;
 
+use router::observe::FlowCounters;
+
+use crate::culprits::Group;
 use crate::summary::{GroupSummary, Summary};
 
 const KEEP: usize = 20;
@@ -94,10 +97,23 @@ fn fill_defaults(report: &mut Value) -> anyhow::Result<()> {
         }
     }
     fill(report, serde_json::to_value(Summary::default())?);
-    let group = serde_json::to_value(GroupSummary::default())?;
+    let summary = serde_json::to_value(GroupSummary::default())?;
+    let group = serde_json::to_value(Group::default())?;
+    let flow = serde_json::to_value(FlowCounters::default())?;
     if let Some(Value::Array(groups)) = report.get_mut("groups") {
         for g in groups {
+            fill(g, summary.clone());
+            let Some(g) = g.get_mut("group") else {
+                continue;
+            };
             fill(g, group.clone());
+            for list in ["members", "representatives"] {
+                if let Some(Value::Array(flows)) = g.get_mut(list) {
+                    for f in flows {
+                        fill(f, flow.clone());
+                    }
+                }
+            }
         }
     }
     Ok(())

@@ -343,6 +343,7 @@ fn live_probe_judges_representatives() {
         sni: None,
         ipv6: false,
         via_system_proxy: false,
+        via_router: false,
         up_packets: 10,
         down_packets: 10,
         up_bytes: 0.0,

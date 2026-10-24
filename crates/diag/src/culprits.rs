@@ -58,6 +58,14 @@ pub fn fault(f: &FlowCounters) -> Option<Fault> {
     if f.ipv6 || f.via_system_proxy {
         return None;
     }
+    // The router answers it itself and the sniffer sees none of that: only its reply count tells.
+    if f.via_router {
+        let silent = f.protocol == Protocol::Udp && f.up_packets >= 4 && f.down_bytes == 0.0;
+        return silent.then_some(Fault::UdpNoReply {
+            up: f.up_packets,
+            down: 0,
+        });
+    }
     if f.syns >= 3 && !f.syn_answered {
         return Some(Fault::SynUnanswered { syns: f.syns });
     }

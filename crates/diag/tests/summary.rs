@@ -23,6 +23,7 @@ fn flow(protocol: Protocol, dst: &str) -> FlowCounters {
         sni: None,
         ipv6: false,
         via_system_proxy: false,
+        via_router: false,
         up_packets: 10,
         down_packets: 0,
         up_bytes: 1000.0,
@@ -761,6 +762,21 @@ fn a_report_with_fewer_fields_loads() {
 }
 
 #[test]
+fn a_report_from_before_via_router_loads() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = report::dir(tmp.path());
+    std::fs::create_dir_all(&dir).unwrap();
+    let text = r#"{"id": "2026-10-22_12-00-00", "profile": "Discord",
+        "groups": [{"group": {"key": "35.217.19.0/24",
+            "members": [{"dst": "35.217.19.82:50004", "up_packets": 285}],
+            "representatives": [{"dst": "35.217.19.82:50004"}]}}]}"#;
+    std::fs::write(dir.join("2026-10-22_12-00-00.json"), text).unwrap();
+    let s = report::load(&dir, "2026-10-22_12-00-00").unwrap();
+    let member = &s.groups[0].group.members[0];
+    assert_eq!((member.up_packets, member.via_router), (285, false));
+}
+
+#[test]
 fn an_old_report_that_stays_does_not_fail_the_save() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = report::dir(tmp.path());
@@ -830,6 +846,7 @@ fn r1_a_proxied_domain_sent_direct() {
     let proxied = |port| FlowCounters {
         local_port: port,
         via_system_proxy: true,
+        via_router: false,
         ..flow(Protocol::Tcp, "127.0.0.1:18082")
     };
     let mut flows = vec![proxied(63510), proxied(63511)];

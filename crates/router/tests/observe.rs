@@ -374,3 +374,52 @@ fn finishing_closes_the_open_udp_window() {
     let row = only(&t);
     assert_eq!((row.udp_windows, row.udp_silent_windows), (1, 1));
 }
+
+#[test]
+fn proxied_flows_take_their_replies_from_the_router() {
+    use router::flows::{DirectReason, FlowRow, Via};
+    use router::observe::mark_routed;
+    let row = |protocol: &str, port: u16, dst: &str, via: Via, down: f64| FlowRow {
+        protocol: protocol.into(),
+        domain: None,
+        program: None,
+        destination: dst.into(),
+        local_port: port,
+        rule: Some("discord.media".into()),
+        via,
+        up: 1000.0,
+        down,
+        seconds: 1,
+        closed: false,
+    };
+    let flow = |protocol, port| FlowCounters {
+        protocol,
+        local_port: port,
+        dst: "35.217.19.82:50004".into(),
+        up_packets: 285,
+        ..FlowCounters::default()
+    };
+    let mut flows = vec![
+        flow(Protocol::Udp, 57384),
+        flow(Protocol::Udp, 57385),
+        flow(Protocol::Tcp, 57384),
+        flow(Protocol::Udp, 57386),
+    ];
+    let direct = Via::Direct {
+        reason: DirectReason::NoRule,
+    };
+    let rows = [
+        row("udp", 57384, "35.217.19.82:50004", Via::Proxy, 500.0),
+        // A later read of the same flow: the most counted wins.
+        row("udp", 57384, "35.217.19.82:50004", Via::Proxy, 9000.0),
+        row("udp", 57385, "35.217.19.82:50004", Via::Proxy, 0.0),
+        row("udp", 57386, "35.217.19.82:50004", direct, 700.0),
+    ];
+    mark_routed(&mut flows, &rows);
+    let got: Vec<(bool, f64)> = flows.iter().map(|f| (f.via_router, f.down_bytes)).collect();
+    assert_eq!(
+        got,
+        [(true, 9000.0), (true, 0.0), (false, 0.0), (false, 0.0)],
+        "proxied with replies, proxied without, another protocol, a direct flow"
+    );
+}

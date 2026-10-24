@@ -11,6 +11,7 @@ fn flow(dst: &str) -> FlowCounters {
         sni: None,
         ipv6: false,
         via_system_proxy: false,
+        via_router: false,
         up_packets: 10,
         down_packets: 10,
         up_bytes: 0.0,
@@ -121,6 +122,7 @@ fn ipv6_and_system_proxy_are_not_culprits() {
     };
     let proxy = FlowCounters {
         via_system_proxy: true,
+        via_router: false,
         ..syn(5)
     };
     assert_eq!((fault(&v6), fault(&proxy)), (None, None));
@@ -166,4 +168,34 @@ fn no_flows_is_not_a_clean_bill() {
     assert_eq!(verdict(&[]), Verdict::NoFlows);
     assert_eq!(verdict(&[flow("1.2.3.4:443")]), Verdict::Clean);
     assert!(matches!(verdict(&[syn(3)]), Verdict::Culprits(_)));
+}
+
+#[test]
+fn a_flow_the_router_proxies_is_judged_by_its_replies() {
+    // Live 2026-10-24: voice through the router's rule, 285 packets out, the replies injected.
+    let routed = |protocol, down_bytes| FlowCounters {
+        protocol,
+        via_router: true,
+        down_packets: 0,
+        down_bytes,
+        udp_windows: 19,
+        udp_silent_windows: 19,
+        ..udp(285, 0)
+    };
+    assert_eq!(
+        fault(&routed(Protocol::Udp, 21_000.0)),
+        None,
+        "the router saw replies"
+    );
+    assert_eq!(
+        fault(&routed(Protocol::Udp, 0.0)),
+        Some(Fault::UdpNoReply { up: 285, down: 0 }),
+        "nothing came back through the proxy either"
+    );
+    let tcp = FlowCounters {
+        syns: 3,
+        syn_answered: false,
+        ..routed(Protocol::Tcp, 0.0)
+    };
+    assert_eq!(fault(&tcp), None, "the router's acceptor answers the SYN");
 }
