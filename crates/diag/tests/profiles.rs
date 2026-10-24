@@ -5,7 +5,9 @@ fn builtin_has_three_profiles() {
     let p = builtin();
     let ids: Vec<_> = p.iter().map(|p| p.id.as_str()).collect();
     assert_eq!(ids, ["discord", "dbd", "youtube"]);
-    assert_eq!(p[0].probes.len(), 3);
+    // No STUN: Discord media servers do not answer a plain binding request.
+    assert_eq!(p[0].probes.len(), 2);
+    assert!(p[0].probes.iter().all(|s| s.kind != ProbeKind::Stun));
     assert_eq!(p[0].probes[0].kind, ProbeKind::Https);
     assert_eq!(p[0].probes[0].target, "discord.com");
 }

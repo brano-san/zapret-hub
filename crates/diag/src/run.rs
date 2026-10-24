@@ -146,7 +146,10 @@ fn live(env: &mut dyn Env, group: &Group) -> Score {
 /// The path's score, or `None` when canceled during it.
 fn evaluate(env: &mut dyn Env, ctx: &Ctx, group: &Group) -> Option<Score> {
     let mut s = Score::default();
-    let (mut medians, mut losses) = (vec![], vec![]);
+    let mut medians = vec![];
+    // Loss over every attempt that can be lost (not HTTPS, not live), so one probe kind that never
+    // answers cannot make 100 % of a path that half works.
+    let (mut lost, mut sent) = (0, 0);
     for probe in &ctx.profile.probes {
         let p = match probe.kind {
             ProbeKind::Live => live(env, group),
@@ -158,13 +161,16 @@ fn evaluate(env: &mut dyn Env, ctx: &Ctx, group: &Group) -> Option<Score> {
             s.total += p.total;
         }
         medians.extend(p.median_ms);
-        losses.extend(p.loss_pct);
+        if p.loss_pct.is_some() {
+            lost += p.total - p.ok;
+            sent += p.total;
+        }
         if env.cancelled() {
             return None;
         }
     }
     s.median_ms = median(medians);
-    s.loss_pct = losses.into_iter().max();
+    s.loss_pct = (sent > 0).then(|| lost * 100 / sent);
     Some(s)
 }
 

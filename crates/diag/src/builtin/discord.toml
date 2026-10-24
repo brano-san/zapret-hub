@@ -11,7 +11,3 @@ target = "discord.com"
 [[probe]]
 kind = "discord-ip-discovery"
 target = "observed"
-
-[[probe]]
-kind = "stun"
-target = "observed"

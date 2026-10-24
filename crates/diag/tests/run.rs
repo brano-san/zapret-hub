@@ -77,6 +77,8 @@ struct Fake {
     clock: Duration,
     /// How many finished paths each `results` call carried.
     results: Vec<usize>,
+    /// Scores by probe kind, instead of the works/does not work above.
+    by_kind: Vec<(ProbeKind, Score)>,
 }
 
 impl Env for Fake {
@@ -87,8 +89,11 @@ impl Env for Fake {
         }
         Ok(())
     }
-    fn probe(&mut self, _: &Group, _: &ProbeSpec) -> Score {
+    fn probe(&mut self, _: &Group, spec: &ProbeSpec) -> Score {
         self.clock += Duration::from_secs(10);
+        if let Some((_, s)) = self.by_kind.iter().find(|(k, _)| *k == spec.kind) {
+            return s.clone();
+        }
         let ok = if self.works.contains(self.sets.last().unwrap()) {
             3
         } else {
@@ -572,4 +577,43 @@ fn the_median_is_the_lower_middle() {
     assert_eq!(median(vec![300, 10]), Some(10));
     assert_eq!(median(vec![900, 10, 300, 20]), Some(20));
     assert_eq!(median(vec![5, 1, 3]), Some(3));
+}
+
+#[test]
+fn loss_counts_every_lost_attempt_not_the_worst_probe() {
+    // Live 2026-10-24: IP discovery 3/3, STUN (which Discord media servers ignore) 0/3.
+    let probe = |kind| ProbeSpec {
+        kind,
+        target: "observed".into(),
+    };
+    let mut c = ctx(false);
+    c.profile.probes = vec![
+        probe(ProbeKind::DiscordIpDiscovery),
+        probe(ProbeKind::Stun),
+        probe(ProbeKind::Https),
+    ];
+    let score = |ok, loss_pct| Score {
+        ok,
+        total: 3,
+        median_ms: Some(26),
+        loss_pct,
+        answer: None,
+    };
+    let mut env = Fake {
+        by_kind: vec![
+            (ProbeKind::DiscordIpDiscovery, score(3, Some(0))),
+            (ProbeKind::Stun, score(0, Some(100))),
+            // HTTPS measures no loss: its misses are not lost packets.
+            (ProbeKind::Https, score(1, None)),
+        ],
+        ..Fake::default()
+    };
+    let out = run(
+        &mut env,
+        &c,
+        &[group(Protocol::Udp, 50004)],
+        &settings(Mode::Auto, 600),
+    );
+    let (_, s) = &out.per_group[0].results[0];
+    assert_eq!((s.ok, s.total, s.loss_pct), (4, 9, Some(50)));
 }
