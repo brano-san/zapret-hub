@@ -199,7 +199,7 @@ impl Winws {
 
     /// Waits until the engine is ready, exits, or `max` passes. Windows: winws2 reports capture
     /// started (`windivert initialized. capture is started.`). Linux: nfqws2 says nothing a pipe
-    /// shows in time, so ready is its queue bound in `/proc/net/netfilter/nfnetlink_queue`, which
+    /// shows in time, so ready is its queue bound (`queue::ready`), which
     /// happens after its Lua init, plus a short settle. One that exited is a launch error: `Err`
     /// carries its exit status and output.
     pub fn wait_ready(&mut self, max: Duration) -> Result<(), String> {
@@ -216,7 +216,7 @@ impl Winws {
                 return Ok(());
             }
             #[cfg(target_os = "linux")]
-            if queue::bound(queue::QNUM) {
+            if queue::ready(self.child.id()) {
                 std::thread::sleep(queue::SETTLE);
                 return self.exited_error().map_or(Ok(()), Err);
             }
@@ -300,11 +300,45 @@ pub mod queue {
         })
     }
 
-    /// Queue `qnum` held by a live listener: its line, then a `peer_portid` other than 0.
-    pub fn bound(qnum: u32) -> bool {
-        text()
-            .and_then(|text| parse(&text, qnum))
-            .is_some_and(|(portid, _)| portid != 0)
+    /// The engine `pid` is ready: queue `QNUM` has a listener. Without the queue file (`0440
+    /// root`, no `sudo -n`): `pid` holds a NETLINK_NETFILTER socket, which nfqws2 opens and binds
+    /// to the queue at once, after its Lua init.
+    pub fn ready(pid: u32) -> bool {
+        match text() {
+            Some(text) => parse(&text, QNUM).is_some_and(|(portid, _)| portid != 0),
+            None => holds_netfilter(pid),
+        }
+    }
+
+    /// `/proc/net/netlink` (`0444`): the inodes of the NETLINK_NETFILTER (`Eth` 12) sockets.
+    pub fn netfilter_inodes(text: &str) -> Vec<u64> {
+        text.lines()
+            .filter_map(|line| {
+                let fields: Vec<&str> = line.split_whitespace().collect();
+                (fields.get(1) == Some(&"12")).then_some(())?;
+                fields.get(9)?.parse().ok()
+            })
+            .collect()
+    }
+
+    /// One of `pid`'s descriptors (`socket:[inode]`) is a NETLINK_NETFILTER socket.
+    fn holds_netfilter(pid: u32) -> bool {
+        let Ok(text) = std::fs::read_to_string("/proc/net/netlink") else {
+            return false;
+        };
+        let inodes = netfilter_inodes(&text);
+        let Ok(fds) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
+            return false;
+        };
+        fds.filter_map(Result::ok).any(|fd| {
+            std::fs::read_link(fd.path()).is_ok_and(|link| {
+                let link = link.to_string_lossy();
+                link.strip_prefix("socket:[")
+                    .and_then(|rest| rest.strip_suffix(']'))
+                    .and_then(|inode| inode.parse::<u64>().ok())
+                    .is_some_and(|inode| inodes.contains(&inode))
+            })
+        })
     }
 
     /// `(peer_portid, queue_total)` of queue `qnum`. The kernel writes, in order: the queue
@@ -330,6 +364,17 @@ pub mod queue {
             assert_eq!(parse("300 1 2", 200), None);
             assert_eq!(parse("2000 1 2", 200), None);
             assert_eq!(parse("", 200), None);
+        }
+
+        #[test]
+        fn netfilter_sockets_are_protocol_12() {
+            let text = "sk               Eth Pid        Groups   Rmem     Wmem     Dump  Locks    Drops    Inode
+                        0000000000000000 0   3283398358 00000000 0        0        0     2        0        10252
+                        ffff8a0c1b2d4000 12  4021       00000000 0        0        0     2        0        88731
+                        ffff8a0c1b2d5000 12  -1123      00000000 0        0        0     2        0        88740
+";
+            assert_eq!(netfilter_inodes(text), [88731, 88740]);
+            assert!(netfilter_inodes("").is_empty());
         }
     }
 }
