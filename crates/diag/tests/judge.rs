@@ -1,4 +1,4 @@
-use diag::agent::{Level, VerdictCode};
+use diag::agent::{Level, MediaState, VerdictCode, VoiceStage};
 use diag::culprits::{Fault, Group};
 use diag::evaluate::{Answer, Score};
 use diag::judge::fill;
@@ -102,8 +102,74 @@ fn gs(key: &str, fault: Fault, best: Option<u32>, results: Vec<(PathKind, Score)
     }
 }
 
+/// As if Discord's log showed a connected session, so the flows alone decide.
 fn run(summary: &mut Summary, flows: &[FlowCounters], e: &Evidence, c: &Ctx) {
+    summary.agent.client.voice.get_or_insert(MediaState {
+        stage: VoiceStage::Connected,
+        ..MediaState::default()
+    });
     fill(summary, flows, e, c, 30);
+}
+
+fn with_stage(stage: Option<VoiceStage>) -> Summary {
+    let mut s = Summary::default();
+    s.agent.client.voice = stage.map(|stage| MediaState {
+        stage,
+        ..MediaState::default()
+    });
+    s
+}
+
+#[test]
+fn no_media_session_in_the_log_is_not_reproduced() {
+    let mut s = with_stage(None);
+    fill(
+        &mut s,
+        &[tcp_ok()],
+        &neko_seen(),
+        &ctx(&[ProbeKind::DiscordIpDiscovery]),
+        30,
+    );
+    assert_eq!(s.agent.verdict, VerdictCode::NotReproducible);
+    assert!(
+        s.agent
+            .confidence
+            .why
+            .contains(&"no_media_session".to_string())
+    );
+}
+
+#[test]
+fn a_stuck_stage_makes_a_quiet_watch_inconclusive() {
+    let mut s = with_stage(Some(VoiceStage::UdpFailed));
+    fill(
+        &mut s,
+        &[tcp_ok()],
+        &neko_seen(),
+        &ctx(&[ProbeKind::DiscordIpDiscovery]),
+        30,
+    );
+    assert_eq!(s.agent.verdict, VerdictCode::Inconclusive);
+    assert!(
+        s.agent
+            .confidence
+            .why
+            .contains(&"client_stage:udp_failed".to_string())
+    );
+}
+
+#[test]
+fn without_the_discord_log_the_flows_decide() {
+    let mut s = with_stage(None);
+    s.sources_missing = vec!["журнал Discord".into()];
+    fill(
+        &mut s,
+        &[],
+        &neko_seen(),
+        &ctx(&[ProbeKind::DiscordIpDiscovery]),
+        30,
+    );
+    assert_eq!(s.agent.verdict, VerdictCode::NoFlows);
 }
 
 fn codes(facts: &[diag::agent::Fact]) -> Vec<&str> {

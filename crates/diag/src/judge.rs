@@ -4,7 +4,7 @@
 use router::observe::FlowCounters;
 use router::rules::Protocol;
 
-use crate::agent::{Confidence, Fact, Level, Observed, VerdictCode};
+use crate::agent::{Confidence, Fact, Level, Observed, VerdictCode, VoiceStage};
 use crate::culprits::{self, Fault, Verdict};
 use crate::logs::discord;
 use crate::paths::{Ctx, NO_TRICKS_FOR_SYN, PROXY_NO_UDP, PROXY_SILENT, PROXY_UNSET, routed_note};
@@ -99,6 +99,54 @@ fn observed(flows: &[FlowCounters]) -> Observed {
     }
 }
 
+/// Discord's own log outranks a quiet observation: no media session means the problem was not
+/// reproduced; a session stuck before `Connected` means a clean watch missed it (a flow opened
+/// before watching is invisible).
+fn client_stage(code: VerdictCode, summary: &Summary, ctx: &Ctx) -> (VerdictCode, Option<String>) {
+    let quiet = matches!(
+        code,
+        VerdictCode::NoFlows | VerdictCode::Clean | VerdictCode::Inconclusive
+    );
+    let client = &summary.agent.client;
+    let media = match ctx.profile.id.as_str() {
+        "discord" => client.voice.as_ref(),
+        "discord-stream" => client.stream.as_ref(),
+        _ => return (code, None),
+    };
+    // No log, no stage: the observation stands.
+    if !quiet
+        || summary
+            .sources_missing
+            .iter()
+            .any(|s| source_code(s) == "discord_log")
+    {
+        return (code, None);
+    }
+    match media.map(|m| m.stage) {
+        None | Some(VoiceStage::None) => (
+            VerdictCode::NotReproducible,
+            Some("no_media_session".into()),
+        ),
+        Some(VoiceStage::Connected | VoiceStage::DaveWaitingPeer) => (code, None),
+        Some(stage) => (
+            VerdictCode::Inconclusive,
+            Some(format!("client_stage:{}", stage_code(stage))),
+        ),
+    }
+}
+
+fn stage_code(stage: VoiceStage) -> &'static str {
+    match stage {
+        VoiceStage::None => "none",
+        VoiceStage::NoEndpoint => "no_endpoint",
+        VoiceStage::WsFailed => "ws_failed",
+        VoiceStage::UdpFailed => "udp_failed",
+        VoiceStage::DaveWaitingPeer => "dave_waiting_peer",
+        VoiceStage::DaveStalled => "dave_stalled",
+        VoiceStage::Connected => "connected",
+    }
+}
+
 /// The verdict code, how sure it is and why, and the observation in counts.
 pub fn judge(
     summary: &Summary,
@@ -144,7 +192,8 @@ pub fn judge(
             }
         }
     };
-    let mut why: Vec<String> = vec![];
+    let (code, stage_why) = client_stage(code, summary, ctx);
+    let mut why: Vec<String> = stage_why.into_iter().collect();
     for (on, code) in [
         (summary.canceled, "canceled"),
         (summary.stopped, "stopped"),
