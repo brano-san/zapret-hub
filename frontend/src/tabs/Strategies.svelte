@@ -64,7 +64,8 @@
   async function load(): Promise<void> {
     rows = (await call(S.failed.strategies, commands.listStrategies())) ?? [];
     for (const row of rows) {
-      if (!tagsCache[row.name]) {
+      // A built-in never changes; the user's own may have been edited outside the app.
+      if (row.custom || !tagsCache[row.name]) {
         void commands.getStrategy(row.name).then((ans) => {
           if (ans.status === "ok") {
             const d = ans.data;
@@ -147,6 +148,14 @@
     leftW = Math.round(Math.min(Math.max(event.clientX - bounds.left, LEFT_MIN), bounds.width * 0.6));
   }
 
+  /** The arrows move the edge 16px, within the same bounds as a drag. */
+  function dragKey(event: KeyboardEvent): void {
+    const step = event.key === "ArrowLeft" ? -16 : event.key === "ArrowRight" ? 16 : 0;
+    if (!step || !split) return;
+    event.preventDefault();
+    leftW = Math.round(Math.min(Math.max(leftW + step, LEFT_MIN), split.getBoundingClientRect().width * 0.6));
+  }
+
   function dragEnd(event: PointerEvent): void {
     const handle = event.currentTarget as HTMLElement;
     dragging = false;
@@ -180,7 +189,8 @@
       {#each TECHNIQUES as tech (tech)}
         {@const col = techniqueColor(tech)}
         {@const count = tagCount(tech)}
-        {#if count > 0}
+        <!-- The chosen one stays even with no matches left, so it can be switched off. -->
+        {#if count > 0 || tagFilter === tech}
           <button
             class="tag-filter"
             class:on={tagFilter === tech}
@@ -239,7 +249,21 @@
     </table>
   </section>
 
-  <div class="handle" role="separator" aria-orientation="vertical" onpointerdown={dragStart} onpointermove={dragMove} onpointerup={dragEnd} onpointercancel={dragEnd}></div>
+  <!-- A focusable separator is a widget (ARIA): the arrows move it. -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+  <div
+    class="handle"
+    role="separator"
+    aria-orientation="vertical"
+    aria-valuenow={leftW}
+    aria-valuemin={LEFT_MIN}
+    tabindex="0"
+    onpointerdown={dragStart}
+    onpointermove={dragMove}
+    onpointerup={dragEnd}
+    onpointercancel={dragEnd}
+    onkeydown={dragKey}
+  ></div>
 
   <section class="card scroll">
     {#if editing2}

@@ -21,6 +21,8 @@
   let picked = false;
 
   const HISTORY_LIMIT = 10;
+  /** The strategy that is applied and running: a stopped one can be applied again. */
+  const running = $derived(app.overview?.service === "Running" ? app.overview.strategy : null);
   const visibleRuns = $derived(showAllHistory ? runs : runs.slice(0, HISTORY_LIMIT));
 
   const usable = defaultTestable;
@@ -114,7 +116,7 @@
         <h3>{S.tests.group}</h3>
         <button type="button" onclick={() => setGroup(rows.filter(match), true)}>{S.tests.all}</button>
         <button type="button" onclick={() => setGroup(rows.filter(match), false)}>{S.tests.none}</button>
-        <input class="search" bind:value={search} placeholder={S.tests.search} />
+        <input class="search" bind:value={search} placeholder={S.tests.search} aria-label={S.tests.search} />
         <span class="muted">{S.tests.chosen(chosen.length, usable(rows).length)}</span>
       </div>
       <div class="choices">
@@ -145,8 +147,7 @@
       <div class="buttons">
         {#if first && first.launch_error === null}
           {@const best = zapret2Name(first.name) ?? first.name}
-          {@const bestActive =
-            best.toLowerCase() === (zapret2Name(app.overview?.strategy ?? "") ?? (app.overview?.strategy ?? "")).toLowerCase()}
+          {@const bestActive = !!running && best.toLowerCase() === (zapret2Name(running) ?? running).toLowerCase()}
           <button class="primary" disabled={app.busy || bestActive} onclick={() => apply(first.name)}>
             {bestActive ? S.tests.bestActive(best) : S.tests.applyBest(best)}
           </button>
@@ -158,7 +159,7 @@
       </div>
       <!-- A run opens in its ranking: another run's sort (maybe a column this suite lacks) and open row do not carry over. -->
       {#key run.id}
-        <ResultsTable suite={run.suite} results={run.strategies} onApply={apply} disabled={app.busy} {showGames} activeStrategy={app.overview?.strategy} />
+        <ResultsTable suite={run.suite} results={run.strategies} onApply={apply} disabled={app.busy} {showGames} activeStrategy={running} />
       {/key}
     </section>
   {/if}

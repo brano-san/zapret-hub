@@ -2,6 +2,7 @@ import { beforeEach, expect, test, vi } from "vitest";
 import { notices } from "./notices.svelte";
 import { S } from "./strings";
 import { app, start } from "./app.svelte";
+import { confirmation } from "./confirm.svelte";
 
 // `app.svelte` asks for `matchMedia` when it is imported and `applyTheme` writes to `document`: Node has neither.
 const ipc = vi.hoisted(() => {
@@ -72,4 +73,23 @@ test("a StateChanged reads the settings again: zapret-hub-cli saves them too", a
   ipc.stateChanged();
   expect(ipc.log).toEqual(["getSettings", "getOverview"]);
   await vi.waitFor(() => expect(app.settings).toEqual({ theme: "dark", cli_enabled: false }));
+});
+
+test("a tab switch with unsaved edits asks first and stays on «no»", async () => {
+  app.tab = "settings";
+  app.unsaved = () => true;
+  const no = app.setTab("overview");
+  expect(confirmation.question?.title).toBe(S.settings.unsavedTitle);
+  confirmation.answer(false);
+  await no;
+  expect(app.tab).toBe("settings");
+  const yes = app.setTab("overview");
+  confirmation.answer(true);
+  await yes;
+  expect(app.tab).toBe("overview");
+  app.unsaved = () => false;
+  await app.setTab("tests");
+  expect(confirmation.question).toBeNull();
+  expect(app.tab).toBe("tests");
+  app.unsaved = null;
 });

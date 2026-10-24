@@ -32,7 +32,8 @@
   // Latency and flows announce nothing: read once a second while the tab is open and the window is shown.
   async function refresh(): Promise<void> {
     // Linux has no router (it is WinDivert): nothing to read.
-    if (document.hidden || app.linux) return;
+    // Before the overview the system is unknown: wait for it.
+    if (document.hidden || !app.overview || app.linux) return;
     const mine = ++asked;
     try {
       const answer = await Promise.all([commands.routerStatus(), commands.listRoutes(), commands.routeFlows(all)]);

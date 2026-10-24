@@ -59,15 +59,17 @@
   <div class="head">
     <h2>{S.tgws.title}</h2>
     <span class="badge" class:ok={tgws?.running} class:muted={!tgws?.running}>
-      {#if !tgws?.installed}{S.tgws.absent}{:else if tgws.running}{S.tgws.on(tgws.port)}{:else}{S.tgws.off}{/if}
+      {#if !tgws}{S.common.loading}{:else if !tgws.installed}{S.tgws.absent}{:else if tgws.running}{S.tgws.on(tgws.port)}{:else}{S.tgws.off}{/if}
     </span>
   </div>
   <p class="muted">{S.tgws.about}</p>
   {#if tgws?.unavailable}<p class="warn">{S.tgws.unavailable(tgws.unavailable)}</p>{/if}
 
-  {#if !tgws?.installed}
+  {#if !tgws}
+    <!-- Nothing to offer until the status says what is there. -->
+  {:else if !tgws.installed}
     <div class="buttons">
-      <button class="primary" disabled={busy || !!tgws?.unavailable} onclick={install}>
+      <button class="primary" disabled={busy || !!tgws.unavailable} onclick={install}>
         {busy ? S.common.loading : S.tgws.install}
       </button>
       {#if full}<button class="link" onclick={openRepo}>{S.tgws.repo}</button>{/if}
