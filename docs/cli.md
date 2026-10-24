@@ -36,25 +36,20 @@ CLI прав администратора не просит и сам в сис�
 песочниц (низкий уровень целостности) не могут ни писать в канал, ни читать из него.
 
 Включённый CLI даёт любой программе, запущенной от вашего имени, те же действия, что окно: удаление службы,
-правку `hosts`, свои стратегии. Аргументы своей стратегии получает `winws.exe`, а служба zapret запускает его от
-SYSTEM, поэтому параметры winws, которые пишут файлы, пишут их от SYSTEM. Это не больше, чем может любая
-программа, которая пишет в папку Flowseal: она меняет сами `.bat` и `winws.exe`.
-Со zapret2 это прямее: текст своей стратегии содержит `--lua-init`, то есть Lua-код. Любая программа от вашего
+правку `hosts`, свои стратегии. Текст своей стратегии zapret2 содержит `--lua-init`, то есть Lua-код. Любая программа от вашего
 имени с включённым CLI может выполнить произвольный Lua-код от администратора одним `zapret2 validate` (проверка
 запускает `winws2` с `--intercept=0`, а `--lua-init` грузит Lua из текста) и от SYSTEM через `zapret2 save` и
 `apply` (служба zapret2). Лишнего риска нет, только если папка zapret2 и так доступна этой программе на запись
 (обычно так, когда папка в вашем профиле): тогда она меняет сам `winws2.exe` и его Lua. Иначе включайте CLI, только
-если доверяете каждой запускаемой программе. Папки
-zapret и zapret2, а с ними и то, какие `winws.exe` и `winws2.exe` запускают службы, CLI не меняет: их меняют
-только в окне.
+если доверяете каждой запускаемой программе. Папку zapret2, а с ней и то, какой `winws2.exe` запускает служба,
+CLI не меняет: её меняют только в окне.
 
 ## Вывод и коды выхода
 
 stdout — один JSON-документ с отступами, в UTF-8. При успехе это данные команды, при ошибке —
 `{"error": "…"}` с полным текстом ошибки. Исключение — `tests report`: он печатает текст отчёта.
-Команда, которой нечего вернуть (`custom validate`, `custom save`, `zapret2 validate`, `zapret2 save`,
-`tests cancel`, `ipset update` и т. п.), печатает `{"ok": true}`. Единственное `null` со
-смыслом — `flowseal check-update`: обновления нет. Ход (`tests wait`, `tests run --wait`) идёт в stderr,
+Команда, которой нечего вернуть (`zapret2 validate`, `zapret2 save`, `tests cancel` и т. п.), печатает
+`{"ok": true}`. Ход (`tests wait`, `tests run --wait`) идёт в stderr,
 в stdout — только итоговый JSON.
 Порядок ключей в объектах не значим.
 
@@ -67,7 +62,7 @@ stdout — один JSON-документ с отступами, в UTF-8. Пр�
 | 4 | `tests wait`, `tests run --wait` или `diag run --wait` упёрлись в `--timeout` |
 
 Код 0 значит, что команда выполнена, а не что проверка прошла: `apply`, `apply-best`, `restart`, `quick-check`
-(и `custom save` активной стратегии) печатают итог быстрой проверки, `proxy check` — итог проверки прокси, и
+(и `zapret2 save` активной стратегии) печатают итог быстрой проверки, `proxy check` — итог проверки прокси, и
 код у них 0 при любом итоге. Читайте поле `ok`: `"ok": false` — проверка не прошла.
 
 Код 3 значит «чинить окружение, а не команду»: запустить приложение, включить CLI, обновить `zapret-hub.exe`
@@ -76,8 +71,8 @@ stdout — один JSON-документ с отступами, в UTF-8. Пр�
 
 Код 2 значит, что ничего не изменено, но не всегда, что в приложение ничего не ушло: `proxy check` без адреса
 сначала читает настройки и только потом отказывает, если `socks5` не задан. Сам CLI проверяет только форму
-команды: аргументы, значения из списков, `true`/`false`, `--yes`, JSON своей стратегии. Остальное — адрес в
-`settings set socks5`, имена стратегий, порты, записи списков — проверяет приложение, и его отказ — код 1.
+команды: аргументы, значения из списков, `true`/`false`, `--yes`. Остальное — адрес в
+`settings set socks5`, имена стратегий, текст своей стратегии — проверяет приложение, и его отказ — код 1.
 
 `zapret-hub-cli --help` и `zapret-hub-cli <команда> --help` перечисляют команды и аргументы.
 
@@ -86,9 +81,9 @@ PowerShell читает вывод программ в кодировке `[Cons
 
 ## Команды
 
-Значения перечислений пишутся через дефис (`ipset-exclude`, `remove-windivert`), ключи настроек — как в
-`zapret-hub.toml` (`start_minimized`). Имя стратегии — имя её файла без `.bat`, например `"general (ALT11)"`;
-стратегии zapret2 называются `zapret2:<имя>`, например `zapret2:general` (раздел «Стратегии zapret2»).
+Значения перечислений пишутся через дефис (`remove-windivert`), ключи настроек — как в
+`zapret-hub.toml` (`start_minimized`). Стратегии называются `zapret2:<имя>`, например `zapret2:general` или
+`"zapret2:general (ALT11)"` (раздел «Стратегии zapret2»).
 
 | Команда | Что делает | Команда приложения |
 |---|---|---|
@@ -98,17 +93,13 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `settings get` | все настройки | `get_settings` |
 | `settings set <key> <value>` | меняет одну настройку (раздел «Настройки») | `get_settings`, `save_settings` |
 | `proxy check [<addr>]` | проверяет прокси SOCKS5; без адреса — из настройки `socks5` | `check_proxy` |
-| `candidates` | папки zapret и прокси SOCKS5, найденные на компьютере | `wizard_candidates` |
-| `strategies list` | стратегии в порядке меню `service.bat` с последним результатом; `error` — файл не стратегия | `list_strategies` |
-| `strategies show <name>` | аргументы, последний результат, у своей стратегии — её запись `record` | `get_strategy` |
+| `candidates` | прокси SOCKS5, найденные на компьютере | `wizard_candidates` |
+| `strategies list` | стратегии zapret2 с последним результатом; `error` — стратегия не проходит проверку | `list_strategies` |
+| `strategies show <name>` | текст, аргументы, последний результат | `get_strategy` |
 | `apply <name>` | ставит стратегию службой, делает быструю проверку и печатает её итог | `apply_strategy` |
 | `apply-best` | то же для лучшей стратегии последнего стандартного прогона | `apply_best` |
 | `restart` | перезапускает службу и делает быструю проверку | `restart_zapret` |
 | `quick-check` | быстрая проверка: работает ли zapret сейчас | `quick_check` |
-| `custom clone <source> <name>` | копирует стратегию в `general (HUB <name>)` и печатает её запись | `clone_strategy` |
-| `custom validate <file\|->` | проверяет запись (`winws --dry-run`), не сохраняя | `validate_custom` |
-| `custom save <file\|-> [--create]` | сохраняет запись; `--create` — как новую стратегию | `save_custom` |
-| `custom delete <name> --yes` | удаляет свою стратегию; `<name>` — её собственное имя: `mine` для `general (HUB mine)` | `delete_custom` |
 | `zapret2 info` | папка zapret2, версия движка и совместимость Lua или ошибка | `zapret2_info` |
 | `zapret2 validate <file\|->` | проверяет текст стратегии zapret2, не сохраняя | `validate_zapret2` |
 | `zapret2 save <name> <file\|-> [--create]` | сохраняет текст в `<папка zapret2>\strategies\<name>.txt` как `zapret2:<name>`; `--create` — как новую стратегию | `save_zapret2` |
@@ -120,20 +111,12 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `tests list` | сохранённые прогоны | `list_runs` |
 | `tests show <id> [--full\|--failures]` | рейтинг прогона; `--full` — прогон целиком, со всеми проверками; `--failures` — сводка непрошедших проверок | `get_run` |
 | `tests report <id>` | прогон текстом в формате `test zapret.ps1` | `run_report` |
-| `flowseal` | игровой фильтр, ipset, фейки, свои списки, флаг обновлений | `get_flowseal` |
-| `flowseal check-update` | новая версия Flowseal или `null` | `check_flowseal_update` |
-| `game-filter <disabled\|all\|tcp\|udp> [--tcp <ports>] [--udp <ports>]` | игровой фильтр; не указанные порты остаются прежними | `set_game_filter` |
-| `ipset mode <loaded\|none\|any>` | режим ipset, как в `service.bat` | `set_ipset_mode` |
-| `ipset update` | скачивает `ipset-all.txt` заново | `update_ipset` |
-| `check-updates <on\|off>` | собственная проверка обновлений Flowseal | `set_check_updates` |
-| `fake <discord\|game> <name>` | делает `bin\<name>.bin` активным фейком; имена — в выводе `flowseal`, поле `fakes.files` | `replace_fake` |
-| `lists add <list> <entry>`, `lists remove <list> <entry>` | свои списки: `general`, `exclude`, `ipset-exclude` | `add_list_entry`, `remove_list_entry` |
 | `hosts plan` | что изменит запись блока в `hosts`; ничего не пишет | `hosts_plan` |
 | `hosts apply --yes` | пишет блок zapret-hub в `hosts` | `apply_hosts` |
-| `checks` | диагностика `service.bat` | `system_checks` |
+| `checks` | диагностика `service.bat` Flowseal: конфликты, WinDivert, TCP timestamps и т. п. | `system_checks` |
 | `checks fix <action>` | исправление: `enable-tcp-timestamps`; `remove-windivert` и `remove-conflicts` — с `--yes` | `fix_check` |
 | `discord clear-cache --yes` | закрывает Discord и чистит его кэш | `clear_discord_cache` |
-| `service remove --yes` | удаляет службу zapret или zapret2 и WinDivert | `remove_service` |
+| `service remove --yes` | удаляет службу zapret2 (и службу zapret Flowseal, если осталась) и WinDivert | `remove_service` |
 | `router on\|off` | включает или выключает маршрутизацию; пишет `router_enabled` | `set_router_enabled` |
 | `router status` | идёт ли маршрутизация, состояние прокси, счётчики | `router_status` |
 | `routes list` | правила, их состояние, ошибка файла `routes.toml` и `system_doh` — включено ли шифрование DNS в Windows (тогда правила по доменам не срабатывают) | `list_routes` |
@@ -160,8 +143,8 @@ PowerShell читает вывод программ в кодировке `[Cons
 
 Команд окна, которых нет в CLI:
 - `pick_folder`, `open_url`, `open_folder` — открывают окна, файловый менеджер и браузер;
-- `check_folder`, `check_zapret2_folder` — открыли бы путь, переданный клиентом (второй ещё и запустил бы из него
-  `winws2.exe`), а папки zapret и zapret2 CLI не меняет (раздел «Настройки»);
+- `check_zapret2_folder` — открыл бы путь, переданный клиентом, и запустил бы из него `winws2.exe`, а папку
+  zapret2 CLI не меняет (раздел «Настройки»);
 - `take_notices` — забрал бы уведомления у окна;
 - `test_live` — его заменяет `tests status`, а `diag_live` — `diag status`;
 - `validate_route`, `import_route_lines` — проверка и импорт строк в редакторе правила окна.
@@ -183,17 +166,16 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `diag_observe_secs` | целое от 10 до 120: сколько секунд диагностика наблюдает за программой; иначе код 2 |
 | `diag_budget_min` | целое от 1 до 60: сколько минут диагностика пробует пути; иначе код 2 |
 | `nekobox_dir` | папка NekoBox или NekoRay; `""` — очистить (в PowerShell 5.1 — `'""'`) |
+| `game_filter` | `true` или `false`: встроенные стратегии обходят и порты 1024–65535 (`%GameFilter%`); активная стратегия ставится заново |
 
-Папки zapret и zapret2 (`zapret_dir`, `zapret2_dir`) CLI не меняет: службы zapret и zapret2 запускают из них
-`winws.exe` и `winws2.exe` от SYSTEM, поэтому папки меняют только в окне («Настройки» → «Папка zapret» или
-«Папка zapret2» → «Сохранить»). `settings get` их показывает, а `settings set zapret_dir …` и
-`settings set zapret2_dir …` — неизвестный ключ, код 2. По той же причине скачать релиз Flowseal или zapret2
+Папку zapret2 (`zapret2_dir`) CLI не меняет: служба zapret2 запускает из неё `winws2.exe` от SYSTEM, поэтому
+папку меняют только в окне («Настройки» → «Папка zapret2» → «Сохранить»). `settings get` её показывает, а
+`settings set zapret2_dir …` — неизвестный ключ, код 2. По той же причине скачать релиз zapret2
 («Скачать последний релиз…») можно только в окне: у CLI такой команды нет.
 
 Сохранение через CLI не может включить `cli_enabled`: если вы выключили его в окне, пока команда читала и
-сохраняла настройки, он остаётся выключенным. Если за это время вы сменили в окне папку zapret или zapret2,
+сохраняла настройки, он остаётся выключенным. Если за это время вы сменили в окне папку zapret2,
 приложение отклонит сохранение CLI ошибкой
-`the zapret folder can be changed only in the Zapret Hub window (Settings)` или
 `the zapret2 folder can be changed only in the Zapret Hub window (Settings)` (код 1): повторите команду.
 
 Неизвестный ключ, не `true`/`false` у флажка или тема не из списка — код 2 со списком допустимых, до обращения
@@ -233,8 +215,8 @@ domains = ["discord.media"]
 
 ## Тесты
 
-`tests run` без имён запускает все стратегии из `strategies list` в их порядке, кроме строк с `error` и встроенных копий Flowseal
-(`flowseal_copy: true`); с именами
+`tests run` без имён запускает все стратегии из `strategies list` в их порядке, кроме строк с `error` и встроенных копий
+Flowseal (`flowseal_copy: true`); с именами
 — только названные, в указанном порядке. `--dpi` — набор DPI вместо стандартного. `--repeats <N>` (1–5,
 по умолчанию 1) — сколько раз проверить каждую стратегию: N полных проходов по списку подряд (сначала все
 стратегии один раз, потом все ещё раз), прогон длится в N раз дольше. Без `--wait` команда возвращается сразу:
@@ -249,10 +231,10 @@ domains = ["discord.media"]
 ```
 
 `tests wait` и `tests run --wait` раз в 2 с спрашивают приложение о прогоне и пишут ход в stderr, по строке на
-стратегию (с повторами — на стратегию в каждом проходе, `pass 2/3: 3/22 general (ALT2)`):
+стратегию (с повторами — на стратегию в каждом проходе, `pass 2/3: 3/22 zapret2:general (ALT2)`):
 
 ```
-3/22 general (ALT2)
+3/22 zapret2:general (ALT2)
 ```
 
 Когда прогон закончится, stdout получает компактный рейтинг. Порядок — как в прогоне: он уже отсортирован,
@@ -274,7 +256,7 @@ domains = ["discord.media"]
   "ranking": [
     {
       "launch_error": null,
-      "name": "general (ALT11)",
+      "name": "zapret2:general (ALT11)",
       "place": 1,
       "score": { "ok": 36, "total": 36, "median_ms": 184, … }
     },
@@ -337,56 +319,35 @@ zapret-hub-cli quick-check
 
 1. `start` поднимает приложение, если оно не запущено (раздел «Если приложение не запущено»).
 2. `tests run --wait` запускает стандартный набор по всем стратегиям и ждёт рейтинг. Около 15 с на стратегию:
-   22 стратегии Flowseal 1.10.3 — около 6 минут. У агента с пределом времени на команду (у Claude Code — 10
+   22 встроенные стратегии zapret2 — около 6 минут. У агента с пределом времени на команду (у Claude Code — 10
    минут) `--timeout 540` оставляет запас. Код 4 — прогон ещё идёт: повторяйте `tests wait --timeout 540`, пока
    не будет 0 или 1.
 3. `apply-best` ставит первую стратегию последнего завершённого стандартного прогона (не отменённого).
 4. `quick-check` подтверждает, что zapret работает: `"ok": true`. Смотрите на поле, а не на код выхода: при
    `"ok": false` он тоже 0.
 
-## Свои стратегии
-
-```
-zapret-hub-cli custom clone "general (ALT11)" mine
-```
-
-Команда печатает запись новой стратегии `general (HUB mine)`: `name`, `cloned_from`, `wf`, `blocks`. Позже ту же
-запись даёт `strategies show "general (HUB mine)"`, поле `record`. Сохраните её в файл, поправьте `wf` или
-`blocks` и проверьте:
-
-```
-zapret-hub-cli custom validate mine.json
-zapret-hub-cli custom save mine.json
-```
-
-- `-` вместо файла читает запись из stdin.
-- `--create` сохраняет запись как новую стратегию; без него меняется существующая с тем же `name`.
-- Файл — UTF-8 или UTF-16LE с BOM (раздел «Файлы и stdin»).
-- JSON не той формы — код 2, в приложение ничего не отправлено. Аргументы не приняты `winws --dry-run` — код 1
-  с текстом ошибки.
-
-Удалить: `zapret-hub-cli custom delete mine --yes`.
-
 ## Файлы и stdin
 
-Команды `custom validate|save` и `zapret2 validate|save` читают файл или stdin (`-`). Допускаются UTF-8 и UTF-16LE;
+Команды `zapret2 validate|save` читают файл или stdin (`-`). Допускаются UTF-8 и UTF-16LE;
 BOM UTF-8 (Блокнот, `Set-Content -Encoding UTF8`) и BOM UTF-16LE (`>` и `Out-File` в Windows PowerShell 5.1) снимаются.
 
 ## Стратегии zapret2
 
-Если в окне задана папка zapret2 («Настройки» → «Папка zapret2»; CLI её не меняет), `strategies list` после стратегий
-Flowseal показывает стратегии zapret2: сначала встроенные (`zapret2:general`, `zapret2:general-sni`, затем 22 копии
-стратегий Flowseal — `zapret2:general (ALT5)`, `zapret2:general (Flowseal)` и т.д., у них `flowseal_copy: true`), потом
-свои. Клон копии сохраняется под именем без скобок, например `ALT5 copy`. `apply`, `strategies show` и `tests run` принимают эти имена как есть, прогон может смешивать оба движка.
-Применение стратегии zapret2 ставит службу `zapret2` и удаляет службу `zapret`, применение стратегии Flowseal —
-наоборот.
+Zapret Hub работает только на zapret2: Flowseal больше не поддерживается, его стратегии встроены. Если в окне задана
+папка zapret2 («Настройки» → «Папка zapret2»; CLI её не меняет), `strategies list` показывает сначала встроенные
+(`zapret2:general`, `zapret2:general-sni`, затем 22 копии стратегий Flowseal 1.10.3 — `zapret2:general (ALT5)`,
+`zapret2:general (Flowseal)` и т.д., у них `flowseal_copy: true`), потом свои. Клон копии сохраняется под именем без
+скобок, например `ALT5 copy`. Имя без префикса `zapret2:` (`"general (ALT11)"`) — ошибка, код 1.
 
-Папка Flowseal для zapret2 необязательна. Без неё `strategies list` показывает только стратегии zapret2, а
-`apply`, `tests run`, `zapret2 validate|save|delete`, `quick-check`, `restart` и `service remove` работают с zapret2.
-Команды Flowseal (его стратегии, `flowseal`, `game-filter`, `ipset`, `fake`, списки, `hosts`, `checks`) отвечают
-ошибкой `the zapret folder is not set: choose it in Settings`, код 1. Стратегия zapret2 с `%LISTS%`, `%BIN%` или
-`%GameFilter*%` без папки Flowseal не проходит проверку: `the strategy uses %LISTS%: choose the zapret folder in
-Settings` (у встроенных это поле `error` в `strategies list`).
+Списки и фейки Flowseal (`%LISTS%`, `%BIN%`) лежат в папках `lists` и `bin` внутри папки zapret2: приложение кладёт
+туда свои копии файлов, которых нет, и ничего не перезаписывает. Игровой фильтр (`%GameFilter*%`) — настройка
+`game_filter`.
+
+При первом запуске после версии с Flowseal приложение переносит его файлы списков и фейков в папку zapret2, игровой
+фильтр — в `game_filter`, и, если служба Flowseal стоит, а zapret2 готов, ставит вместо неё ту же стратегию из
+встроенных (`general (ALT11)` → `zapret2:general (ALT11)`, неизвестная — `zapret2:general`). Итог — одно
+уведомление и строка журнала. Служба `zapret` Flowseal, оставшаяся после этого, — находка `checks` с
+исправлением `remove-conflicts`.
 
 `zapret2 info` печатает папку, версию движка и совместимость Lua (`compat`) или ошибку (`error`).
 
@@ -451,14 +412,14 @@ zapret-hub-cli apply zapret2:mine
 2. Флажок «Управление из командной строки» включён и сохранён: `status` → код 0, обзор; в журнале
    `cli: get_overview: ok`.
 3. `version` → `{"app": "0.8.0", "cli": "0.8.0", "protocol": 5}`, код 0.
-4. `apply "general (ALT2)"` → код 0; окно и иконка трея сами показывают новую стратегию.
-5. `service remove` → код 2, служба на месте. `service remove --yes` → код 0, `sc query zapret` службу не
-   находит. `apply "general (ALT2)"` возвращает её.
-6. `tests run --wait general "general (ALT2)"` → ход в stderr, рейтинг из двух строк, код 0.
-7. `tests run --wait --timeout 5` → код 4, прогон идёт дальше. Пока он идёт: `apply general` → код 1 с ошибкой
-   про прогон; `tests status` отвечает сразу. Затем `tests wait` → рейтинг, код 0.
-8. `custom clone general mine` → запись; `general (HUB mine)` есть в `strategies list`. Запись в файл →
-   `custom validate` → код 0; файл `{"name": 1}` → код 2; `custom delete mine --yes` → код 0.
+4. `apply "zapret2:general (ALT2)"` → код 0; окно и иконка трея сами показывают новую стратегию.
+5. `service remove` → код 2, служба на месте. `service remove --yes` → код 0, `sc query zapret2` службу не
+   находит. `apply "zapret2:general (ALT2)"` возвращает её.
+6. `tests run --wait zapret2:general "zapret2:general (ALT2)"` → ход в stderr, рейтинг из двух строк, код 0.
+7. `tests run --wait --timeout 5` → код 4, прогон идёт дальше. Пока он идёт: `apply zapret2:general` → код 1 с
+   ошибкой про прогон; `tests status` отвечает сразу. Затем `tests wait` → рейтинг, код 0.
+8. `zapret2 validate mine.txt` → код 0; `zapret2 save mine mine.txt --create` → `zapret2:mine` есть в
+   `strategies list`; `zapret2 delete mine --yes` → код 0.
 9. Вкладка «Настройки» открыта. `settings set theme dark` → окно сразу тёмное, в списке темы на вкладке
    «тёмная». Введите на вкладке адрес прокси и не сохраняйте; `settings set socks5 127.0.0.1:2080` → код 0,
    поле остаётся с вашим адресом, а «Сохранить» записывает его поверх адреса агента (`settings get`).
@@ -475,13 +436,16 @@ zapret-hub-cli apply zapret2:mine
     меняются; в окне «Настройки» → «Папка zapret2» выбрать папку релиза и сохранить; `settings get` →
     `zapret2_dir` с ней; `zapret2 info` →
     версия и `compat`. Текст `strategies show zapret2:general` (поле `source`) в файл → `zapret2 validate` →
-    код 0; `zapret2 save mine <файл> --create` → `{"ok": true}`; `apply zapret2:mine` → `sc query zapret2` — RUNNING,
-    `sc query zapret` службу не находит; `apply general` → наоборот. `zapret2 delete mine` → код 2, с `--yes` →
-    код 0.
+    код 0; `zapret2 save mine <файл> --create` → `{"ok": true}`; `apply zapret2:mine` → `sc query zapret2` — RUNNING.
+    `apply general` → код 1, имя без `zapret2:`. `zapret2 delete mine` → код 2, с `--yes` → код 0.
+12a. Переход с 0.8.0: `zapret-hub.toml` с `zapret_dir` и служба `zapret` со стратегией `general (ALT11)`. Запуск хаба →
+    одно уведомление «Flowseal заменён на zapret2», `sc query zapret` службу не находит, `sc query zapret2` — RUNNING,
+    `status` — `zapret2:general (ALT11)`; в `zapret-hub.toml` больше нет `zapret_dir`; в папке zapret2 есть
+    `lists` и `bin` с файлами Flowseal.
 13. NekoBox с mixed inbound запущен, скрипт `discord-udp-proxy.ps1` закрыт. «Маршруты» → «Добавить из профиля» →
     «Discord голос», переключатель «Маршрутизация» → в шапке «прокси отвечает», голосовой канал Discord соединяется,
     в «Потоках» строки «прокси» с растущими ↑/↓; в журнале NekoBox — UDP к `104.29.*`/`35.217.*`.
-14. Приоритет: служба zapret запущена со стратегией; `winws.exe --debug=1` той же стратегии вручную (служба
+14. Приоритет: служба zapret2 запущена со стратегией; `winws2.exe --debug=1` той же стратегии вручную (служба
     остановлена) при включённой маршрутизации не печатает пакетов к подсетям правила (спецификация, раздел 11, риск «Приоритет winws»).
 15. Закрыть NekoBox посреди звонка: не позже чем через 20 с (две проверки) в шапке «прокси недоступен, трафик идёт
     напрямую», на значке трея красная точка; новый звонок идёт напрямую (если zapret это пропускает); запустить
@@ -498,10 +462,8 @@ zapret-hub-cli apply zapret2:mine
     сквозным).
 20. Пункт трея «Маршрутизация: вкл/выкл» переключает её так же, как переключатель вкладки; вкладка и значок сразу
     показывают новое состояние.
-21. Смена движка в обход хаба: при включённой маршрутизации остановить службу одного движка и запустить другой
-    вручную (`service.bat` Flowseal или служба `zapret2`). DLL выбирается только при синхронизации (запуск хаба,
-    сохранение настроек, конец паузы; спецификация, раздел 11): без перезапуска хаба звонок по-прежнему идёт через
-    прокси (если нет — записать, с какой парой движков); после перезапуска хаба маршрутизация «включена».
+21. Маршрутизация берёт WinDivert.dll из папки zapret2 (спецификация, раздел 11): без папки zapret2 она не включается
+    и говорит почему; после выбора папки и сохранения настроек — «включена».
 22. NekoBox запущен, «Добавить из профиля» → «Discord целиком», включить маршрутизацию: Discord (приложение,
     перезапущенное после включения, и discord.com в браузере без «безопасного DNS») загружается; в «Потоках» строки
     `tcp` «прокси» с доменами `discord.com`/`gateway.discord.gg`; в журнале NekoBox — CONNECT по домену.
