@@ -196,3 +196,17 @@ fn steam_logs_of_today() {
     let reg = "\r\nHKEY_CURRENT_USER\\Software\\Valve\\Steam\r\n    SteamPath    REG_SZ    d:/steam\r\n\r\n";
     assert_eq!(steam::steam_path(reg).as_deref(), Some("d:/steam"));
 }
+
+#[test]
+fn an_agent_view_with_fewer_fields_loads() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = diag::report::dir(tmp.path());
+    std::fs::create_dir_all(&dir).unwrap();
+    let text = r#"{"id": "2026-10-24_12-00-00", "profile": "discord",
+        "agent": {"verdict": "clean", "client": {"app": "running", "voice": null,
+            "stream": null, "gateway": null, "facts": []}}}"#;
+    std::fs::write(dir.join("2026-10-24_12-00-00.json"), text).unwrap();
+    let s = diag::report::load(&dir, "2026-10-24_12-00-00").unwrap();
+    assert_eq!(s.agent.client.app, "running");
+    assert!(s.agent.culprit_kinds.is_empty());
+}
