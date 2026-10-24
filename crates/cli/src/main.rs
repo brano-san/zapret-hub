@@ -1591,7 +1591,7 @@ mod tests {
         assert_eq!(rule.apps, ["Discord.exe"]);
         std::fs::write(
             &file,
-            "[rule]\nprotocol = \"udp\"\nips = [\"1.1.1.1\"]\napps = [\"Discord\"]\n",
+            "[rule]\nprotocol = \"udp\"\nips = [\"1.1.1.1\"]\napps = [\"Disc*rd\"]\n",
         )
         .unwrap();
         let (outcome, asked) = drive(&["routes", "add", "v", "--file", path], Vec::new());
