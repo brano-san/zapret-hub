@@ -29,7 +29,7 @@ pub struct ProxyStatus {
 
 /// `curl.exe --socks5-hostname <addr> -I https://www.gstatic.com/generate_204` (spec 8).
 pub fn check(addr: &str) -> ProxyStatus {
-    let mut cmd = Command::new("curl.exe");
+    let mut cmd = Command::new(crate::curl::CURL);
     cmd.args([
         "-I",
         "-s",
@@ -37,7 +37,7 @@ pub fn check(addr: &str) -> ProxyStatus {
         "-m",
         "8",
         "-o",
-        "NUL",
+        crate::curl::NULL,
         "-w",
         "%{http_code} %{time_total}",
         "--socks5-hostname",

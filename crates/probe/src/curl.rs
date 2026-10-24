@@ -3,9 +3,14 @@
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 use std::process::Command;
-use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
+
+/// Windows 10 1803+ ships `curl.exe`; elsewhere it is `curl` on `PATH`.
+pub const CURL: &str = if cfg!(windows) { "curl.exe" } else { "curl" };
+
+/// Where `-o` throws away a body nobody reads.
+pub const NULL: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub enum CheckKind {
@@ -57,7 +62,7 @@ pub struct CheckResult {
 /// `-I -s -m 4 --connect-timeout 2 -o NUL -w "%{http_code} %{time_total}" --show-error`, then the
 /// kind's arguments and the URL. Only `%{time_total}` is added to the script's request.
 pub fn check(url: &str, kind: CheckKind, cancel: Option<&AtomicBool>) -> CheckResult {
-    let mut cmd = Command::new("curl.exe");
+    let mut cmd = Command::new(CURL);
     cmd.args([
         "-I",
         "-s",
@@ -66,7 +71,7 @@ pub fn check(url: &str, kind: CheckKind, cancel: Option<&AtomicBool>) -> CheckRe
         "--connect-timeout",
         "2",
         "-o",
-        "NUL",
+        NULL,
         "-w",
         "%{http_code} %{time_total}",
         "--show-error",
@@ -177,13 +182,13 @@ pub fn dpi_check(
     payload: &Path,
     cancel: Option<&AtomicBool>,
 ) -> DpiResult {
-    let mut cmd = Command::new("curl.exe");
+    let mut cmd = Command::new(CURL);
     cmd.args(["--range", "0-65535", "-m", "5", "--connect-timeout", "3"])
         .args([
             "-w",
             "%{http_code} %{size_upload} %{size_download} %{time_total}",
             "-o",
-            "NUL",
+            NULL,
             "-X",
             "POST",
         ])
@@ -270,10 +275,10 @@ pub fn write_payload(path: &Path) -> std::io::Result<()> {
     std::fs::write(path, bytes)
 }
 
-/// Windows 10 1803+ ships `curl.exe`; tests and updates need it.
+/// [`CURL`] runs; tests and updates need it.
 pub fn available() -> bool {
     exec::run(
-        Command::new("curl.exe").arg("--version"),
+        Command::new(CURL).arg("--version"),
         Duration::from_secs(10),
         None,
     )
@@ -281,11 +286,19 @@ pub fn available() -> bool {
 }
 
 /// `--ssl-no-revoke` for an old libcurl 7, `--ssl-revoke-best-effort` otherwise, as `:ipset_update` picks.
-fn revoke_flag() -> &'static str {
-    static FLAG: OnceLock<&'static str> = OnceLock::new();
-    FLAG.get_or_init(|| {
+/// Both are Schannel options: curl elsewhere needs none.
+#[cfg(not(windows))]
+fn revoke_flag() -> Option<&'static str> {
+    None
+}
+
+/// `--ssl-no-revoke` for an old libcurl 7, `--ssl-revoke-best-effort` otherwise, as `:ipset_update` picks.
+#[cfg(windows)]
+fn revoke_flag() -> Option<&'static str> {
+    static FLAG: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    let flag = FLAG.get_or_init(|| {
         let version = exec::run(
-            Command::new("curl.exe").arg("--version"),
+            Command::new(CURL).arg("--version"),
             Duration::from_secs(10),
             None,
         )
@@ -296,23 +309,16 @@ fn revoke_flag() -> &'static str {
         } else {
             "--ssl-revoke-best-effort"
         }
-    })
+    });
+    Some(flag)
 }
 
 /// `-L -f -s -S`, a 10 s connect timeout, the revocation flag, `no-cache`, through `socks5` when given.
 pub fn get(url: &str, socks5: Option<&str>) -> Command {
-    let mut cmd = Command::new("curl.exe");
-    cmd.args([
-        "-L",
-        "-f",
-        "-s",
-        "-S",
-        "--connect-timeout",
-        "10",
-        revoke_flag(),
-        "-H",
-        "Cache-Control: no-cache",
-    ]);
+    let mut cmd = Command::new(CURL);
+    cmd.args(["-L", "-f", "-s", "-S", "--connect-timeout", "10"]);
+    cmd.args(revoke_flag());
+    cmd.args(["-H", "Cache-Control: no-cache"]);
     if let Some(proxy) = socks5 {
         cmd.args(["--socks5-hostname", proxy]);
     }
@@ -371,7 +377,7 @@ pub fn https_args(host: &str, ip: Option<IpAddr>, via: &Via) -> Vec<String> {
         "--connect-timeout",
         "2",
         "-o",
-        "NUL",
+        NULL,
         "-w",
         "%{http_code} %{time_total}",
         "--show-error",
@@ -398,7 +404,7 @@ pub fn https_via(
 ) -> CheckResult {
     // The kind is only a label here: no TLS version is forced.
     let kind = CheckKind::Tls13;
-    let mut cmd = Command::new("curl.exe");
+    let mut cmd = Command::new(CURL);
     cmd.args(https_args(host, ip, via));
     match exec::run(&mut cmd, Duration::from_secs(15), cancel) {
         Ok(out) => {
@@ -472,7 +478,7 @@ pub fn ws_args(host: &str, port: u16, ip: Option<IpAddr>, via: &Via) -> Vec<Stri
         "--connect-timeout",
         "2",
         "-o",
-        "NUL",
+        NULL,
         "-w",
         "%{http_code} %{time_starttransfer}",
         "-H",
@@ -493,7 +499,7 @@ pub fn ws_args(host: &str, port: u16, ip: Option<IpAddr>, via: &Via) -> Vec<Stri
 
 /// The time to `101` in ms, or `None` when the upgrade did not happen.
 pub fn ws_upgrade(host: &str, port: u16, ip: Option<IpAddr>, via: &Via) -> Option<u32> {
-    let mut cmd = Command::new("curl.exe");
+    let mut cmd = Command::new(CURL);
     cmd.args(ws_args(host, port, ip, via));
     let out = exec::run(&mut cmd, Duration::from_secs(10), None).ok()?;
     ws_classify(&out.stdout)
@@ -543,7 +549,7 @@ pub fn bulk_args(host: &str, port: u16, ip: Option<IpAddr>, payload: &Path) -> V
         "-w",
         "%{http_code} %{size_upload} %{size_download} %{time_total}",
         "-o",
-        "NUL",
+        NULL,
         "-s",
         "-X",
         "POST",
@@ -558,7 +564,7 @@ pub fn bulk_args(host: &str, port: u16, ip: Option<IpAddr>, payload: &Path) -> V
 }
 
 pub fn bulk(host: &str, port: u16, ip: Option<IpAddr>, payload: &Path) -> Bulk {
-    let mut cmd = Command::new("curl.exe");
+    let mut cmd = Command::new(CURL);
     cmd.args(bulk_args(host, port, ip, payload));
     match exec::run(&mut cmd, Duration::from_secs(20), None) {
         Ok(out) => bulk_classify(out.code, &out.stdout),
