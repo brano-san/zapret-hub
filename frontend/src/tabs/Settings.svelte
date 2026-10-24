@@ -17,23 +17,26 @@
   let zapret2 = $state<Info | null>(null);
   let proxy = $state<ProxyStatus | null>(null);
   let saved = $state(false);
+  /** «Найти автоматически» ran and found nothing; any other change of the folder clears it. */
+  let notFound = $state(false);
   let version = $state("");
   // The download form of the zapret2 card, opened by its own button.
   let downloader = $state<{ show: () => Promise<void> } | null>(null);
 
   async function pickZapret2(): Promise<void> {
     const path = await call(S.failed.pick, commands.pickFolder());
-    if (path && draft) draft.zapret2_dir = path;
+    if (path && draft) {
+      draft.zapret2_dir = path;
+      notFound = false;
+    }
   }
 
   /** A folder found where a release usually is: into the field, then checked at once. */
   async function detectZapret2(): Promise<void> {
     const detected = await call(S.failed.detect, commands.detectFolders());
     if (!draft || !detected) return;
-    if (!detected.zapret2) {
-      zapret2 = { dir: null, version: null, compat: null, error: null };
-      return;
-    }
+    notFound = !detected.zapret2;
+    if (!detected.zapret2) return;
     draft.zapret2_dir = detected.zapret2;
     zapret2 = (await call(S.failed.zapret2, commands.checkZapret2Folder(detected.zapret2))) ?? null;
   }
@@ -107,7 +110,15 @@
 <svelte:window onbeforeunload={onBeforeUnload} />
 
 {#if draft}
-  <div class="stack">
+  <!-- Any edit makes «Сохранено ✓» stale; typing a folder ends «not found». -->
+  <div
+    class="stack"
+    oninput={() => {
+      saved = false;
+      notFound = false;
+    }}
+    onchange={() => (saved = false)}
+  >
     <section class="card">
       <h2>{S.settings.zapret2}</h2>
       <p class="muted">{S.settings.zapret2Hint}</p>
@@ -122,9 +133,8 @@
         {:else}
           <p class="ok">{S.settings.zapret2Ok(zapret2.version, zapret2.compat)}</p>
         {/if}
-      {:else if zapret2}
-        <p class="muted">{S.settings.notFound}</p>
       {/if}
+      {#if notFound}<p class="muted">{S.settings.notFound}</p>{/if}
       <div class="buttons">
         <button onclick={pickZapret2}>{S.settings.pick}</button>
         <button onclick={detectZapret2}>{S.settings.detect}</button>
@@ -141,6 +151,7 @@
         ondone={async (dir) => {
           if (!draft) return;
           draft.zapret2_dir = dir;
+          notFound = false;
           zapret2 = (await call(S.failed.zapret2, commands.checkZapret2Folder(dir))) ?? null;
         }}
       />
