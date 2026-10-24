@@ -5,6 +5,8 @@ pub mod flows;
 pub mod linux;
 #[cfg(windows)]
 mod live;
+#[cfg(target_os = "linux")]
+use linux::live;
 pub mod observe;
 pub mod owner;
 pub mod packet;
@@ -30,8 +32,8 @@ use live::Live;
 use owner::Images;
 use rules::{Rule, Table};
 
-/// Routing needs WinDivert: elsewhere a session never starts.
-#[cfg(not(windows))]
+/// Routing needs WinDivert or nftables: elsewhere a session never starts.
+#[cfg(not(any(windows, target_os = "linux")))]
 mod live {
     use std::sync::{Arc, MutexGuard};
 
@@ -45,7 +47,7 @@ mod live {
 
     impl Live {
         pub(super) fn open(_: &Arc<Inner>, _: &Setup, _: Table) -> Result<Arc<Live>> {
-            bail!("routing is not supported on Linux yet")
+            bail!("routing is not supported on this system")
         }
 
         pub(super) fn shut(&self) {
@@ -141,13 +143,13 @@ struct Inner {
     applied: Mutex<u64>,
     /// Outlives sessions: programs keep resolved addresses cached across a pause.
     #[cfg_attr(
-        not(windows),
+        not(any(windows, target_os = "linux")),
         expect(dead_code, reason = "only a routing session reads it")
     )]
     names: Arc<Mutex<Names>>,
     /// Outlives sessions too: a program seen before a pause still counts as running.
     #[cfg_attr(
-        not(windows),
+        not(any(windows, target_os = "linux")),
         expect(dead_code, reason = "only a routing session reads it")
     )]
     images: Arc<Images>,

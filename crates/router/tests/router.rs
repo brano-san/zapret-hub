@@ -16,11 +16,12 @@ fn a_new_router_is_off_and_pause_stop_resume_are_harmless() {
     assert!(r.flows(true).is_empty());
 }
 
-/// Why a start fails here: no WinDivert.dll in a temporary folder, or no routing at all.
+/// Why a start fails here: no WinDivert.dll in a temporary folder, or (Linux, not root) no
+/// routing capabilities.
 const UNAVAILABLE: &str = if cfg!(windows) {
     "WinDivert.dll"
 } else {
-    "routing is not supported on Linux yet"
+    "CAP_NET_ADMIN"
 };
 
 #[test]

@@ -3,6 +3,8 @@
 //! Linux-only.
 
 pub mod caps;
+#[cfg(target_os = "linux")]
+pub(crate) mod live;
 pub mod nft;
 pub mod sniff;
 pub mod sockopt;
