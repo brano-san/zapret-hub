@@ -29,7 +29,7 @@
   /** The tray's «Диагностика…»: `OpenTab` to an open page, `#diag` to a new one. */
   function openTab(tab: string): void {
     const wanted = TABS.find((item) => item.id === tab);
-    if (wanted) app.tab = wanted.id;
+    if (wanted) void app.setTab(wanted.id);
   }
 
   onMount(() => {
@@ -53,15 +53,20 @@
   <div class="shell">
     <nav>
       {#each TABS as tab (tab.id)}
-        <button class="tab" class:active={tab.id === current.id} onclick={() => (app.tab = tab.id)}>{tab.label}</button>
+        <button class="tab" class:active={tab.id === current.id} onclick={() => app.setTab(tab.id)}>{tab.label}</button>
       {/each}
-      {#if app.live}<span class="testing warn">{S.overview.testing}</span>{/if}
-      {#if app.diagLive}<span class="testing warn">{S.diag.running}</span>{/if}
+      <div class="nav-controls">
+        {#if app.live}<span class="testing warn">{S.overview.testing}</span>{/if}
+        {#if app.diagLive}<span class="testing warn">{S.diag.running}</span>{/if}
+      </div>
     </nav>
     <main>
       <current.view />
     </main>
   </div>
+{:else}
+  <!-- The settings have not arrived (IPC broken or slow): the page answers for itself instead of white -->
+  <p class="loading">{S.common.loading}</p>
 {/if}
 
 <Notices />
@@ -94,8 +99,21 @@
     font-weight: 600;
   }
 
-  .testing {
+  .nav-controls {
     margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .loading {
+    margin: 40vh auto 0;
+    text-align: center;
+    color: var(--muted);
+  }
+
+  .testing {
+    font-size: 13px;
   }
 
   main {

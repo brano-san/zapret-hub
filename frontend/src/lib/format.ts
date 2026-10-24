@@ -2,7 +2,8 @@ import type { CheckLevel, CheckStatus, DiagScore, DpiStatus, Fault, Fix, MergeNo
 import { plural, S } from "./strings";
 
 export function ms(value: number | null | undefined): string {
-  return value == null ? "—" : `${value} мс`;
+  // \u00A0 before «мс»: the number never wraps onto the next line in narrow columns.
+  return value == null ? "—" : `${value}\u00A0мс`;
 }
 
 /** `2026-10-10_05-03-34` → `10.10.2026 05:03`. */
@@ -70,9 +71,9 @@ export function quickSummary(check: QuickCheck): string {
     .join("\n");
 }
 
-/** About 15 s a strategy and pass for the standard suite (spec 14), a little more for DPI. */
+/** About 4 s a strategy and pass for the standard suite (the checks of a target run at once), a little more for DPI. */
 export function estimateMinutes(count: number, suite: Suite, repeats = 1): number {
-  return Math.max(1, Math.round((count * repeats * (suite === "Standard" ? 15 : 20)) / 60));
+  return Math.max(1, Math.round((count * repeats * (suite === "Standard" ? 4 : 20)) / 60));
 }
 
 /** The choices of «Повторов» (`tester::run::MAX_REPEATS`). */

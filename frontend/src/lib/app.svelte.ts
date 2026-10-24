@@ -1,5 +1,6 @@
 import { commands, events, type DiagLive, type LiveRun, type Overview, type Settings, type Theme } from "./ipc/bindings";
 import { call, type Answer } from "./api";
+import { confirmation } from "./confirm.svelte";
 import { notices } from "./notices.svelte";
 import { S } from "./strings";
 
@@ -19,6 +20,27 @@ class App {
   /** The report of the diagnostics that just finished, for the Diag tab to open. */
   diagFinished = $state<string | null>(null);
   pending = $state(0);
+  /** The mounted tab's check of its unsaved edits, or null: `setTab` asks about it. */
+  unsaved: (() => boolean) | null = null;
+
+  /** Linux: the page hides what only Windows has (the router) and shows what only Linux has. */
+  get linux(): boolean {
+    return this.overview?.platform === "linux";
+  }
+
+  /** A tab switch through the guard: unsaved edits ask first. */
+  async setTab(target: Tab): Promise<void> {
+    if (target !== this.tab && this.unsaved?.()) {
+      const sure = await confirmation.ask({
+        title: S.settings.unsavedTitle,
+        text: S.settings.unsavedText,
+        yes: S.settings.unsavedLeave,
+        danger: true,
+      });
+      if (!sure) return;
+    }
+    this.tab = target;
+  }
 
   /** A command the user waits on is running: the buttons that change zapret stay off. */
   get busy(): boolean {

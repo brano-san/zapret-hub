@@ -126,8 +126,8 @@ describe("repeats", () => {
   });
 
   it("multiplies the estimate by the passes", () => {
-    expect(estimateMinutes(8, "Standard")).toBe(2);
-    expect(estimateMinutes(8, "Standard", 3)).toBe(6);
+    expect(estimateMinutes(8, "Standard")).toBe(1);
+    expect(estimateMinutes(8, "Standard", 3)).toBe(2);
   });
 });
 
