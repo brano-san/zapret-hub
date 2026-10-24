@@ -10,6 +10,7 @@ pub struct LocalTime {
 }
 
 impl LocalTime {
+    #[cfg(windows)]
     pub fn now() -> Self {
         // SAFETY: GetLocalTime has no preconditions.
         let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
@@ -20,6 +21,27 @@ impl LocalTime {
             hour: t.wHour,
             minute: t.wMinute,
             second: t.wSecond,
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn now() -> Self {
+        // SAFETY: `time` with a null pointer only returns; `localtime_r` fills the zeroed `tm`
+        // we own (an all-zero `tm` is valid, its zone pointer is just null).
+        let t = unsafe {
+            let now = libc::time(std::ptr::null_mut());
+            let mut t: libc::tm = std::mem::zeroed();
+            libc::localtime_r(&now, &mut t);
+            t
+        };
+        let field = |v: libc::c_int| u16::try_from(v).unwrap_or_default();
+        Self {
+            year: field(t.tm_year + 1900),
+            month: field(t.tm_mon + 1),
+            day: field(t.tm_mday),
+            hour: field(t.tm_hour),
+            minute: field(t.tm_min),
+            second: field(t.tm_sec),
         }
     }
 

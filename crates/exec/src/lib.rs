@@ -5,23 +5,104 @@ mod time;
 
 pub use time::LocalTime;
 
+#[cfg(windows)]
+mod tree {
+    use std::os::windows::io::AsRawHandle as _;
+    use std::os::windows::process::CommandExt as _;
+    use std::process::{Child, Command};
+
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, TerminateJobObject,
+    };
+
+    /// `CREATE_NO_WINDOW`: console programs (sc, netsh, curl, winws) must not flash a window.
+    pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    pub fn prepare(cmd: &mut Command) {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    /// A job object holding a started program and everything it starts. Closing it ends them all
+    /// (`KILL_ON_JOB_CLOSE`), so even a crash of ours leaves no orphan behind.
+    pub struct Tree(HANDLE);
+
+    impl Tree {
+        /// A new job with `child` already in it.
+        pub fn holding(child: &Child) -> std::io::Result<Self> {
+            // SAFETY: no security attributes and no name; the handle is owned by the job built here.
+            let job = Self(unsafe { CreateJobObjectW(None, windows::core::PCWSTR::null())? });
+            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            // SAFETY: `limits` is the structure this information class takes, and the size is its
+            // own; the process handle stays valid while `child` is borrowed.
+            unsafe {
+                SetInformationJobObject(
+                    job.0,
+                    JobObjectExtendedLimitInformation,
+                    (&raw const limits).cast(),
+                    size_of_val(&limits) as u32,
+                )?;
+                AssignProcessToJobObject(job.0, HANDLE(child.as_raw_handle()))?;
+            }
+            Ok(job)
+        }
+
+        /// Ends every process in the job at once.
+        pub fn terminate(&self) {
+            // SAFETY: the handle is a live job object, owned by `self`.
+            let _ = unsafe { TerminateJobObject(self.0, 1) };
+        }
+    }
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            // SAFETY: the handle is closed here and nowhere else.
+            let _ = unsafe { CloseHandle(self.0) };
+        }
+    }
+}
+
+#[cfg(unix)]
+mod tree {
+    use std::os::unix::process::CommandExt as _;
+    use std::process::{Child, Command};
+
+    /// Its own process group, so killing the group ends the forks and grandchildren too.
+    pub fn prepare(cmd: &mut Command) {
+        cmd.process_group(0);
+    }
+
+    /// The process group a started program leads.
+    pub struct Tree(libc::pid_t);
+
+    impl Tree {
+        pub fn holding(child: &Child) -> std::io::Result<Self> {
+            libc::pid_t::try_from(child.id())
+                .map(Self)
+                .map_err(std::io::Error::other)
+        }
+
+        /// Ends every process in the group at once.
+        pub fn terminate(&self) {
+            // SAFETY: `kill` takes plain numbers; a group with no members left is just ESRCH.
+            let _ = unsafe { libc::kill(-self.0, libc::SIGKILL) };
+        }
+    }
+}
+
+#[cfg(windows)]
+pub use tree::CREATE_NO_WINDOW;
+
 use std::io::Read;
-use std::os::windows::io::AsRawHandle as _;
-use std::os::windows::process::CommandExt as _;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
-use windows::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, TerminateJobObject,
-};
-
-/// `CREATE_NO_WINDOW`: console programs (sc, netsh, curl, winws) must not flash a window.
-pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+use tree::Tree;
 
 /// What a finished, or killed, program left behind.
 #[derive(Debug, Clone)]
@@ -80,11 +161,11 @@ pub fn run(
 ) -> std::io::Result<Output> {
     let command = command_line(cmd);
     let started = Instant::now();
+    tree::prepare(cmd);
     let spawned = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .creation_flags(CREATE_NO_WINDOW)
         .spawn();
     let mut child = match spawned {
         Ok(child) => child,
@@ -93,13 +174,14 @@ pub fn run(
             return Err(err);
         }
     };
-    // ponytail: a grandchild started before this assignment escapes the job; CREATE_SUSPENDED fixes it
-    let job = match Job::holding(&child) {
+    // ponytail: on Windows a grandchild started before this assignment escapes the job;
+    // CREATE_SUSPENDED fixes it
+    let tree = match Tree::holding(&child) {
         Ok(job) => Some(job),
         Err(err) => {
             log::warn!(
                 target: "exec",
-                "{command} -> no job object, a timeout ends only the program itself: {err}"
+                "{command} -> no process tree, a timeout ends only the program itself: {err}"
             );
             None
         }
@@ -114,6 +196,10 @@ pub fn run(
         canceled = cancel.is_some_and(|flag| flag.load(Ordering::Relaxed));
         timed_out = started.elapsed() >= timeout;
         if canceled || timed_out {
+            // The group first: once the leader is reaped its pid may name another process.
+            if let Some(tree) = &tree {
+                tree.terminate();
+            }
             let _ = child.kill();
             let _ = child.wait();
             break None;
@@ -121,8 +207,8 @@ pub fn run(
         std::thread::sleep(Duration::from_millis(20));
     };
     // Whatever the program started and left running keeps the pipes open, and `join` below waiting.
-    if let Some(job) = &job {
-        job.terminate();
+    if let Some(tree) = &tree {
+        tree.terminate();
     }
     let output = Output {
         command,
@@ -156,47 +242,8 @@ fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> JoinHandle<Vec<u8>> {
     })
 }
 
-/// A job object holding a started program and everything it starts. Closing it ends them all
-/// (`KILL_ON_JOB_CLOSE`), so even a crash of ours leaves no orphan behind.
-struct Job(HANDLE);
-
-impl Job {
-    /// A new job with `child` already in it.
-    fn holding(child: &Child) -> windows::core::Result<Self> {
-        // SAFETY: no security attributes and no name; the handle is owned by the `Job` built here.
-        let job = Self(unsafe { CreateJobObjectW(None, windows::core::PCWSTR::null())? });
-        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        // SAFETY: `limits` is the structure this information class takes, and the size is its own;
-        // the process handle stays valid while `child` is borrowed.
-        unsafe {
-            SetInformationJobObject(
-                job.0,
-                JobObjectExtendedLimitInformation,
-                (&raw const limits).cast(),
-                size_of_val(&limits) as u32,
-            )?;
-            AssignProcessToJobObject(job.0, HANDLE(child.as_raw_handle()))?;
-        }
-        Ok(job)
-    }
-
-    /// Ends every process in the job at once.
-    fn terminate(&self) {
-        // SAFETY: the handle is a live job object, owned by `self`.
-        let _ = unsafe { TerminateJobObject(self.0, 1) };
-    }
-}
-
-impl Drop for Job {
-    fn drop(&mut self) {
-        // SAFETY: the handle is closed here and nowhere else.
-        let _ = unsafe { CloseHandle(self.0) };
-    }
-}
-
 /// Console programs write UTF-8, UTF-16 (some system tools when redirected) or the OEM code
-/// page (cp866 on Russian Windows); this reads all three.
+/// page (cp866 on Russian Windows); this reads all three. Elsewhere invalid UTF-8 is read lossily.
 pub fn decode(bytes: &[u8]) -> String {
     if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
         return utf16le(rest);
@@ -221,6 +268,12 @@ fn utf16le(bytes: &[u8]) -> String {
     String::from_utf16_lossy(&units)
 }
 
+#[cfg(not(windows))]
+fn oem(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+#[cfg(windows)]
 fn oem(bytes: &[u8]) -> String {
     use windows::Win32::Globalization::{
         CP_OEMCP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS, MultiByteToWideChar,
