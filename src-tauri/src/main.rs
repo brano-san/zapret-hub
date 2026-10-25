@@ -7,6 +7,7 @@ fn main() {
         // Routing's capabilities come through the launcher (`zapret-hub-cli`, caps.rs): a hub
         // started without them goes through it once, when it holds them.
         let launched = std::env::var_os(caps::LAUNCHED_ENV).is_some();
+        caps::take_origin();
         if let Some(err) = caps::relaunch(launched) {
             eprintln!("zapret-hub: {} did not run: {err}", caps::LAUNCHER);
         }
@@ -26,6 +27,7 @@ fn main() {
         unsafe {
             // What the hub starts (itself again included) goes through the launcher anew.
             std::env::remove_var(caps::LAUNCHED_ENV);
+            std::env::remove_var(caps::ORIGIN_ENV);
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
             if std::env::var_os("GTK_USE_PORTAL").is_none() {
                 std::env::set_var("GTK_USE_PORTAL", "1");

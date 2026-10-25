@@ -173,8 +173,22 @@ pub fn parse_uid(text: &str) -> Option<u32> {
 
 /// An environment variable the launcher passes to the hub: what a desktop session needs, nothing
 /// that names code to load (an allow-list; `LD_*` the C library already drops in the launcher).
+/// Data stays: proxies, certificates, the input method's name (not `GTK_IM_MODULE_FILE`, which
+/// names modules to load), scaling and the cursor.
 pub fn kept_env(name: &str) -> bool {
-    const KEPT: [&str; 23] = [
+    const KEPT: [&str; 35] = [
+        "http_proxy",
+        "https_proxy",
+        "ftp_proxy",
+        "all_proxy",
+        "no_proxy",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "XMODIFIERS",
+        "GTK_IM_MODULE",
+        "GDK_SCALE",
+        "GDK_DPI_SCALE",
+        "GDK_BACKEND",
         "DISPLAY",
         "WAYLAND_DISPLAY",
         "XAUTHORITY",
@@ -199,19 +213,39 @@ pub fn kept_env(name: &str) -> bool {
         "XDG_DATA_DIRS",
         "GTK_USE_PORTAL",
     ];
-    KEPT.contains(&name) || name.starts_with("LC_")
+    KEPT.contains(&name)
+        || KEPT.contains(&name.to_ascii_lowercase().as_str()) && name.ends_with("_PROXY")
+        || name.starts_with("LC_")
+        || name.starts_with("XCURSOR_")
 }
 
-/// The root step of `grant`, from the hub and launcher files the hub holds open (`/proc/<pid>/
-/// fd/<n>`: root reads exactly the files checked, whatever their paths name by now): `INSTALL_DIR`
-/// as root's, `UID_FILE` with `uid`, then each copy written beside its place, made root's `0755`
-/// (the launcher's with the capabilities) and renamed into it.
+/// The root step of `grant`, from the hub and launcher files process `pid` holds open as `fds`
+/// (`/proc/<pid>/fd/<n>`: root reads exactly the files checked, whatever their paths name by now).
+/// First it makes sure `pid` is still `uid`'s and both are regular files (a hub gone while the
+/// dialog was open could leave its pid to another process). Then `INSTALL_DIR` as root's,
+/// `UID_FILE` with `uid`, and each copy written beside its place with the source's times (the hub
+/// compares size and time first), made root's and renamed into it: the hub `0755`, the launcher
+/// `0750` with an ACL for `uid` alone (`0755` where ACLs do not work) and the capabilities.
 #[cfg(target_os = "linux")]
-pub fn grant_batch(hub: &str, launcher: &str, uid: u32) -> zapret::root::Batch {
+pub fn grant_batch(pid: u32, fds: [i32; 2], uid: u32) -> zapret::root::Batch {
     use zapret::root::tool;
     let dir = Path::new(INSTALL_DIR);
     let at = |name: &str| dir.join(name).display().to_string();
+    let source = |fd: i32| format!("/proc/{pid}/fd/{fd}");
+    let (hub, launcher) = (source(fds[0]), source(fds[1]));
+    let uid_text = uid.to_string();
     let mut batch = zapret::root::Batch::new();
+    batch.run(&[
+        "/bin/sh",
+        "-c",
+        "test \"$(awk '/^Uid:/ { print $2 }' \"/proc/$1/status\")\" = \"$2\" \
+         && test -f \"$3\" && test -f \"$4\"",
+        "sh",
+        &pid.to_string(),
+        &uid_text,
+        &hub,
+        &launcher,
+    ]);
     batch.run(&[
         &tool("install"),
         "-d",
@@ -230,20 +264,33 @@ pub fn grant_batch(hub: &str, launcher: &str, uid: u32) -> zapret::root::Batch {
             "-c",
             "printf '%s\\n' \"$1\" > \"$2\"",
             "sh",
-            &uid.to_string(),
+            &uid_text,
             &uid_new,
         ])
         .run(&[&tool("chmod"), "0644", &uid_new])
         .run(&[&tool("mv"), "-f", &uid_new, &uid_file]);
-    for (source, name, caps) in [(hub, HUB, false), (launcher, LAUNCHER, true)] {
+    for (source, name, launcher) in [(&hub, HUB, false), (&launcher, LAUNCHER, true)] {
         let new = at(&format!(".{name}.new"));
         batch
             .run(&[&tool("rm"), "-f", &new])
-            .run(&[&tool("cp"), source, &new])
-            .run(&[&tool("chown"), "root:root", &new])
-            .run(&[&tool("chmod"), "0755", &new]);
-        if caps {
-            batch.run(&[&tool("setcap"), "cap_net_admin,cap_net_raw+eip", &new]);
+            .run(&[&tool("cp"), "--preserve=timestamps", source, &new])
+            .run(&[&tool("chown"), "root:root", &new]);
+        if launcher {
+            batch
+                .run(&[&tool("chmod"), "0750", &new])
+                .run(&[
+                    "/bin/sh",
+                    "-c",
+                    "\"$1\" -m \"u:$2:rx\" \"$3\" || \"$4\" 0755 \"$3\"",
+                    "sh",
+                    &tool("setfacl"),
+                    &uid_text,
+                    &new,
+                    &tool("chmod"),
+                ])
+                .run(&[&tool("setcap"), "cap_net_admin,cap_net_raw+eip", &new]);
+        } else {
+            batch.run(&[&tool("chmod"), "0755", &new]);
         }
         batch.run(&[&tool("mv"), "-f", &new, &at(name)]);
     }
@@ -278,43 +325,93 @@ pub fn grant(hub: &Path) -> anyhow::Result<()> {
         }
         open.push(file);
     }
-    let fd = |f: &std::fs::File| format!("/proc/{}/fd/{}", std::process::id(), f.as_raw_fd());
-    grant_batch(&fd(&open[0]), &fd(&open[1]), uid)
+    let fds = [open[0].as_raw_fd(), open[1].as_raw_fd()];
+    grant_batch(std::process::id(), fds, uid)
         .exec()
         .with_context(|| format!("cannot grant routing capabilities in {INSTALL_DIR}"))
 }
 
-/// `UID_FILE` when root's alone, and the uid in it.
+/// `INSTALL_DIR`, opened once after it and every folder above it (`/usr/local` and the rest, by
+/// its real path) proved root's alone; its files open relative to it (`open_in`).
 #[cfg(target_os = "linux")]
-fn allowed_uid() -> anyhow::Result<u32> {
-    use std::io::Read as _;
+fn install_dir() -> anyhow::Result<std::fs::File> {
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-    let dir = std::fs::symlink_metadata(INSTALL_DIR)?;
-    if let Some(why) = refuse_root_file(dir.is_dir(), dir.uid(), dir.mode()) {
-        anyhow::bail!("{INSTALL_DIR} {why}");
+    let real = std::fs::canonicalize(INSTALL_DIR)?;
+    for p in real.ancestors() {
+        let meta = std::fs::symlink_metadata(p)?;
+        if let Some(why) = refuse_root_file(meta.is_dir(), meta.uid(), meta.mode()) {
+            anyhow::bail!("{} {why}", p.display());
+        }
     }
-    let path = Path::new(INSTALL_DIR).join(UID_FILE);
-    let mut file = std::fs::OpenOptions::new()
+    Ok(std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&path)?;
-    let meta = file.metadata()?;
-    if let Some(why) = refuse_root_file(meta.is_file(), meta.uid(), meta.mode()) {
-        anyhow::bail!("{} {why}", path.display());
-    }
-    let mut text = String::new();
-    file.read_to_string(&mut text)?;
-    parse_uid(&text).ok_or_else(|| anyhow::anyhow!("{} holds no uid", path.display()))
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(&real)?)
 }
 
-/// Both files hold the same bytes (or are one).
+/// `name` in `dir` (`install_dir`), not following a link, when it is root's alone.
+#[cfg(target_os = "linux")]
+fn open_in(dir: &std::fs::File, name: &str) -> anyhow::Result<std::fs::File> {
+    use std::os::fd::{AsRawFd as _, FromRawFd as _};
+    use std::os::unix::fs::MetadataExt as _;
+    let c_name = std::ffi::CString::new(name)?;
+    // SAFETY: a valid dir fd and a NUL-terminated name; the new fd is owned by the `File`.
+    let fd = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            c_name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        let err = std::io::Error::last_os_error();
+        anyhow::bail!("{INSTALL_DIR}/{name}: {err}");
+    }
+    // SAFETY: `fd` was just opened and nothing else owns it.
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let meta = file.metadata()?;
+    if let Some(why) = refuse_root_file(meta.is_file(), meta.uid(), meta.mode()) {
+        anyhow::bail!("{INSTALL_DIR}/{name} {why}");
+    }
+    Ok(file)
+}
+
+/// The uid in `UID_FILE` of `dir` (`install_dir`).
+#[cfg(target_os = "linux")]
+fn allowed_uid(dir: &std::fs::File) -> anyhow::Result<u32> {
+    use std::io::Read as _;
+    let mut text = String::new();
+    open_in(dir, UID_FILE)?.read_to_string(&mut text)?;
+    parse_uid(&text).ok_or_else(|| anyhow::anyhow!("{INSTALL_DIR}/{UID_FILE} holds no uid"))
+}
+
+/// Two programs by `(size, mtime)`: another size differs, the same size and time is the same file
+/// (the grant copies the time), `None` asks for the bytes. A false "same" only starts the
+/// installed hub instead of this one: the launcher never runs anything but the installed copy.
+pub fn quick_same(a: (u64, i64, i64), b: (u64, i64, i64)) -> Option<bool> {
+    if a.0 != b.0 {
+        Some(false)
+    } else {
+        (a == b).then_some(true)
+    }
+}
+
+/// Both files hold the same program.
 #[cfg(target_os = "linux")]
 fn same_program(a: &Path, b: &Path) -> bool {
-    let len = |p: &Path| std::fs::metadata(p).map(|m| m.len()).ok();
-    a == b
-        || (len(a).is_some() && len(a) == len(b) && {
-            matches!((std::fs::read(a), std::fs::read(b)), (Ok(x), Ok(y)) if x == y)
-        })
+    use std::os::unix::fs::MetadataExt as _;
+    let stamp = |p: &Path| {
+        std::fs::metadata(p)
+            .map(|m| (m.len(), m.mtime(), m.mtime_nsec()))
+            .ok()
+    };
+    match (stamp(a), stamp(b)) {
+        _ if a == b => true,
+        (Some(x), Some(y)) => quick_same(x, y).unwrap_or_else(
+            || matches!((std::fs::read(a), std::fs::read(b)), (Ok(x), Ok(y)) if x == y),
+        ),
+        _ => false,
+    }
 }
 
 /// How the grant stands for the hub program `exe` and this user.
@@ -325,7 +422,8 @@ pub fn installed(exe: &Path) -> Installed {
         return Installed::None;
     }
     // SAFETY: getuid cannot fail.
-    if allowed_uid().ok() != Some(unsafe { libc::getuid() }) {
+    let me = unsafe { libc::getuid() };
+    if install_dir().and_then(|d| allowed_uid(&d)).ok() != Some(me) {
         return Installed::OtherUser;
     }
     if !same_program(exe, &dir.join(HUB)) {
@@ -334,12 +432,23 @@ pub fn installed(exe: &Path) -> Installed {
     Installed::Ready
 }
 
+/// `ORIGIN_ENV` as the hub started, kept by `take_origin`.
+#[cfg(target_os = "linux")]
+static ORIGIN: std::sync::OnceLock<Option<std::ffi::OsString>> = std::sync::OnceLock::new();
+
+/// Reads `ORIGIN_ENV` once, for `hub_exe`; `main` then removes it, so what the hub starts never
+/// sees it. Call before that.
+#[cfg(target_os = "linux")]
+pub fn take_origin() {
+    ORIGIN.get_or_init(|| std::env::var_os(ORIGIN_ENV));
+}
+
 /// The hub program as the user started it: the launcher runs the installed copy and names the
 /// original in `ORIGIN_ENV` (autostart, the next grant).
 #[cfg(target_os = "linux")]
 pub fn hub_exe() -> std::io::Result<PathBuf> {
     let exe = std::env::current_exe()?;
-    match std::env::var_os(ORIGIN_ENV) {
+    match ORIGIN.get().cloned().flatten() {
         Some(origin) if exe.starts_with(INSTALL_DIR) => Ok(PathBuf::from(origin)),
         _ => Ok(exe),
     }
@@ -353,7 +462,6 @@ pub fn hub_exe() -> std::io::Result<PathBuf> {
 #[cfg(target_os = "linux")]
 pub fn launch(args: impl IntoIterator<Item = std::ffi::OsString>) -> anyhow::Error {
     use std::os::fd::AsRawFd as _;
-    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
     use std::os::unix::process::CommandExt as _;
 
     let mut args = args.into_iter();
@@ -362,22 +470,15 @@ pub fn launch(args: impl IntoIterator<Item = std::ffi::OsString>) -> anyhow::Err
     let run = || -> anyhow::Result<std::convert::Infallible> {
         // SAFETY: getuid cannot fail.
         let uid = unsafe { libc::getuid() };
-        let allowed = allowed_uid()?;
+        let dir = install_dir()?;
+        let allowed = allowed_uid(&dir)?;
         anyhow::ensure!(
             allowed == uid,
             "routing capabilities on this computer are granted to uid {allowed}, not to you \
              (uid {uid}): click «Разрешить маршрутизацию» in your Zapret Hub"
         );
         let hub = Path::new(INSTALL_DIR).join(HUB);
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&hub)
-            .map_err(|e| anyhow::anyhow!("{}: {e}", hub.display()))?;
-        let meta = file.metadata()?;
-        if let Some(why) = refuse_root_file(meta.is_file(), meta.uid(), meta.mode()) {
-            anyhow::bail!("{} {why}", hub.display());
-        }
+        let file = open_in(&dir, HUB)?;
         // The file checked, not whatever the path names by now.
         let mut cmd = std::process::Command::new(format!("/proc/self/fd/{}", file.as_raw_fd()));
         cmd.arg0(&hub).args(&flags).env_clear();
@@ -612,9 +713,33 @@ mod tests {
             "VK_ICD_FILENAMES",
             "LD_PRELOAD",
             "SUDO_UID",
+            "OTHER_PROXY",
+            "XDG_SOMETHING",
         ] {
             assert!(!kept_env(dropped), "{dropped}");
         }
+        for data in [
+            "http_proxy",
+            "HTTPS_PROXY",
+            "NO_PROXY",
+            "all_proxy",
+            "SSL_CERT_FILE",
+            "XMODIFIERS",
+            "GTK_IM_MODULE",
+            "GDK_SCALE",
+            "GDK_BACKEND",
+            "XCURSOR_SIZE",
+        ] {
+            assert!(kept_env(data), "{data}");
+        }
+    }
+
+    #[test]
+    fn size_and_time_decide_before_the_bytes() {
+        assert_eq!(quick_same((10, 5, 1), (11, 5, 1)), Some(false));
+        assert_eq!(quick_same((10, 5, 1), (10, 5, 1)), Some(true));
+        assert_eq!(quick_same((10, 5, 1), (10, 6, 1)), None);
+        assert_eq!(quick_same((10, 5, 1), (10, 5, 2)), None);
     }
 
     #[test]
@@ -641,23 +766,25 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn grant_copies_the_open_files_into_roots_folder_then_gives_the_launcher_the_caps() {
-        let script = grant_batch("/proc/7/fd/3", "/proc/7/fd/4", 1000).script();
+        let script = grant_batch(7, [3, 4], 1000).script();
         let lines: Vec<&str> = script.lines().collect();
         let ends = [
             "set -e",
+            "'sh' '7' '1000' '/proc/7/fd/3' '/proc/7/fd/4'",
             "install' '-d' '-o' 'root' '-g' 'root' '-m' '0755' '/usr/local/lib/zapret-hub'",
             "'sh' '1000' '/usr/local/lib/zapret-hub/.uid.new'",
             "chmod' '0644' '/usr/local/lib/zapret-hub/.uid.new'",
             "mv' '-f' '/usr/local/lib/zapret-hub/.uid.new' '/usr/local/lib/zapret-hub/uid'",
             "rm' '-f' '/usr/local/lib/zapret-hub/.zapret-hub.new'",
-            "cp' '/proc/7/fd/3' '/usr/local/lib/zapret-hub/.zapret-hub.new'",
+            "cp' '--preserve=timestamps' '/proc/7/fd/3' '/usr/local/lib/zapret-hub/.zapret-hub.new'",
             "chown' 'root:root' '/usr/local/lib/zapret-hub/.zapret-hub.new'",
             "chmod' '0755' '/usr/local/lib/zapret-hub/.zapret-hub.new'",
             "mv' '-f' '/usr/local/lib/zapret-hub/.zapret-hub.new' '/usr/local/lib/zapret-hub/zapret-hub'",
             "rm' '-f' '/usr/local/lib/zapret-hub/.zapret-hub-cli.new'",
-            "cp' '/proc/7/fd/4' '/usr/local/lib/zapret-hub/.zapret-hub-cli.new'",
+            "cp' '--preserve=timestamps' '/proc/7/fd/4' '/usr/local/lib/zapret-hub/.zapret-hub-cli.new'",
             "chown' 'root:root' '/usr/local/lib/zapret-hub/.zapret-hub-cli.new'",
-            "chmod' '0755' '/usr/local/lib/zapret-hub/.zapret-hub-cli.new'",
+            "chmod' '0750' '/usr/local/lib/zapret-hub/.zapret-hub-cli.new'",
+            "'1000' '/usr/local/lib/zapret-hub/.zapret-hub-cli.new' '/usr/bin/chmod'",
             "setcap' 'cap_net_admin,cap_net_raw+eip' '/usr/local/lib/zapret-hub/.zapret-hub-cli.new'",
             "mv' '-f' '/usr/local/lib/zapret-hub/.zapret-hub-cli.new' '/usr/local/lib/zapret-hub/zapret-hub-cli'",
         ];
