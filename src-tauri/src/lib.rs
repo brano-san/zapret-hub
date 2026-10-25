@@ -285,9 +285,14 @@ pub fn run() -> anyhow::Result<()> {
 
 /// SIGTERM (logout, `kill`), SIGINT (Ctrl+C) and SIGHUP end the app as «Выход» does, routing
 /// stopped first: its table and rules outlive the process. A second Ctrl+C kills at once; a
-/// repeated SIGTERM or SIGHUP waits for the cleanup: GDBus raises SIGTERM itself when the session
-/// bus closes (`exit-on-close`), and logind sends SIGTERM with SIGHUP, both while a logout's first
-/// signal is still clearing the routing.
+/// repeated SIGTERM or SIGHUP waits for the routing cleanup only (GDBus raises SIGTERM itself when
+/// the session bus closes (`exit-on-close`), and logind sends SIGTERM with SIGHUP, both while a
+/// logout's first signal is still clearing the routing): after it they kill at once again, and a
+/// quit still running 10 s later (a change waiting for a password prompt) ends the process.
+/// How long a quit on a signal may take once the routing is cleared.
+#[cfg(target_os = "linux")]
+const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 #[cfg(target_os = "linux")]
 fn quit_on_signals(app: &tauri::AppHandle) {
     use std::sync::atomic::{AtomicI32, Ordering};
@@ -336,6 +341,16 @@ fn quit_on_signals(app: &tauri::AppHandle) {
             unsafe { libc::signal(libc::SIGINT, libc::SIG_DFL) };
             log::info!("quitting on a signal");
             routing::stop_on_exit(&app.state::<AppState>());
+            // SAFETY: back to the default actions; nothing left that a kill would leave behind.
+            unsafe {
+                libc::signal(libc::SIGTERM, libc::SIG_DFL);
+                libc::signal(libc::SIGHUP, libc::SIG_DFL);
+            }
+            std::thread::spawn(|| {
+                std::thread::sleep(QUIT_WAIT);
+                log::warn!("the quit hung for {} s: exiting", QUIT_WAIT.as_secs());
+                std::process::exit(0);
+            });
             tray::quit(&app);
         }
     });
