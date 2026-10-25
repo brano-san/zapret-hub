@@ -611,9 +611,6 @@ mod tests {
         assert_eq!(named_tables("# c\n\n100 vpn\n0x10 hex\n"), [100]);
     }
 
-    /// The live tests below load the same table: one at a time in a shared namespace.
-    static NFT: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// `nft` itself checks the text: needs `CAP_NET_ADMIN`, e.g. `unshare -rn <test binary>
     /// --ignored nft_accepts`.
     #[test]
@@ -621,7 +618,7 @@ mod tests {
     fn nft_accepts_the_ruleset() {
         use std::io::Write;
         use std::process::{Command, Stdio};
-        let _nft = NFT
+        let _nft = crate::linux::LIVE_TESTS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let table = Table::new(&[
@@ -676,7 +673,7 @@ mod tests {
     #[ignore = "needs ip, nft and CAP_NET_ADMIN (a user namespace will do)"]
     fn a_subnet_broadcast_is_never_marked() {
         use std::process::Command;
-        let _nft = NFT
+        let _nft = crate::linux::LIVE_TESTS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let run = |prog: &str, args: &[&str], stdin: Option<&str>| {

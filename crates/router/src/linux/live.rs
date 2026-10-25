@@ -163,6 +163,41 @@ fn acceptors() -> Result<(TcpListener, Option<TcpListener>)> {
     bail!("no port is free on both 127.0.0.1 and [::1]")
 }
 
+/// Puts the routing in force: the ruleset (`ruleset(ipv6)`), then the policy rule and route of
+/// IPv4 and, with `ipv6`, of IPv6. IPv4 must work; IPv6 is optional: a refused IPv6 ruleset or IPv6
+/// rule is logged, its rule removed and the ruleset loaded without IPv6 (which then goes direct).
+/// True when IPv6 is in force.
+fn install(
+    ipv6: bool,
+    ruleset: impl Fn(bool) -> String,
+    nft: impl Fn(&str) -> Result<(), String>,
+    policy: impl FnOnce() -> Result<nft::Policy, String>,
+    ip: impl Fn(&[String]) -> Result<(), String>,
+) -> Result<bool, String> {
+    let mut ipv6 = ipv6;
+    if ipv6 && let Err(e) = nft(&ruleset(true)) {
+        log::warn!("routing IPv4 only: nft refused the IPv6 part: {e}");
+        ipv6 = false;
+    }
+    if !ipv6 {
+        nft(&ruleset(false))?;
+    }
+    let policy = policy()?;
+    // The rule first: `clear` finds the route through it.
+    for argv in policy.argv(true, false) {
+        ip(&argv)?;
+    }
+    if ipv6 && let Err(e) = policy.argv(true, true).iter().try_for_each(|argv| ip(argv)) {
+        log::warn!("routing IPv4 only: cannot add the IPv6 policy routing: {e}");
+        for argv in policy.argv(false, true) {
+            let _ = ip(&argv);
+        }
+        nft(&ruleset(false))?;
+        ipv6 = false;
+    }
+    Ok(ipv6)
+}
+
 /// A rule priority and a table nobody else uses (`nft::pick`): `ip` rules of both families,
 /// the `rt_tables` names and the routes of each candidate table.
 fn free_policy() -> Result<nft::Policy, String> {
@@ -261,18 +296,14 @@ impl Live {
                 .context("cannot open the TPROXY socket")?;
         tproxy.set_read_timeout(Some(POLL))?;
         let tproxy_port = tproxy.local_addr()?.port();
-        let tproxy6 = match &acceptor6 {
-            Some(_) => {
-                let socket = sockopt::transparent_udp(
-                    SocketAddr::from((Ipv6Addr::LOCALHOST, 0)),
-                    nft::MARK_OWN,
-                )
-                .context("cannot open the IPv6 TPROXY socket")?;
-                socket.set_read_timeout(Some(POLL))?;
-                Some(socket)
-            }
-            None => None,
-        };
+        // No IPv6 TPROXY socket: IPv6 goes direct, IPv4 routes as before.
+        let tproxy6 = acceptor6.as_ref().and_then(|_| {
+            sockopt::transparent_udp(SocketAddr::from((Ipv6Addr::LOCALHOST, 0)), nft::MARK_OWN)
+                .and_then(|s| s.set_read_timeout(Some(POLL)).map(|()| s))
+                .inspect_err(|e| log::warn!("routing IPv4 only: no IPv6 TPROXY socket: {e}"))
+                .ok()
+        });
+        let acceptor6 = acceptor6.filter(|_| tproxy6.is_some());
         let tproxy6_port = match &tproxy6 {
             Some(s) => Some(s.local_addr()?.port()),
             None => None,
@@ -304,41 +335,42 @@ impl Live {
             proxy_pid: Mutex::new(None),
             lock: Mutex::new(Some(lock)),
         });
-        {
+        let ipv6 = {
             let mut applied = live.applied.lock().unwrap();
             let full = live.compose(Some(table));
             let broadcasts = broadcasts();
-            let text = nft::ruleset(
-                &full,
-                acceptor_port,
-                tproxy_port,
-                tproxy6_port,
-                setup.proxy,
-                bypass_group(),
-                &broadcasts,
-            );
-            let installed = nft(&text).and_then(|()| {
-                let policy = free_policy()?;
-                // The rule first: `clear` finds the route through it.
-                let v6 = live.tproxy6.as_ref().map(|_| policy.argv(true, true));
-                policy
-                    .argv(true, false)
-                    .iter()
-                    .chain(v6.iter().flatten())
-                    .try_for_each(|argv| run("ip", argv, None).map(drop))
+            let bypass = bypass_group();
+            let ruleset = |v6: bool| {
+                nft::ruleset(
+                    &full,
+                    acceptor_port,
+                    tproxy_port,
+                    tproxy6_port.filter(|_| v6),
+                    setup.proxy,
+                    bypass,
+                    &broadcasts,
+                )
+            };
+            let installed = install(live.tproxy6.is_some(), ruleset, nft, free_policy, |argv| {
+                run("ip", argv, None).map(drop)
             });
-            if let Err(e) = installed {
-                drop(applied);
-                live.shut();
-                bail!("cannot set up routing: {e}");
-            }
+            let ipv6 = match installed {
+                Ok(ipv6) => ipv6,
+                Err(e) => {
+                    drop(applied);
+                    live.shut();
+                    bail!("cannot set up routing: {e}");
+                }
+            };
             *applied = nft::update(&full, acceptor_port, &broadcasts);
-        }
+            ipv6
+        };
         let l = live.clone();
         spawn(move || l.accept_loop(&l.acceptor));
         let l = live.clone();
         spawn(move || l.udp_loop(&l.tproxy));
-        if live.tproxy6.is_some() {
+        // Without IPv6 in force nothing reaches the IPv6 sockets; they close with the session.
+        if ipv6 {
             let l = live.clone();
             spawn(move || l.accept_loop(l.acceptor6.as_ref().unwrap()));
             let l = live.clone();
@@ -629,6 +661,121 @@ mod tests {
         assert!(!clear_stale(), "a live session's routing stays");
         drop(held);
         session_lock().unwrap();
+    }
+
+    /// What `install` ran (`nft <ruleset>`, `ip <argv>`) when the steps in `refuse` fail.
+    fn installed(ipv6: bool, refuse: &[&str]) -> (Result<bool, String>, Vec<String>) {
+        let log = std::cell::RefCell::new(Vec::new());
+        let step = |what: String| {
+            let failed = refuse.iter().any(|r| what.starts_with(r));
+            log.borrow_mut().push(what);
+            if failed {
+                Err("refused".to_string())
+            } else {
+                Ok(())
+            }
+        };
+        let r = install(
+            ipv6,
+            |v6| if v6 { "v4+v6".into() } else { "v4".into() },
+            |text| step(format!("nft {text}")),
+            || {
+                Ok(nft::Policy {
+                    priority: 1000,
+                    table: 23112,
+                })
+            },
+            |argv| step(format!("ip {} {} {}", argv[0], argv[1], argv[2])),
+        );
+        (r, log.into_inner())
+    }
+
+    #[test]
+    fn an_ipv6_step_that_fails_leaves_ipv4_routing() {
+        let all = [
+            "nft v4+v6",
+            "ip -4 rule add",
+            "ip -4 route replace",
+            "ip -6 rule add",
+            "ip -6 route replace",
+        ];
+        assert_eq!(
+            installed(true, &[]),
+            (Ok(true), all.map(String::from).to_vec())
+        );
+        assert_eq!(
+            installed(false, &[]),
+            (
+                Ok(false),
+                ["nft v4", "ip -4 rule add", "ip -4 route replace"]
+                    .map(String::from)
+                    .to_vec()
+            ),
+            "no IPv6 loopback or TPROXY socket"
+        );
+        let (r, log) = installed(true, &["nft v4+v6"]);
+        assert_eq!(r, Ok(false), "no nf_tproxy_ipv6");
+        assert_eq!(log[..2], ["nft v4+v6", "nft v4"]);
+        let (r, log) = installed(true, &["ip -6 route"]);
+        assert_eq!(r, Ok(false), "no IPv6 policy routing");
+        assert_eq!(
+            log[5..],
+            ["ip -6 rule del", "ip -6 route del", "nft v4"],
+            "its rule removed, the ruleset without IPv6"
+        );
+        assert!(installed(true, &["nft v4"]).0.is_err(), "IPv4 must work");
+        assert!(installed(true, &["ip -4 rule"]).0.is_err());
+    }
+
+    /// IPv6 off in the namespace (no `::1`): routing starts for IPv4 alone and stops clean.
+    /// `unshare -rn sh -c 'ip link set lo up && <test binary> --ignored ipv6_off'`.
+    #[test]
+    #[ignore = "needs ip, nft and CAP_NET_ADMIN (a user namespace will do)"]
+    fn with_ipv6_off_routing_starts_for_ipv4_alone() {
+        let _live = crate::linux::LIVE_TESTS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let ipv6_off = |off: &str| {
+            for conf in ["all", "default", "lo"] {
+                std::fs::write(format!("/proc/sys/net/ipv6/conf/{conf}/disable_ipv6"), off)
+                    .unwrap();
+            }
+        };
+        ipv6_off("1");
+        let dir = tempfile::tempdir().unwrap();
+        let router = crate::Router::new(dir.path().join("routes.toml"));
+        router
+            .edit(|list| {
+                list.push(crate::rules::Rule {
+                    name: "lan".into(),
+                    enabled: true,
+                    protocol: crate::rules::Protocol::Both,
+                    ports: vec![],
+                    ips: vec!["10.66.0.0/16".into(), "2001:db8::/32".into()],
+                    domains: vec![],
+                    apps: vec![],
+                });
+                Ok(())
+            })
+            .unwrap();
+        let started = router.start(Setup {
+            dll: Default::default(),
+            proxy: "127.0.0.1:2080".parse().unwrap(),
+        });
+        let rules4 = run("ip", &["-4", "rule", "show"], None).unwrap_or_default();
+        let rules6 = run("ip", &["-6", "rule", "show"], None).unwrap_or_default();
+        let ruleset = run("nft", &["list", "ruleset"], None).unwrap_or_default();
+        router.stop();
+        let left = run("nft", &["list", "tables"], None).unwrap_or_default();
+        ipv6_off("0");
+        started.unwrap();
+        assert!(rules4.contains("fwmark 0x10000000"), "{rules4}");
+        assert!(!rules6.contains("fwmark"), "{rules6}");
+        assert!(
+            ruleset.contains("tproxy ip to") && !ruleset.contains("tproxy ip6"),
+            "{ruleset}"
+        );
+        assert!(!left.contains("zapret_hub_route"), "{left}");
     }
 
     /// No capabilities (an ordinary test run): the router is unavailable with the hint for how the

@@ -279,6 +279,9 @@ mod tests {
     #[ignore = "needs CAP_NET_RAW (a user namespace will do)"]
     fn sniffer_reads_a_loopback_query_and_answer() {
         use std::net::UdpSocket;
+        let _live = crate::linux::LIVE_TESTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let sniffer = Sniffer::open(Duration::from_millis(200)).unwrap();
         for host in ["127.0.0.1", "[::1]"] {
             let server = UdpSocket::bind(format!("{host}:53")).unwrap();

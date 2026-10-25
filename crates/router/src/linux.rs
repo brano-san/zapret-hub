@@ -8,3 +8,7 @@ pub(crate) mod live;
 pub mod nft;
 pub mod sniff;
 pub mod sockopt;
+
+/// The live tests of this module change one network namespace: one at a time.
+#[cfg(test)]
+pub(crate) static LIVE_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
