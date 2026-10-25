@@ -1,5 +1,6 @@
 //! Passive per-program flow observation for diagnostics: counters per flow (`Tally`, pure) and the
-//! WinDivert sniffers that feed it (`Observer`). Nothing is held or changed.
+//! WinDivert sniffers that feed it (`Observer`); on Linux conntrack feeds `conntrack::Conns`
+//! instead (`netlink`). Nothing is held or changed.
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
@@ -461,18 +462,24 @@ mod capture;
 #[cfg(windows)]
 pub use capture::Observer;
 
-/// Observation needs WinDivert: on Linux it never starts.
-#[cfg(not(windows))]
+pub mod conntrack;
+#[cfg(target_os = "linux")]
+mod netlink;
+#[cfg(target_os = "linux")]
+pub use netlink::Observer;
+
+/// Observation needs WinDivert or conntrack: elsewhere it never starts.
+#[cfg(not(any(windows, target_os = "linux")))]
 pub enum Observer {}
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 impl Observer {
     pub fn start(
         _dll: &std::path::Path,
         _apps: Vec<String>,
         _proxy_port: Option<u16>,
     ) -> anyhow::Result<Observer> {
-        anyhow::bail!("flow observation is unavailable on Linux")
+        anyhow::bail!("flow observation is unavailable on this system")
     }
 
     pub fn snapshot(&self) -> Vec<FlowCounters> {

@@ -18,20 +18,25 @@ const LISTEN: &str = "0A";
 /// Socket inodes of the rows of a `/proc/net/{tcp,udp}[6]` table whose local port is `port`
 /// (`None`: any), only LISTEN rows when `listen_only`. Inode 0 (TIME_WAIT) is no socket.
 pub fn table_inodes(text: &str, port: Option<u16>, listen_only: bool) -> Vec<u64> {
-    text.lines()
-        .filter_map(|line| {
-            // `sl local_address rem_address st tx:rx tr:when retrnsmt uid timeout inode ...`
-            let fields: Vec<&str> = line.split_whitespace().collect();
-            let local_port = fields.get(1)?.rsplit_once(':')?.1;
-            let local_port = u16::from_str_radix(local_port, 16).ok()?;
-            if port.is_some_and(|port| port != local_port)
-                || (listen_only && *fields.get(3)? != LISTEN)
-            {
-                return None;
-            }
-            fields.get(9)?.parse().ok().filter(|inode| *inode != 0)
-        })
+    table_rows(text, listen_only)
+        .filter(|(local_port, _)| port.is_none_or(|port| port == *local_port))
+        .map(|(_, inode)| inode)
         .collect()
+}
+
+/// (local port, socket inode) of a table's rows, as `table_inodes` takes them.
+fn table_rows(text: &str, listen_only: bool) -> impl Iterator<Item = (u16, u64)> + '_ {
+    text.lines().filter_map(move |line| {
+        // `sl local_address rem_address st tx:rx tr:when retrnsmt uid timeout inode ...`
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let local_port = fields.get(1)?.rsplit_once(':')?.1;
+        let local_port = u16::from_str_radix(local_port, 16).ok()?;
+        if listen_only && *fields.get(3)? != LISTEN {
+            return None;
+        }
+        let inode = fields.get(9)?.parse().ok().filter(|inode| *inode != 0)?;
+        Some((local_port, inode))
+    })
 }
 
 /// The inode of a `/proc/<pid>/fd/*` link that names a socket: `socket:[12345]`.
@@ -108,6 +113,33 @@ pub fn udp_pids() -> Vec<u32> {
         .collect();
     out.sort_unstable();
     out.dedup();
+    out
+}
+
+/// (protocol, local port) -> PID of every socket, IPv4 and IPv6, from one walk of the processes'
+/// fds. Another process wins a port this one holds too (`table_pid_other`).
+pub fn port_pids() -> HashMap<(Protocol, u16), u32> {
+    let pids = socket_pids(None);
+    let me = std::process::id();
+    let mut out = HashMap::new();
+    for protocol in [Protocol::Tcp, Protocol::Udp] {
+        for file in net_files(protocol) {
+            let Ok(text) = std::fs::read_to_string(file) else {
+                continue;
+            };
+            for (port, inode) in table_rows(&text, false) {
+                if let Some(pid) = pids.get(&inode) {
+                    out.entry((protocol, port))
+                        .and_modify(|p| {
+                            if *p == me {
+                                *p = *pid;
+                            }
+                        })
+                        .or_insert(*pid);
+                }
+            }
+        }
+    }
     out
 }
 

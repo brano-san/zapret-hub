@@ -67,7 +67,11 @@ fn spawn(f: impl FnOnce() + Send + 'static) {
 
 /// Runs a system tool with the hub's routing capabilities: its output, or its error output as
 /// the error.
-fn run<S: AsRef<str>>(program: &str, args: &[S], stdin: Option<&str>) -> Result<String, String> {
+pub(crate) fn run<S: AsRef<str>>(
+    program: &str,
+    args: &[S],
+    stdin: Option<&str>,
+) -> Result<String, String> {
     let args: Vec<&str> = args.iter().map(AsRef::as_ref).collect();
     let mut cmd = Command::new(zapret::root::tool(program));
     caps::inherit(zapret::root::c_locale(&mut cmd))

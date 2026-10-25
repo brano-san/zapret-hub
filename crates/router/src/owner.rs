@@ -11,7 +11,9 @@ mod procfs;
 mod win32;
 
 #[cfg(target_os = "linux")]
-pub use procfs::{image_path, listener_pid, process_start, table_pid, table_pid_other, udp_pids};
+pub use procfs::{
+    image_path, listener_pid, port_pids, process_start, table_pid, table_pid_other, udp_pids,
+};
 #[cfg(windows)]
 pub use win32::{image_path, listener_pid, process_start, table_pid, udp_pids};
 
