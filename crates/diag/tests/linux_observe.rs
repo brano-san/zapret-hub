@@ -4,7 +4,8 @@
 //! `unshare -rn <target>/debug/deps/linux_observe-<hash> --ignored` (and again with `ZH_ACCT=1`).
 //!
 //! A dummy link holds `10.88.0.1` (a TCP server of this process: a flow with a reply) and leads
-//! to `10.88.0.2`, where nothing answers (a UDP flow and a TCP connect without a reply).
+//! to `10.88.0.2`, where nothing answers (a UDP flow and a TCP connect without a reply); IPv6
+//! likewise with `fd88::1` and `fd88::2`.
 #![cfg(target_os = "linux")]
 
 use std::io::{Read, Write};
@@ -39,20 +40,23 @@ fn conntrack_tells_an_answered_tcp_flow_from_unanswered_udp_and_syns() {
     ip("link set lo up");
     ip("link add d0 type dummy");
     ip("addr add 10.88.0.1/24 dev d0");
+    ip("addr add fd88::1/64 dev d0 nodad");
     ip("link set d0 up");
     // `ZH_ACCT=1`: with per-direction counters (the namespace's own setting).
     if std::env::var_os("ZH_ACCT").is_some() {
         std::fs::write("/proc/sys/net/netfilter/nf_conntrack_acct", "1").unwrap();
     }
-    let server = TcpListener::bind("10.88.0.1:7000").unwrap();
-    std::thread::spawn(move || {
-        for mut conn in server.incoming().flatten() {
-            let mut buf = [0u8; 64];
-            if let Ok(n) = conn.read(&mut buf) {
-                let _ = conn.write_all(&buf[..n]);
+    for at in ["10.88.0.1:7000", "[fd88::1]:7000"] {
+        let server = TcpListener::bind(at).unwrap();
+        std::thread::spawn(move || {
+            for mut conn in server.incoming().flatten() {
+                let mut buf = [0u8; 64];
+                if let Ok(n) = conn.read(&mut buf) {
+                    let _ = conn.write_all(&buf[..n]);
+                }
             }
-        }
-    });
+        });
+    }
 
     let exe = std::env::current_exe().unwrap();
     let me = exe.file_name().unwrap().to_string_lossy().into_owned();
@@ -62,13 +66,20 @@ fn conntrack_tells_an_answered_tcp_flow_from_unanswered_udp_and_syns() {
     let silent = std::thread::spawn(|| {
         TcpStream::connect_timeout(&"10.88.0.2:443".parse().unwrap(), Duration::from_secs(6))
     });
-    let mut conn = TcpStream::connect("10.88.0.1:7000").unwrap();
-    conn.write_all(b"ping").unwrap();
-    let mut buf = [0u8; 4];
-    conn.read_exact(&mut buf).unwrap();
+    // Open till the end: the owner of a socket already closed is never learned.
+    let mut conns = Vec::new();
+    for at in ["10.88.0.1:7000", "[fd88::1]:7000"] {
+        let mut conn = TcpStream::connect(at).unwrap();
+        conn.write_all(b"ping").unwrap();
+        let mut buf = [0u8; 4];
+        conn.read_exact(&mut buf).unwrap();
+        conns.push(conn);
+    }
     let udp = UdpSocket::bind("0.0.0.0:0").unwrap();
+    let udp6 = UdpSocket::bind("[::]:0").unwrap();
     for _ in 0..7 {
         udp.send_to(b"hello", "10.88.0.2:5000").unwrap();
+        udp6.send_to(b"hello", "[fd88::2]:5000").unwrap();
         std::thread::sleep(Duration::from_secs(1));
     }
     assert!(
@@ -104,6 +115,14 @@ fn conntrack_tells_an_answered_tcp_flow_from_unanswered_udp_and_syns() {
         matches!(fault(udp), Some(Fault::UdpNoReply { up, down: 0 }) if up >= 4),
         "{udp:?}"
     );
+    // IPv6 flows are reported as such (the culprit rules leave them to their own check).
+    let answered6 = row(Protocol::Tcp, "[fd88::1]:7000");
+    assert!(answered6.syn_answered && answered6.ipv6, "{answered6:?}");
+    let udp6 = row(Protocol::Udp, "[fd88::2]:5000");
+    assert!(
+        udp6.ipv6 && udp6.up_packets >= 4 && udp6.down_packets == 0,
+        "{udp6:?}"
+    );
     // Only this program's flows: the server's side is the same conntrack entry.
-    assert_eq!(flows.len(), 3, "{flows:#?}");
+    assert_eq!(flows.len(), 5, "{flows:#?}");
 }
