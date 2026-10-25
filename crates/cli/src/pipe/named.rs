@@ -131,11 +131,18 @@ pub struct Server {
 }
 
 impl Server {
-    /// Fails with ERROR_ACCESS_DENIED (os error 5) when another program holds `name`.
+    /// Fails with `Refusal::Taken` when another program holds `name` (ERROR_ACCESS_DENIED).
     pub fn bind(name: &str) -> io::Result<Self> {
+        let shown = name;
         let name = HSTRING::from(name);
         let sddl = HSTRING::from(sddl(&current_user_sid()?));
-        let next = instance(&name, &sddl, true)?;
+        let next = instance(&name, &sddl, true).map_err(|err| match err.raw_os_error() {
+            Some(5) => super::refused(
+                super::Refusal::Taken,
+                format!("another program holds {shown}: {err}"),
+            ),
+            _ => err,
+        })?;
         Ok(Self { name, sddl, next })
     }
 

@@ -4,6 +4,7 @@
 //! the channel does not let in, and no server is `NotFound`.
 
 use std::io::{self, BufRead as _, BufReader, Read, Write};
+use std::{error, fmt};
 
 use crate::MAX_REQUEST;
 
@@ -16,6 +17,41 @@ pub use named::*;
 mod socket;
 #[cfg(target_os = "linux")]
 pub use socket::*;
+
+/// Why the app's end of the channel did not open, for its notice (`refusal`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// Linux: other users may enter the socket's folder.
+    Shared,
+    /// Linux: the socket's folder is another user's.
+    Foreign,
+    /// Another program (or another Zapret Hub) holds the name.
+    Taken,
+}
+
+#[derive(Debug)]
+struct Refused {
+    why: Refusal,
+    text: String,
+}
+
+impl fmt::Display for Refused {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl error::Error for Refused {}
+
+/// A `PermissionDenied` that says why (`refusal`).
+fn refused(why: Refusal, text: String) -> io::Error {
+    io::Error::new(io::ErrorKind::PermissionDenied, Refused { why, text })
+}
+
+/// Why `err` from `Server::bind` refused the channel; `None` for any other error.
+pub fn refusal(err: &io::Error) -> Option<Refusal> {
+    err.get_ref()?.downcast_ref::<Refused>().map(|r| r.why)
+}
 
 /// Reads one line, keeping at most `MAX_REQUEST + 1` bytes of it, and writes the handler's answer.
 /// A line the client never finished reaches no handler.

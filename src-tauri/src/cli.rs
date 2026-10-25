@@ -2,7 +2,7 @@
 //! request run by the same `commands::*` the window calls, so the queue, the snapshots, `changed()`
 //! and the error texts are the window's.
 
-use ::cli::pipe::{Server, name};
+use ::cli::pipe::{Refusal, Server, name};
 use ::cli::{Request, Response};
 use serde_json::Value;
 use tauri::async_runtime::block_on;
@@ -22,11 +22,11 @@ pub fn start(app: &AppHandle) {
         Ok(server) => server,
         Err(err) => {
             log::error!("cli: {name} is not open: {err}");
-            // Another program holds the name.
-            let title = if err.kind() == std::io::ErrorKind::PermissionDenied {
-                texts::CLI_PIPE_BUSY
-            } else {
-                texts::CLI_PIPE_FAILED
+            let title = match ::cli::pipe::refusal(&err) {
+                Some(Refusal::Shared) => texts::CLI_DIR_SHARED,
+                Some(Refusal::Foreign) => texts::CLI_DIR_FOREIGN,
+                Some(Refusal::Taken) => texts::CLI_PIPE_TAKEN,
+                None => texts::CLI_PIPE_FAILED,
             };
             actions::notice(app, NoticeLevel::Error, title, format!("{name}: {err}"));
             return;

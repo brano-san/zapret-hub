@@ -65,7 +65,10 @@ pub const AUTOSTART_FAILED: &str = "Автозапуск не обновлён";
 pub const HISTORY_FAILED: &str = "История тестов не прочитана";
 pub const RESTORE_AFTER_TESTS: &str = "После тестов не всё вернулось на место";
 
-pub const CLI_PIPE_BUSY: &str = "Канал CLI занят другой программой";
+pub const CLI_DIR_SHARED: &str = "Папка канала CLI открыта другим пользователям";
+pub const CLI_DIR_FOREIGN: &str = "Папка канала CLI принадлежит другому пользователю";
+pub const CLI_PIPE_TAKEN: &str =
+    "Канал CLI уже открыт другой копией Zapret Hub или другой программой";
 pub const CLI_PIPE_FAILED: &str = "Канал CLI не открыт";
 pub const CLI_PIPE_STOPPED: &str = "Канал CLI остановлен";
 

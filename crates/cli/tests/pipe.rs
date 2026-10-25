@@ -91,6 +91,11 @@ fn a_second_server_cannot_take_the_name() {
         std::io::ErrorKind::PermissionDenied,
         "{second}"
     );
+    assert_eq!(
+        pipe::refusal(&second),
+        Some(pipe::Refusal::Taken),
+        "{second}"
+    );
 }
 
 #[test]
@@ -414,6 +419,21 @@ fn the_socket_folder_is_made_private_and_a_shared_one_is_refused() {
         panic!("a folder others may enter was taken");
     };
     assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
+    assert_eq!(pipe::refusal(&err), Some(pipe::Refusal::Shared), "{err}");
     let err = pipe::request(name, b"{}", BUSY).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_socket_folder_of_another_user_is_foreign() {
+    // SAFETY: geteuid has no preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    // `/` is root's: refused before anything is made there.
+    let Err(err) = Server::bind("/zapret-hub.sock") else {
+        panic!("root's folder was taken");
+    };
+    assert_eq!(pipe::refusal(&err), Some(pipe::Refusal::Foreign), "{err}");
 }

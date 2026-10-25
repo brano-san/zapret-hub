@@ -59,8 +59,8 @@ impl Server {
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             let err = io::Error::last_os_error();
             return Err(if err.kind() == io::ErrorKind::WouldBlock {
-                io::Error::new(
-                    io::ErrorKind::PermissionDenied,
+                super::refused(
+                    super::Refusal::Taken,
                     format!("another Zapret Hub holds {name}"),
                 )
             } else {
@@ -121,9 +121,18 @@ fn private_dir(name: &Path, create: bool) -> io::Result<()> {
     let uid = unsafe { libc::geteuid() };
     if private(&meta, uid) {
         Ok(())
+    } else if meta.uid() != uid {
+        Err(super::refused(
+            super::Refusal::Foreign,
+            format!(
+                "{} belongs to another user (uid {})",
+                dir.display(),
+                meta.uid()
+            ),
+        ))
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
+        Err(super::refused(
+            super::Refusal::Shared,
             format!("{} is not a folder only this user may enter", dir.display()),
         ))
     }
