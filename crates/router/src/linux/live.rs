@@ -631,12 +631,16 @@ mod tests {
         session_lock().unwrap();
     }
 
-    /// No capabilities (an ordinary test run): the router is unavailable with the hint.
+    /// No capabilities (an ordinary test run): the router is unavailable with the hint for how the
+    /// grant stands on this machine (none, or a hub granted in `INSTALL_DIR`): each state's hint
+    /// is `caps::hint`'s own test.
     #[test]
     fn without_the_capabilities_the_router_is_unavailable_with_the_hint() {
         if caps::present() {
             return;
         }
+        let installed = caps::installed(&std::env::current_exe().unwrap());
+        let hint = caps::hint(installed);
         let dir = tempfile::tempdir().unwrap();
         let router = crate::Router::new(dir.path().join("routes.toml"));
         let setup = Setup {
@@ -644,11 +648,11 @@ mod tests {
             proxy: "127.0.0.1:2080".parse().unwrap(),
         };
         let err = router.start(setup).unwrap_err();
-        assert_eq!(err.to_string(), caps::HINT);
+        assert_eq!(err.to_string(), hint);
         assert_eq!(
             router.status().state,
             crate::RouterState::Unavailable {
-                reason: caps::HINT.into()
+                reason: hint.into()
             }
         );
         assert!(router.status().needs_grant);
