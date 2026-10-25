@@ -1,16 +1,84 @@
 //! DNS answers read off every interface, `lo` included (systemd-resolved's stub answers programs
 //! there), by an `AF_PACKET` socket (`CAP_NET_RAW`) for the domain rules. Datagram packet sockets
 //! hand over the IP packet without its link header; a classic BPF filter keeps the kernel from
-//! copying anything but IPv4 UDP from port 53.
+//! copying anything but IPv4 UDP to or from port 53. An answer counts only for a query seen
+//! going out (`Asked`): a spoofed answer must guess the query's port and id, so another host of
+//! the network cannot route chosen addresses through the proxy by sending fake answers.
+
+use std::collections::HashMap;
+use std::net::SocketAddrV4;
+use std::time::{Duration, Instant};
 
 use crate::dns::{self, Answer};
 use crate::packet::parse_udp;
 
-/// The DNS answer an IPv4 packet carries, if it is one (UDP from port 53).
-pub fn answer(packet: &[u8]) -> Option<Answer> {
-    parse_udp(packet)
-        .filter(|u| u.src.port() == 53)
-        .and_then(|u| dns::parse(u.payload))
+/// One query and its answer: who asked whom, with which id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Exchange {
+    pub client: SocketAddrV4,
+    pub server: SocketAddrV4,
+    pub id: u16,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Seen {
+    Query(Exchange),
+    Answer(Exchange, Answer),
+}
+
+/// The DNS query or answer an IPv4 packet carries (UDP to or from port 53).
+pub fn seen(packet: &[u8]) -> Option<Seen> {
+    let u = parse_udp(packet)?;
+    let id = u16::from_be_bytes([*u.payload.first()?, *u.payload.get(1)?]);
+    let query = *u.payload.get(2)? & 0x80 == 0;
+    if u.dst.port() == 53 && query && u.payload.len() >= 12 {
+        return Some(Seen::Query(Exchange {
+            client: u.src,
+            server: u.dst,
+            id,
+        }));
+    }
+    if u.src.port() != 53 {
+        return None;
+    }
+    let exchange = Exchange {
+        client: u.dst,
+        server: u.src,
+        id,
+    };
+    dns::parse(u.payload).map(|a| Seen::Answer(exchange, a))
+}
+
+/// How long an answer to a query is waited for.
+const ANSWER_WITHIN: Duration = Duration::from_secs(10);
+/// Queries kept at most; older ones go first.
+const MAX_ASKED: usize = 4096;
+
+/// The queries seen lately, to accept only their answers.
+#[derive(Default)]
+pub struct Asked(HashMap<Exchange, Instant>);
+
+impl Asked {
+    pub fn ask(&mut self, e: Exchange, now: Instant) {
+        if self.0.len() >= MAX_ASKED {
+            self.0
+                .retain(|_, at| now.duration_since(*at) < ANSWER_WITHIN);
+            // ponytail: a flood of fresh queries clears the lot; their answers are then missed
+            // until the flood stops.
+            if self.0.len() >= MAX_ASKED {
+                self.0.clear();
+            }
+        }
+        self.0.insert(e, now);
+    }
+
+    /// `e` answers a query seen within `ANSWER_WITHIN`. Kept until it expires: a loopback answer
+    /// comes twice (out and in).
+    pub fn answers(&self, e: &Exchange, now: Instant) -> bool {
+        self.0
+            .get(e)
+            .is_some_and(|at| now.duration_since(*at) < ANSWER_WITHIN)
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -20,19 +88,24 @@ mod sys {
 
     use socket2::{Domain, Protocol, SockFilter, Socket, Type};
 
-    use crate::dns::Answer;
+    use super::Seen;
 
-    /// `ip[9] == 17 && !(ip[6:2] & 0x1fff) && udp[0:2] == 53`, offsets from the IP header.
-    const FILTER: [SockFilter; 9] = [
-        SockFilter::new(0x30, 0, 0, 9),      // ldb [9]: protocol
-        SockFilter::new(0x15, 0, 6, 17),     // jeq UDP, else drop
-        SockFilter::new(0x28, 0, 0, 6),      // ldh [6]: fragment offset
-        SockFilter::new(0x45, 4, 0, 0x1fff), // jset: a later fragment, drop
-        SockFilter::new(0xb1, 0, 0, 0),      // ldxb 4*([0]&0xf): header length
-        SockFilter::new(0x48, 0, 0, 0),      // ldh [x+0]: source port
-        SockFilter::new(0x15, 0, 1, 53),     // jeq 53, else drop
-        SockFilter::new(0x06, 0, 0, 0xffff), // accept
-        SockFilter::new(0x06, 0, 0, 0),      // drop
+    /// `ip[9] == 17 && !(ip[6:2] & 0x1fff) && (udp[0:2] == 53 || udp[2:2] == 53)`, offsets from
+    /// the IP header; IPv4 by the packet's link protocol (the socket takes every protocol).
+    const FILTER: [SockFilter; 13] = [
+        SockFilter::new(0x28, 0, 0, 0xffff_f000), // ldh proto (SKF_AD_PROTOCOL)
+        SockFilter::new(0x15, 0, 10, 0x0800),     // jeq IPv4, else drop
+        SockFilter::new(0x30, 0, 0, 9),           // ldb [9]: protocol
+        SockFilter::new(0x15, 0, 8, 17),          // jeq UDP, else drop
+        SockFilter::new(0x28, 0, 0, 6),           // ldh [6]: fragment offset
+        SockFilter::new(0x45, 6, 0, 0x1fff),      // jset: a later fragment, drop
+        SockFilter::new(0xb1, 0, 0, 0),           // ldxb 4*([0]&0xf): header length
+        SockFilter::new(0x48, 0, 0, 0),           // ldh [x+0]: source port
+        SockFilter::new(0x15, 2, 0, 53),          // jeq 53: accept
+        SockFilter::new(0x48, 0, 0, 2),           // ldh [x+2]: destination port
+        SockFilter::new(0x15, 0, 1, 53),          // jeq 53, else drop
+        SockFilter::new(0x06, 0, 0, 0xffff),      // accept
+        SockFilter::new(0x06, 0, 0, 0),           // drop
     ];
 
     pub struct Sniffer(Socket);
@@ -40,7 +113,8 @@ mod sys {
     impl Sniffer {
         /// `next` gives up after `timeout`, so the reading thread can see it was stopped.
         pub fn open(timeout: Duration) -> io::Result<Sniffer> {
-            let ip = (libc::ETH_P_IP as u16).to_be();
+            // Every protocol: only such a socket sees outgoing packets too (the queries).
+            let ip = (libc::ETH_P_ALL as u16).to_be();
             let socket = Socket::new(
                 Domain::PACKET,
                 Type::DGRAM,
@@ -51,12 +125,12 @@ mod sys {
             Ok(Sniffer(socket))
         }
 
-        /// The next packet as an answer (`None`: not one, e.g. let in before the filter was
-        /// attached). A timeout is `WouldBlock`/`TimedOut`. A loopback answer comes twice (out
-        /// and in): `Names::record` takes it once.
-        pub fn next(&self, buf: &mut [u8]) -> io::Result<Option<Answer>> {
+        /// The next packet as a query or an answer (`None`: neither, e.g. let in before the
+        /// filter was attached). A timeout is `WouldBlock`/`TimedOut`. A loopback packet comes
+        /// twice (out and in): `Asked` and `Names::record` take it once.
+        pub fn next(&self, buf: &mut [u8]) -> io::Result<Option<Seen>> {
             let n = (&self.0).read(buf)?;
-            Ok(super::answer(&buf[..n]))
+            Ok(super::seen(&buf[..n]))
         }
     }
 }
@@ -88,33 +162,80 @@ mod tests {
         SocketAddrV4::new(Ipv4Addr::from(a), port)
     }
 
+    /// The query `response` answers.
+    fn query(name: &str) -> Vec<u8> {
+        let mut m = response(name, [0; 4]);
+        m[2] = 0x01;
+        m[7] = 0;
+        m.truncate(m.len() - 16);
+        m
+    }
+
+    const CLIENT: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 40000);
+    const SERVER: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 53), 53);
+    const EXCHANGE: Exchange = Exchange {
+        client: CLIENT,
+        server: SERVER,
+        id: 0x1234,
+    };
+
     #[test]
-    fn an_answer_from_port_53_is_read_and_anything_else_is_not() {
-        let dns = response("discord.media", [1, 2, 3, 4]);
-        let packet = build_udp(
-            addr([127, 0, 0, 53], 53),
-            addr([127, 0, 0, 1], 40000),
-            &dns,
-            1,
-        );
-        let answer = answer(&packet).unwrap();
+    fn queries_to_and_answers_from_port_53_are_read_and_anything_else_is_not() {
+        let packet = build_udp(SERVER, CLIENT, &response("discord.media", [1, 2, 3, 4]), 1);
+        let Some(Seen::Answer(exchange, answer)) = seen(&packet) else {
+            panic!("an answer");
+        };
+        assert_eq!(exchange, EXCHANGE);
         assert_eq!(answer.name, "discord.media");
         assert_eq!(answer.ips, [(Ipv4Addr::new(1, 2, 3, 4), 60)]);
-        let query = build_udp(
-            addr([127, 0, 0, 1], 40000),
-            addr([127, 0, 0, 53], 53),
-            &dns,
-            1,
-        );
-        assert_eq!(super::answer(&query), None, "to port 53, not from it");
-        assert_eq!(
-            super::answer(&packet[..packet.len() - 1]),
-            None,
-            "truncated"
-        );
+        let asked = build_udp(CLIENT, SERVER, &query("discord.media"), 1);
+        assert_eq!(seen(&asked), Some(Seen::Query(EXCHANGE)));
+        let other = build_udp(CLIENT, addr([1, 1, 1, 1], 443), &query("x.y"), 1);
+        assert_eq!(seen(&other), None, "not DNS");
+        assert_eq!(seen(&packet[..packet.len() - 1]), None, "truncated");
         let mut tcp = packet.clone();
         tcp[9] = 6;
-        assert_eq!(super::answer(&tcp), None, "not UDP");
+        assert_eq!(seen(&tcp), None, "not UDP");
+    }
+
+    #[test]
+    fn only_the_answer_to_a_query_seen_lately_counts() {
+        let now = Instant::now();
+        let mut asked = Asked::default();
+        assert!(!asked.answers(&EXCHANGE, now), "nobody asked");
+        asked.ask(EXCHANGE, now);
+        assert!(asked.answers(&EXCHANGE, now + Duration::from_secs(1)));
+        assert!(
+            asked.answers(&EXCHANGE, now + Duration::from_secs(2)),
+            "a loopback answer comes twice"
+        );
+        assert!(!asked.answers(&EXCHANGE, now + ANSWER_WITHIN), "too late");
+        for wrong in [
+            Exchange {
+                id: 0x1235,
+                ..EXCHANGE
+            },
+            Exchange {
+                client: addr([127, 0, 0, 1], 40001),
+                ..EXCHANGE
+            },
+            Exchange {
+                server: addr([10, 0, 0, 1], 53),
+                ..EXCHANGE
+            },
+        ] {
+            assert!(!asked.answers(&wrong, now), "{wrong:?}");
+        }
+        for port in 0..MAX_ASKED as u16 + 10 {
+            asked.ask(
+                Exchange {
+                    client: addr([10, 0, 0, 2], port),
+                    ..EXCHANGE
+                },
+                now + ANSWER_WITHIN,
+            );
+        }
+        assert!(asked.0.len() <= MAX_ASKED, "{}", asked.0.len());
     }
 
     /// The kernel side: socket, filter, loopback. Needs `CAP_NET_RAW` and an up `lo`, e.g.
@@ -122,13 +243,13 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "needs CAP_NET_RAW (a user namespace will do)"]
-    fn sniffer_reads_a_loopback_answer() {
+    fn sniffer_reads_a_loopback_query_and_answer() {
         use std::net::UdpSocket;
-        use std::time::Duration;
         let sniffer = Sniffer::open(Duration::from_millis(200)).unwrap();
         let server = UdpSocket::bind("127.0.0.1:53").unwrap();
         let client = UdpSocket::bind("127.0.0.1:0").unwrap();
-        client.send_to(b"not an answer", "127.0.0.1:9").unwrap();
+        client.send_to(b"not dns", "127.0.0.1:9").unwrap();
+        client.send_to(&query("t.me"), "127.0.0.1:53").unwrap();
         server
             .send_to(
                 &response("t.me", [5, 6, 7, 8]),
@@ -136,8 +257,18 @@ mod tests {
             )
             .unwrap();
         let mut buf = vec![0; 65536];
-        // The filter dropped the datagram to port 9: the answer comes first.
-        let answer = sniffer.next(&mut buf).unwrap().unwrap();
+        // The filter dropped the datagram to port 9: the query comes first, twice on `lo`.
+        let mut got = vec![];
+        while let Ok(Some(s)) = sniffer.next(&mut buf) {
+            got.push(s);
+        }
+        let Some(Seen::Query(asked)) = got.first() else {
+            panic!("{got:?}");
+        };
+        let Some(Seen::Answer(answered, answer)) = got.last() else {
+            panic!("{got:?}");
+        };
+        assert_eq!(asked, answered);
         assert_eq!(answer.name, "t.me");
         assert_eq!(answer.ips, [(Ipv4Addr::new(5, 6, 7, 8), 60)]);
     }

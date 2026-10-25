@@ -20,7 +20,8 @@ use anyhow::{Context as _, Result, bail};
 
 use crate::dns::Names;
 use crate::flows::{self, FlowKey, ProxyState, Stats, Via};
-use crate::linux::{caps, nft, sniff::Sniffer, sockopt};
+use crate::linux::sniff::{Asked, Seen, Sniffer};
+use crate::linux::{caps, nft, sockopt};
 use crate::owner::{self, Images};
 use crate::rules::Table;
 use crate::socks::{self, OPEN_TIMEOUT, SocksError};
@@ -405,13 +406,19 @@ impl Live {
         flows::decide(&state, pid, std::process::id(), proxy_pid)
     }
 
-    /// Records the addresses of names some rule wants; ends with the session.
+    /// Records the addresses of names some rule wants, from answers to queries seen going out;
+    /// ends with the session.
     fn dns_loop(self: &Arc<Self>, sniffer: &Sniffer) {
         let mut buf = vec![0u8; 65536];
+        let mut asked = Asked::default();
         while !self.is_stopped() {
             let answer = match sniffer.next(&mut buf) {
-                Ok(Some(a)) => a,
-                Ok(None) => continue,
+                Ok(Some(Seen::Query(e))) => {
+                    asked.ask(e, Instant::now());
+                    continue;
+                }
+                Ok(Some(Seen::Answer(e, a))) if asked.answers(&e, Instant::now()) => a,
+                Ok(_) => continue,
                 Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
                     continue;
                 }
