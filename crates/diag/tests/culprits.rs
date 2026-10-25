@@ -115,7 +115,7 @@ fn loss_21_pct_lossy() {
 }
 
 #[test]
-fn ipv6_and_system_proxy_are_not_culprits() {
+fn ipv6_flows_are_judged_and_system_proxy_ones_are_not() {
     let v6 = FlowCounters {
         ipv6: true,
         ..syn(5)
@@ -125,7 +125,37 @@ fn ipv6_and_system_proxy_are_not_culprits() {
         via_router: false,
         ..syn(5)
     };
-    assert_eq!((fault(&v6), fault(&proxy)), (None, None));
+    assert_eq!(
+        (fault(&v6), fault(&proxy)),
+        (Some(Fault::SynUnanswered { syns: 5 }), None)
+    );
+}
+
+#[test]
+fn ipv6_flows_group_by_slash64() {
+    let flows: Vec<_> = [
+        "[2606:4700:10::1]:443",
+        "[2606:4700:10::2]:443",
+        "[2606:4700:11::1]:443",
+    ]
+    .iter()
+    .map(|dst| FlowCounters {
+        rst_early: true,
+        ipv6: true,
+        ..flow(dst)
+    })
+    .collect();
+    let keys: Vec<_> = group(&flows)
+        .into_iter()
+        .map(|g| (g.key, g.members.len()))
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            ("2606:4700:10::/64".to_string(), 2),
+            ("2606:4700:11::/64".to_string(), 1)
+        ]
+    );
 }
 
 #[test]

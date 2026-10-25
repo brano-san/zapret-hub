@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::divert::{self, MAX_FILTER_RANGES};
 use crate::flows::{FlowRow, Via};
-use crate::packet::{ACK, RST, SYN, Tcp, ipv6_upper, parse_tcp, parse_udp};
+use crate::packet::{ACK, RST, SYN, Tcp, ipv6_upper, l4_at, parse_tcp, parse_udp};
 use crate::rules::Protocol;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, specta::Type)]
@@ -359,15 +359,13 @@ impl Tally {
             c.down_packets += 1;
             c.down_bytes += p.len() as f64;
         }
-        if c.ipv6 {
-            return;
-        }
         match protocol {
             Protocol::Udp => flow.udp(up, now),
             _ => {
-                let t = parse_tcp(p).unwrap();
-                let ihl = usize::from(p[0] & 0x0F) * 4;
-                flow.tcp(&t, be32(p, ihl + 4), be32(p, ihl + 8), up, now);
+                // A first fragment has no whole segment to read.
+                let Some(t) = parse_tcp(p) else { return };
+                let at = l4_at(p);
+                flow.tcp(&t, be32(p, at + 4), be32(p, at + 8), up, now);
             }
         }
     }

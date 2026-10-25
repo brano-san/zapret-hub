@@ -312,25 +312,76 @@ fn loopback_proxy_port_marks_system_proxy() {
     assert!(!only(&connected(0, now)).via_system_proxy);
 }
 
+/// IPv6/TCP from [2001:db8::10]:50000 (`up`) or to it, peer [2606:4700::5]:`port`.
+fn tcp6(up: bool, port: u16, seq: u32, ack: u32, flags: u8, payload: &[u8]) -> Vec<u8> {
+    let me: std::net::Ipv6Addr = "2001:db8::10".parse().unwrap();
+    let peer: std::net::Ipv6Addr = "2606:4700::5".parse().unwrap();
+    let (src, dst, sport, dport) = match up {
+        true => (me, peer, 50000, port),
+        false => (peer, me, port, 50000u16),
+    };
+    let mut p = vec![0x60, 0, 0, 0];
+    p.extend_from_slice(&(20 + payload.len() as u16).to_be_bytes());
+    p.extend_from_slice(&[6, 64]);
+    p.extend_from_slice(&src.octets());
+    p.extend_from_slice(&dst.octets());
+    p.extend_from_slice(&sport.to_be_bytes());
+    p.extend_from_slice(&dport.to_be_bytes());
+    p.extend_from_slice(&seq.to_be_bytes());
+    p.extend_from_slice(&ack.to_be_bytes());
+    p.extend_from_slice(&[0x50, flags, 0xFF, 0xFF, 0, 0, 0, 0]);
+    p.extend_from_slice(payload);
+    p
+}
+
 #[test]
-fn ipv6_flows_have_no_syn_counters() {
+fn ipv6_flows_count_syns_resets_and_redirects_like_ipv4_ones() {
     let now = Instant::now();
-    let mut p = vec![0x60, 0, 0, 0, 0, 20, 6, 64];
-    p.extend_from_slice(&[0x20, 0x01, 0x0d, 0xb8].repeat(4)); // src
-    p.extend_from_slice(&[0x26, 0x06, 0x47, 0x00].repeat(4)); // dst
-    p.extend_from_slice(&50000u16.to_be_bytes());
-    p.extend_from_slice(&443u16.to_be_bytes());
-    p.extend_from_slice(&[0; 8]);
-    p.extend_from_slice(&[0x50, SYN, 0xFF, 0xFF, 0, 0, 0, 0]);
     let mut t = Tally::new(None);
-    t.outbound(&p, now);
+    for i in 0..3 {
+        t.outbound(
+            &tcp6(true, 443, 100, 0, SYN, &[]),
+            now + Duration::from_secs(i),
+        );
+    }
     let row = only(&t);
     assert!(row.ipv6);
     assert_eq!(
-        (row.protocol, row.local_port, row.up_packets, row.syns),
-        (Protocol::Tcp, 50000, 1, 0)
+        (
+            row.protocol,
+            row.local_port,
+            row.up_packets,
+            row.syns,
+            row.syn_answered
+        ),
+        (Protocol::Tcp, 50000, 3, 3, false)
     );
-    assert_eq!(row.dst, "[2606:4700:2606:4700:2606:4700:2606:4700]:443");
+    assert_eq!(row.dst, "[2606:4700::5]:443");
+
+    t.inbound(&tcp6(false, 443, 900, 101, SYN | ACK, &[]), now);
+    t.inbound(&tcp6(false, 443, 901, 101, ACK, &[b'x'; 1000]), now);
+    t.inbound(&tcp6(false, 443, 1901, 101, RST, &[]), now);
+    let row = only(&t);
+    assert!(row.syn_answered && row.rst_early, "{row:?}");
+
+    let mut t = Tally::new(None);
+    t.outbound(&tcp6(true, 80, 100, 0, SYN, &[]), now);
+    t.inbound(&tcp6(false, 80, 900, 101, SYN | ACK, &[]), now);
+    t.inbound(
+        &tcp6(
+            false,
+            80,
+            901,
+            101,
+            ACK,
+            b"HTTP/1.1 302 Found
+Location: http://x/
+
+",
+        ),
+        now,
+    );
+    assert!(only(&t).redirect_early);
 }
 
 #[test]

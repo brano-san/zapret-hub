@@ -54,8 +54,8 @@ pub enum Verdict {
 
 /// The spec's "3 SYN retries" read as 3 SYNs in all: Windows sends a SYN and 2 retries.
 pub fn fault(f: &FlowCounters) -> Option<Fault> {
-    // IPv6 and system-proxy flows are handled separately.
-    if f.ipv6 || f.via_system_proxy {
+    // System-proxy flows are handled separately.
+    if f.via_system_proxy {
         return None;
     }
     // The router answers it itself and the sniffer sees none of that: only its reply count tells.
@@ -109,6 +109,10 @@ fn key_of(f: &FlowCounters) -> String {
             let [x, y, z, _] = a.ip().octets();
             format!("{x}.{y}.{z}.0/24")
         }
+        Ok(SocketAddr::V6(a)) => {
+            let [a, b, c, d, ..] = a.ip().segments();
+            format!("{}/64", std::net::Ipv6Addr::new(a, b, c, d, 0, 0, 0, 0))
+        }
         _ => f.dst.clone(),
     }
 }
@@ -117,7 +121,7 @@ fn port_of(f: &FlowCounters) -> Option<u16> {
     f.dst.rsplit_once(':')?.1.parse().ok()
 }
 
-/// Faulty flows only, by name or /24 (and protocol), in order of first appearance.
+/// Faulty flows only, by name or /24 (IPv6: /64) (and protocol), in order of first appearance.
 pub fn group(flows: &[FlowCounters]) -> Vec<Group> {
     let mut groups: Vec<Group> = vec![];
     for (f, fault) in flows.iter().filter_map(|f| Some((f, fault(f)?))) {
