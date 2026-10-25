@@ -2,8 +2,9 @@ use router::divert::Address;
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 
 use router::packet::{
-    ACK, SYN, build_udp, build_udp_any, build_udp6, parse_socks_udp, parse_socks_udp_from,
-    parse_tcp, parse_udp, parse_udp_any, parse_udp6, rewrite_tcp, socks_header, socks_header_to,
+    ACK, SYN, build_udp, build_udp_any, build_udp6, ipv6_upper, parse_socks_udp,
+    parse_socks_udp_from, parse_tcp, parse_udp, parse_udp_any, parse_udp6, rewrite_tcp,
+    socks_header, socks_header_to,
 };
 
 #[test]
@@ -343,5 +344,76 @@ fn a_udp_reply_is_built_in_the_flows_family() {
             9
         )
         .is_none()
+    );
+}
+
+/// `p` (IPv6) with an extension header of `kind` (`hdr`, its next header filled in) after
+/// the fixed header.
+fn with_ext(p: &[u8], kind: u8, hdr: &[u8]) -> Vec<u8> {
+    let mut hdr = hdr.to_vec();
+    hdr[0] = p[6];
+    let mut q = p[..40].to_vec();
+    q[6] = kind;
+    let len = u16::from_be_bytes([p[4], p[5]]) + hdr.len() as u16;
+    q[4..6].copy_from_slice(&len.to_be_bytes());
+    q.extend_from_slice(&hdr);
+    q.extend_from_slice(&p[40..]);
+    q
+}
+
+#[test]
+fn ipv6_extension_headers_are_skipped() {
+    let pad = [0u8, 0, 1, 4, 0, 0, 0, 0];
+    let routing = [0u8, 0, 4, 0, 0, 0, 0, 0];
+    let atomic = [0u8, 0, 0, 0, 0, 0, 0, 7];
+    let udp = build_udp6(
+        "[2001:db8::53]:53".parse().unwrap(),
+        "[fd00::1]:40000".parse().unwrap(),
+        b"dns",
+    );
+    let hop = with_ext(&udp, 0, &pad);
+    let chained = with_ext(&with_ext(&with_ext(&udp, 60, &pad), 43, &routing), 0, &pad);
+    for p in [&hop, &chained, &with_ext(&udp, 44, &atomic)] {
+        let u = parse_udp6(p).unwrap();
+        assert_eq!((u.dst.port(), u.payload), (40000, &b"dns"[..]), "{p:02x?}");
+    }
+    assert_eq!(ipv6_upper(&chained), Some((17, 64, false)));
+    let mut first = atomic;
+    first[3] = 1; // more fragments
+    let mut later = atomic;
+    later[2] = 0x08; // offset 1
+    assert_eq!(
+        ipv6_upper(&with_ext(&udp, 44, &first)),
+        Some((17, 48, true))
+    );
+    assert!(
+        parse_udp6(&with_ext(&udp, 44, &first)).is_none(),
+        "an incomplete datagram"
+    );
+    assert_eq!(
+        ipv6_upper(&with_ext(&udp, 44, &later)),
+        None,
+        "a later fragment"
+    );
+    assert!(ipv6_upper(&hop[..44]).is_none(), "a cut header");
+    let mut unknown = hop.clone();
+    unknown[6] = 135; // mobility: not read
+    assert!(parse_udp6(&unknown).is_none());
+
+    let tcp = with_ext(&syn6(), 60, &pad);
+    let t = parse_tcp(&tcp).unwrap();
+    assert_eq!((t.dst.port(), t.flags & (SYN | ACK)), (443, SYN));
+    let mut r = tcp.clone();
+    rewrite_tcp(
+        &mut r,
+        "[2606:4700::1]:50000".parse().unwrap(),
+        "[2a02:6b8::5]:61000".parse().unwrap(),
+    );
+    assert_eq!(&r[40..48], &tcp[40..48], "the extension header stays");
+    assert_eq!(r[48..52], [0xC3, 0x50, 0xEE, 0x48], "ports past it");
+    assert_eq!(&r[64..66], &[0u8, 0][..], "its checksum");
+    assert!(
+        parse_tcp(&with_ext(&syn6(), 44, &first)).is_none(),
+        "a first fragment"
     );
 }

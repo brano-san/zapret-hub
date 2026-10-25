@@ -64,31 +64,63 @@ pub fn build_udp(src: SocketAddrV4, dst: SocketAddrV4, payload: &[u8], id: u16) 
     p
 }
 
+/// The upper-layer protocol of an IPv6 packet, its header's offset and whether more fragments
+/// follow: past hop-by-hop (0), routing (43) and destination options (60) headers and the fragment
+/// header (44) of a first fragment. A later fragment, another extension or a cut header: `None`.
+pub fn ipv6_upper(p: &[u8]) -> Option<(u8, usize, bool)> {
+    if p.len() < 40 || p[0] >> 4 != 6 {
+        return None;
+    }
+    let (mut next, mut at, mut more) = (p[6], 40, false);
+    loop {
+        match next {
+            0 | 43 | 60 => {
+                let len = (usize::from(*p.get(at + 1)?) + 1) * 8;
+                next = p[at];
+                at += len;
+            }
+            44 => {
+                let frag = p.get(at..at + 8)?;
+                if be16(frag, 2) & 0xFFF8 != 0 {
+                    return None;
+                }
+                more = frag[3] & 1 != 0;
+                next = frag[0];
+                at += 8;
+            }
+            _ => return (at <= p.len()).then_some((next, at, more)),
+        }
+    }
+}
+
 pub struct Udp6<'a> {
     pub src: SocketAddrV6,
     pub dst: SocketAddrV6,
     pub payload: &'a [u8],
 }
 
-/// IPv6/UDP right after the fixed header (no extension headers); lengths must agree with the
-/// buffer.
+/// Unfragmented IPv6/UDP, past the extension headers `ipv6_upper` reads; lengths must agree
+/// with the buffer.
 pub fn parse_udp6(packet: &[u8]) -> Option<Udp6<'_>> {
-    if packet.len() < 48 || packet[0] >> 4 != 6 || packet[6] != 17 {
+    let (17, at, false) = ipv6_upper(packet)? else {
         return None;
-    }
+    };
     let total = 40 + usize::from(be16(packet, 4));
-    let udp_len = usize::from(be16(packet, 44));
-    if total > packet.len() || udp_len < 8 || 40 + udp_len > total {
+    if total > packet.len() || at + 8 > total {
         return None;
     }
-    let addr = |at: usize, port_at: usize| {
-        let ip: [u8; 16] = packet[at..at + 16].try_into().unwrap();
+    let udp_len = usize::from(be16(packet, at + 4));
+    if udp_len < 8 || at + udp_len > total {
+        return None;
+    }
+    let addr = |ip_at: usize, port_at: usize| {
+        let ip: [u8; 16] = packet[ip_at..ip_at + 16].try_into().unwrap();
         SocketAddrV6::new(Ipv6Addr::from(ip), be16(packet, port_at), 0, 0)
     };
     Some(Udp6 {
-        src: addr(8, 40),
-        dst: addr(24, 42),
-        payload: &packet[48..40 + udp_len],
+        src: addr(8, at),
+        dst: addr(24, at + 2),
+        payload: &packet[at + 8..at + udp_len],
     })
 }
 
@@ -159,17 +191,16 @@ pub struct Tcp<'a> {
     pub payload: &'a [u8],
 }
 
-/// The TCP header's offset: the IPv4 header's length, or 40 for IPv6 with TCP right after the
-/// fixed header.
-fn l4_at(packet: &[u8]) -> usize {
+/// The TCP/UDP header's offset: the IPv4 header's length, or past the IPv6 extension headers.
+pub fn l4_at(packet: &[u8]) -> usize {
     match packet[0] >> 4 {
         4 => usize::from(packet[0] & 0x0F) * 4,
-        _ => 40,
+        _ => ipv6_upper(packet).map_or(40, |(_, at, _)| at),
     }
 }
 
-/// Unfragmented IPv4/TCP, or IPv6/TCP without extension headers; header and option lengths must
-/// fit the packet.
+/// Unfragmented IPv4/TCP or IPv6/TCP (past `ipv6_upper`'s extension headers); header and option
+/// lengths must fit the packet.
 pub fn parse_tcp(packet: &[u8]) -> Option<Tcp<'_>> {
     match packet.first()? >> 4 {
         4 => parse_tcp4(packet),
@@ -179,23 +210,26 @@ pub fn parse_tcp(packet: &[u8]) -> Option<Tcp<'_>> {
 }
 
 fn parse_tcp6(packet: &[u8]) -> Option<Tcp<'_>> {
-    if packet.len() < 60 || packet[6] != 6 {
+    let (6, at, false) = ipv6_upper(packet)? else {
         return None;
-    }
+    };
     let total = 40 + usize::from(be16(packet, 4));
-    let doff = usize::from(packet[52] >> 4) * 4;
-    if total > packet.len() || doff < 20 || 40 + doff > total {
+    if total > packet.len() || at + 20 > total {
         return None;
     }
-    let addr = |at: usize, port_at: usize| {
-        let ip: [u8; 16] = packet[at..at + 16].try_into().unwrap();
+    let doff = usize::from(packet[at + 12] >> 4) * 4;
+    if doff < 20 || at + doff > total {
+        return None;
+    }
+    let addr = |ip_at: usize, port_at: usize| {
+        let ip: [u8; 16] = packet[ip_at..ip_at + 16].try_into().unwrap();
         SocketAddr::new(Ipv6Addr::from(ip).into(), be16(packet, port_at))
     };
     Some(Tcp {
-        src: addr(8, 40),
-        dst: addr(24, 42),
-        flags: packet[53],
-        payload: &packet[40 + doff..total],
+        src: addr(8, at),
+        dst: addr(24, at + 2),
+        flags: packet[at + 13],
+        payload: &packet[at + doff..total],
     })
 }
 

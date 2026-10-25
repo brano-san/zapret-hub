@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::divert::{self, MAX_FILTER_RANGES};
 use crate::flows::{FlowRow, Via};
-use crate::packet::{ACK, RST, SYN, Tcp, parse_tcp, parse_udp};
+use crate::packet::{ACK, RST, SYN, Tcp, ipv6_upper, parse_tcp, parse_udp};
 use crate::rules::Protocol;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, specta::Type)]
@@ -107,16 +107,20 @@ fn be32(b: &[u8], at: usize) -> u32 {
     u32::from_be_bytes(b[at..at + 4].try_into().unwrap())
 }
 
-/// Protocol, source and destination of an IPv4 (via `packet`) or IPv6 TCP/UDP packet. IPv6
-/// extension headers are not followed.
+/// Protocol, source and destination of an IPv4 (via `packet`) or IPv6 TCP/UDP packet (past the
+/// extension headers `packet::ipv6_upper` reads).
 fn endpoints(p: &[u8]) -> Option<(Protocol, SocketAddr, SocketAddr)> {
     match p.first()? >> 4 {
         4 => match parse_tcp(p) {
             Some(t) => Some((Protocol::Tcp, t.src, t.dst)),
             None => parse_udp(p).map(|u| (Protocol::Udp, u.src.into(), u.dst.into())),
         },
-        6 if p.len() >= 44 => {
-            let protocol = match p[6] {
+        6 => {
+            let (next, at, _) = ipv6_upper(p)?;
+            if p.len() < at + 4 {
+                return None;
+            }
+            let protocol = match next {
                 6 => Protocol::Tcp,
                 17 => Protocol::Udp,
                 _ => return None,
@@ -129,8 +133,8 @@ fn endpoints(p: &[u8]) -> Option<(Protocol, SocketAddr, SocketAddr)> {
             let port = |at: usize| u16::from_be_bytes([p[at], p[at + 1]]);
             Some((
                 protocol,
-                SocketAddr::new(ip(8), port(40)),
-                SocketAddr::new(ip(24), port(42)),
+                SocketAddr::new(ip(8), port(at)),
+                SocketAddr::new(ip(24), port(at + 2)),
             ))
         }
         _ => None,

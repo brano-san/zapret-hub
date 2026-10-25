@@ -91,9 +91,11 @@ mod sys {
     use super::Seen;
 
     /// IPv4: `ip[9] == 17 && !(ip[6:2] & 0x1fff)`, IPv6: `ip6[6] == 17` (UDP right after the
-    /// fixed header); then `udp[0:2] == 53 || udp[2:2] == 53`. Offsets from the IP header; the
-    /// family by the packet's link protocol (the socket takes every protocol).
-    const FILTER: [SockFilter; 18] = [
+    /// fixed header); then `udp[0:2] == 53 || udp[2:2] == 53`. An IPv6 packet with a
+    /// hop-by-hop, routing, destination options or fragment header passes whole: `seen` reads
+    /// past them and checks the ports. Offsets from the IP header; the family by the packet's link
+    /// protocol (the socket takes every protocol).
+    const FILTER: [SockFilter; 24] = [
         SockFilter::new(0x28, 0, 0, 0xffff_f000), // 0 ldh proto (SKF_AD_PROTOCOL)
         SockFilter::new(0x15, 7, 0, 0x86dd),      // 1 jeq IPv6: to 9
         SockFilter::new(0x15, 0, 14, 0x0800),     // 2 jeq IPv4, else drop
@@ -104,7 +106,7 @@ mod sys {
         SockFilter::new(0xb1, 0, 0, 0),           // 7 ldxb 4*([0]&0xf): header length
         SockFilter::new(0x05, 0, 0, 3),           // 8 ja 12: the ports
         SockFilter::new(0x30, 0, 0, 6),           // 9 ldb [6]: next header
-        SockFilter::new(0x15, 0, 6, 17),          // 10 jeq UDP, else drop
+        SockFilter::new(0x15, 0, 7, 17),          // 10 jeq UDP, else to 18
         SockFilter::new(0x01, 0, 0, 40),          // 11 ldx #40: header length
         SockFilter::new(0x48, 0, 0, 0),           // 12 ldh [x+0]: source port
         SockFilter::new(0x15, 2, 0, 53),          // 13 jeq 53: accept
@@ -112,6 +114,12 @@ mod sys {
         SockFilter::new(0x15, 0, 1, 53),          // 15 jeq 53, else drop
         SockFilter::new(0x06, 0, 0, 0xffff),      // 16 accept
         SockFilter::new(0x06, 0, 0, 0),           // 17 drop
+        SockFilter::new(0x15, 3, 0, 0),           // 18 jeq hop-by-hop: to 22
+        SockFilter::new(0x15, 2, 0, 43),          // 19 jeq routing: to 22
+        SockFilter::new(0x15, 1, 0, 60),          // 20 jeq destination options: to 22
+        SockFilter::new(0x15, 0, 1, 44),          // 21 jeq fragment, else drop
+        SockFilter::new(0x06, 0, 0, 0xffff),      // 22 accept
+        SockFilter::new(0x06, 0, 0, 0),           // 23 drop
     ];
 
     pub struct Sniffer(Socket);
@@ -274,6 +282,22 @@ mod tests {
         let sniffer = Sniffer::open(Duration::from_millis(200)).unwrap();
         for host in ["127.0.0.1", "[::1]"] {
             let server = UdpSocket::bind(format!("{host}:53")).unwrap();
+            if host == "[::1]" {
+                // The answer carries a destination options header (PadN): the filter passes it.
+                use std::os::fd::AsRawFd as _;
+                let opts = [0u8, 0, 1, 4, 0, 0, 0, 0];
+                // SAFETY: a live socket and a buffer of the length given.
+                let rc = unsafe {
+                    libc::setsockopt(
+                        server.as_raw_fd(),
+                        libc::IPPROTO_IPV6,
+                        libc::IPV6_DSTOPTS,
+                        opts.as_ptr().cast(),
+                        opts.len() as libc::socklen_t,
+                    )
+                };
+                assert_eq!(rc, 0, "{}", std::io::Error::last_os_error());
+            }
             let client = UdpSocket::bind(format!("{host}:0")).unwrap();
             client.send_to(b"not dns", format!("{host}:9")).unwrap();
             client
