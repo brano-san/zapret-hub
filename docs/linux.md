@@ -70,7 +70,11 @@ USER ALL=(ALL) NOPASSWD: /usr/sbin/nft, /usr/bin/systemctl, /usr/bin/journalctl,
 - **systemd.** Служба `zapret2.service` в `/etc/systemd/system`: пользователь — тот, кто применял стратегию, с
   `AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW`; `ExecStartPre=+nft -f …nfqws2.nft` ставит таблицу,
   `ExecStopPost=+nft delete table inet zapret_hub` убирает. Аргументы стратегии — в `ExecStart`. Автозапуск
-  (`enable`) включает «Применить».
+  (`enable`) включает «Применить». Хаб, запущенный через `sudo`/`pkexec`, ставит службу на пользователя, который
+  его запустил (`SUDO_UID`/`PKEXEC_UID`). Хаб, запущенный прямо от root, ставит службу от root и добавляет
+  `--uid=0:0`: иначе nfqws2 сбрасывает права на uid `0x7FFFFFFF` и не читает папку zapret2 в домашней папке root.
+  Тогда nfqws2 и его папка должны принадлежать root и не быть доступны на запись группе и другим — иначе хаб
+  откажется ставить службу (чужой файл выполнялся бы от root).
 - **CLI.** `zapret-hub-cli` общается с приложением через Unix-сокет `$XDG_RUNTIME_DIR/zapret-hub.sock` (права
   `0600`); без `XDG_RUNTIME_DIR` или если в эту папку могут войти другие (WSLg: `0755`) —
   `/tmp/zapret-hub-<uid>/`. Протокол и команды те же, что на Windows, см.

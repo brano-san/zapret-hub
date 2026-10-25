@@ -237,17 +237,79 @@ fn engine_user() -> Option<u32> {
     (uid != 0).then_some(uid)
 }
 
+/// The first word of an `exec_line` line, unquoted, and the byte offset after its closing quote.
+fn first_word(exec: &str) -> Option<(String, usize)> {
+    let mut word = String::new();
+    let mut chars = exec.strip_prefix('"')?.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '"' => return Some((word.replace("$$", "$").replace("%%", "%"), i + 2)),
+            '\\' => word.push(chars.next()?.1),
+            c => word.push(c),
+        }
+    }
+    None
+}
+
+/// The engine line of a root unit: `--uid=0:0` right after the program keeps nfqws2 root, as it
+/// otherwise drops to uid 0x7FFFFFFF, which cannot read a zapret2 folder in root's home. A line
+/// that names its user already (or had it added before) stays.
+fn as_root(exec: &str) -> String {
+    match first_word(exec) {
+        Some((_, end)) if !exec.contains("\"--uid=") && !exec.contains("\"--user=") => {
+            format!("{} \"--uid=0:0\"{}", &exec[..end], &exec[end..])
+        }
+        _ => exec.to_owned(),
+    }
+}
+
+/// Why root must not run `exe` (`owner`/`mode` of the file, then of its folder): a file or folder
+/// another user may change would run their code as root.
+fn refuse_root_engine(exe: &str, file: (u32, u32), dir: (u32, u32)) -> Option<String> {
+    let safe = |(owner, mode): (u32, u32)| owner == 0 && mode & 0o022 == 0;
+    (!safe(file) || !safe(dir)).then(|| {
+        format!(
+            "Zapret Hub runs as root without sudo or pkexec, so zapret2 would run {exe} as root, \
+             but that file or its folder is not root's alone: start Zapret Hub as your user (or \
+             through sudo), or keep zapret2 in a folder only root may change"
+        )
+    })
+}
+
+/// The engine line of a unit that runs it as root (`as_root`), refused for a file that is not
+/// root's alone (`refuse_root_engine`).
+fn root_engine(exec: &str) -> anyhow::Result<String> {
+    use std::os::unix::fs::MetadataExt as _;
+    let exe = first_word(exec)
+        .map(|(w, _)| PathBuf::from(w))
+        .context("the engine's command line has no program")?;
+    let meta = |p: &Path| {
+        std::fs::metadata(p)
+            .map(|m| (m.uid(), m.mode()))
+            .with_context(|| p.display().to_string())
+    };
+    let dir = exe.parent().unwrap_or(Path::new("/"));
+    if let Some(why) = refuse_root_engine(&exe.display().to_string(), meta(&exe)?, meta(dir)?) {
+        anyhow::bail!(why);
+    }
+    Ok(as_root(exec))
+}
+
 /// The unit of `name` as it should be: the `zapret2` one runs the engine (`EngineUnit`).
 fn unit_for(name: &str, exec: &str) -> anyhow::Result<String> {
-    let engine = if name == SERVICE2 {
-        Some(EngineUnit {
-            user: engine_user(),
-            nft: nft_path()?,
-        })
-    } else {
-        None
+    if name != SERVICE2 {
+        return unit(exec, None);
+    }
+    let user = engine_user();
+    let exec = match user {
+        Some(_) => exec.to_owned(),
+        None => root_engine(exec)?,
     };
-    unit(exec, engine.as_ref())
+    let engine = EngineUnit {
+        user,
+        nft: nft_path()?,
+    };
+    unit(&exec, Some(&engine))
 }
 
 /// Steps that put `name` in place with command line `exec` (`exec_line`): stopped, its unit
@@ -457,6 +519,40 @@ mod tests {
             )
         );
         assert_eq!(exec_start(&text).as_deref(), Some(exec), "round trip");
+    }
+
+    #[test]
+    fn a_root_engine_keeps_root_once_and_only_for_roots_own_file() {
+        let argv: Vec<String> = ["/root/my \"z2\"/nfqws2", "--qnum=200"]
+            .map(str::to_owned)
+            .to_vec();
+        let line = exec_line(&argv);
+        assert_eq!(
+            first_word(&line),
+            Some(("/root/my \"z2\"/nfqws2".to_owned(), 24))
+        );
+        let root = as_root(&line);
+        assert_eq!(
+            systemd_split(&root),
+            ["/root/my \"z2\"/nfqws2", "--uid=0:0", "--qnum=200"]
+        );
+        assert_eq!(as_root(&root), root, "added once");
+        let own = exec_line(&["/z/nfqws2".into(), "--user=nobody".into()]);
+        assert_eq!(as_root(&own), own, "the strategy's own user stays");
+
+        let exe = "/root/z2/nfqws2";
+        assert_eq!(refuse_root_engine(exe, (0, 0o755), (0, 0o700)), None);
+        for (file, dir) in [
+            ((1000, 0o755), (0, 0o755)),
+            ((0, 0o775), (0, 0o755)),
+            ((0, 0o755), (1000, 0o755)),
+            ((0, 0o755), (0, 0o777)),
+        ] {
+            assert!(
+                refuse_root_engine(exe, file, dir).is_some(),
+                "{file:?} {dir:?}"
+            );
+        }
     }
 
     #[test]
