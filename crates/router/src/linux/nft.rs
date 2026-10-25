@@ -220,8 +220,9 @@ fn after<'a>(words: &[&'a str], key: &str) -> Option<&'a str> {
         .and_then(|i| words.get(i + 1).copied())
 }
 
-/// Our rules in `ip -4 rule show`, by the mark, whatever their priority and table: also those a
-/// crashed session or an older version (table 100) left.
+/// Our rules in `ip -4 rule show`: the mark and a table `pick` gives, whatever the priority; also
+/// those a crashed session or an older version (table 100) left. Another program's rule with the
+/// same mark and another table stays.
 pub fn ours(rules: &str) -> Vec<Policy> {
     rule_lines(rules)
         .filter(|(_, words)| after(words, "fwmark") == Some(MARK_RULE))
@@ -231,6 +232,7 @@ pub fn ours(rules: &str) -> Vec<Policy> {
                 table: after(&words, "lookup")?.parse().ok()?,
             })
         })
+        .filter(|p| p.table == 100 || (ROUTE_TABLE..ROUTE_TABLE + 256).contains(&p.table))
         .collect()
 }
 
@@ -405,6 +407,7 @@ mod tests {
         5270:\tfrom all lookup 52\n\
         32765:\tfrom all fwmark 0x10000000/0x10000000 lookup 100 proto boot\n\
         32765:\tfrom all fwmark 0x10000 lookup 23113\n\
+        32765:\tfrom all fwmark 0x10000000/0x10000000 lookup 7\n\
         32766:\tfrom all lookup main\n\
         32767:\tfrom all lookup default\n";
 
