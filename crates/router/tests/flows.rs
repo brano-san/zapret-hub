@@ -2,6 +2,7 @@ use router::divert::Address;
 use router::flows::{self, DirectReason, FlowKey, MAX_UNRULED, Pending, ProxyState, Stats, Via};
 use router::owner::{self, Images, Owners, PID_WAIT, table_pid};
 use router::rules::Protocol;
+use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 #[test]
@@ -491,4 +492,41 @@ fn each_udp_flow_can_have_its_own_idle_limit() {
         [] as [FlowKey; 0],
         "`idle` keeps the 30 s"
     );
+}
+
+#[test]
+fn a_silent_ipv6_udp_flow_goes_direct_and_so_do_new_ones_to_it_for_a_minute() {
+    use router::flows::{Answers, Silent6, UDP6_DIRECT_FOR, UDP6_TRIES, UDP6_WAIT, silent6_reason};
+    let t0 = Instant::now();
+    let v6: SocketAddr = "[2001:db8::7]:3478".parse().unwrap();
+    let v4: SocketAddr = "1.2.3.4:3478".parse().unwrap();
+    let a = Answers::new(t0);
+    for _ in 0..UDP6_TRIES - 1 {
+        a.sent();
+    }
+    assert!(!a.silent6(v6, t0 + UDP6_WAIT), "too few datagrams yet");
+    a.sent();
+    assert!(
+        !a.silent6(v6, t0 + UDP6_WAIT - Duration::from_millis(1)),
+        "too early"
+    );
+    assert!(a.silent6(v6, t0 + UDP6_WAIT));
+    assert!(!a.silent6(v4, t0 + UDP6_WAIT), "IPv4 keeps the proxy");
+    a.answered();
+    assert!(
+        !a.silent6(v6, t0 + UDP6_WAIT),
+        "an answer means the path works"
+    );
+
+    let mut s = Silent6::default();
+    assert_eq!(s.reason(v6, t0), None);
+    s.mark(v6.ip(), t0);
+    let other_port: SocketAddr = "[2001:db8::7]:443".parse().unwrap();
+    assert_eq!(
+        s.reason(other_port, t0),
+        Some(silent6_reason()),
+        "the whole address"
+    );
+    assert_eq!(s.reason("[2001:db8::8]:3478".parse().unwrap(), t0), None);
+    assert_eq!(s.reason(v6, t0 + UDP6_DIRECT_FOR), None, "for a minute");
 }

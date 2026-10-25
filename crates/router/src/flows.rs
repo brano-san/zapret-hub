@@ -1,7 +1,8 @@
 //! Per-flow decisions, the queue of packets waiting for the proxy, and counters.
 
 use std::collections::{HashMap, VecDeque};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -118,6 +119,75 @@ impl Pending {
 
     pub fn drain(&mut self) -> Vec<(Vec<u8>, Address)> {
         self.0.drain(..).collect()
+    }
+}
+
+/// Datagrams a proxied IPv6 UDP flow sends without an answer before it goes direct: a proxy
+/// without IPv6 egress takes them and answers none.
+pub const UDP6_TRIES: u32 = 3;
+/// And for at least this long.
+pub const UDP6_WAIT: Duration = Duration::from_secs(3);
+/// How long new UDP flows to such a destination go direct (as `tcp::DIRECT_FOR`).
+pub const UDP6_DIRECT_FOR: Duration = Duration::from_secs(60);
+
+/// Whether a proxied UDP flow got answers.
+pub struct Answers {
+    opened: Instant,
+    sent: AtomicU32,
+    answered: AtomicBool,
+}
+
+impl Answers {
+    pub fn new(now: Instant) -> Answers {
+        Answers {
+            opened: now,
+            sent: AtomicU32::new(0),
+            answered: AtomicBool::new(false),
+        }
+    }
+
+    pub fn sent(&self) {
+        self.sent.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn answered(&self) {
+        self.answered.store(true, Ordering::Relaxed);
+    }
+
+    /// The flow to IPv6 `dst` sent `UDP6_TRIES` datagrams over `UDP6_WAIT` or more and got
+    /// no answer: it goes direct.
+    pub fn silent6(&self, dst: SocketAddr, now: Instant) -> bool {
+        dst.is_ipv6()
+            && !self.answered.load(Ordering::Relaxed)
+            && self.sent.load(Ordering::Relaxed) >= UDP6_TRIES
+            && now.duration_since(self.opened) >= UDP6_WAIT
+    }
+}
+
+/// The reason of a flow `Answers::silent6` sent direct.
+pub fn silent6_reason() -> DirectReason {
+    DirectReason::Failed {
+        error: "no answer through the proxy over IPv6: it may have no IPv6".into(),
+    }
+}
+
+/// IPv6 destinations a silent flow sent direct, and when.
+#[derive(Default)]
+pub struct Silent6(HashMap<IpAddr, Instant>);
+
+impl Silent6 {
+    pub fn mark(&mut self, ip: IpAddr, now: Instant) {
+        self.0
+            .retain(|_, t| now.duration_since(*t) < UDP6_DIRECT_FOR);
+        self.0.insert(ip, now);
+    }
+
+    /// A new flow to `dst` goes direct while its destination is marked.
+    pub fn reason(&self, dst: SocketAddr, now: Instant) -> Option<DirectReason> {
+        self.0
+            .get(&dst.ip())
+            .filter(|t| now.duration_since(**t) < UDP6_DIRECT_FOR)
+            .map(|_| silent6_reason())
     }
 }
 

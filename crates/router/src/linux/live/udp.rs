@@ -28,6 +28,7 @@ pub(super) struct Relay {
     relay: SocketAddrV4,
     /// Named in each datagram's header instead of the address, when known.
     domain: Option<String>,
+    answers: flows::Answers,
 }
 
 impl Relay {
@@ -35,6 +36,7 @@ impl Relay {
         let mut datagram = socks_header_to(dst, self.domain.as_deref());
         datagram.extend_from_slice(payload);
         let _ = self.socket.send_to(&datagram, self.relay);
+        self.answers.sent();
     }
 }
 
@@ -114,6 +116,29 @@ impl Live {
                     pending.push_back(payload.to_vec());
                     return; // counted when it goes
                 }
+                Up::Proxy(relay) if relay.answers.silent6(dst, now) => {
+                    // The proxy never answered over IPv6: this flow and new ones to `dst` go
+                    // direct; a socket that does not open keeps the proxy.
+                    let relay = relay.clone();
+                    let Ok(socket) = direct_socket(dst) else {
+                        drop(flows);
+                        relay.send(dst, payload);
+                        self.stats.lock().unwrap().add(key, up, 0, now);
+                        return;
+                    };
+                    let reason = flows::silent6_reason();
+                    flow.up = Up::Direct(socket.clone(), reason.clone());
+                    let (client, reply) = (flow.client, flow.reply.clone());
+                    drop(flows);
+                    self.silent6.lock().unwrap().mark(dst.ip(), now);
+                    let _ = socket.send(payload);
+                    self.stats
+                        .lock()
+                        .unwrap()
+                        .set_via(key, Via::Direct { reason });
+                    let l = self.clone();
+                    spawn(move || l.relay_rx(id, client, &reply, &socket, None));
+                }
                 Up::Proxy(relay) => {
                     let relay = relay.clone();
                     drop(flows);
@@ -133,8 +158,10 @@ impl Live {
         let pid = owner::table_pid_other(Protocol::Udp, client.port());
         let exe = pid.and_then(|p| self.images.get(p));
         let table = self.table.read().unwrap().clone();
-        let (rule, direct) =
-            flows::route(&table, Protocol::Udp, dst, exe.as_deref(), self.decide(pid));
+        let decided = self
+            .decide(pid)
+            .or_else(|| self.silent6.lock().unwrap().reason(dst, now));
+        let (rule, direct) = flows::route(&table, Protocol::Udp, dst, exe.as_deref(), decided);
         let domain = self.domain_of(dst, now);
         let opened = sockopt::transparent_udp(dst, nft::MARK_OWN).and_then(|reply| {
             let up = match &direct {
@@ -192,6 +219,7 @@ impl Live {
                 socket,
                 relay: assoc.relay,
                 domain,
+                answers: flows::Answers::new(Instant::now()),
             }))
         });
         let latency_ms = started.elapsed().as_millis() as u32;
@@ -267,6 +295,15 @@ impl Live {
         relay: Option<SocketAddrV4>,
     ) {
         let key = id.0;
+        let answers = self
+            .flows
+            .lock()
+            .unwrap()
+            .get(&id)
+            .and_then(|f| match &f.up {
+                Up::Proxy(r) if std::ptr::eq(&r.socket, socket) => Some(r.clone()),
+                _ => None,
+            });
         let mut buf = vec![0u8; MAX_DATAGRAM];
         loop {
             let current = self
@@ -299,6 +336,9 @@ impl Live {
                 None => &buf[..n],
             };
             let _ = reply.send_to(data, client);
+            if let Some(r) = &answers {
+                r.answers.answered();
+            }
             self.stats
                 .lock()
                 .unwrap()

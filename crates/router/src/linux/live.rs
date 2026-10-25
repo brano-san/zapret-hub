@@ -61,6 +61,8 @@ pub(crate) struct Live {
     /// Both sockets of each relayed TCP connection, shut down when the session ends.
     conns: Mutex<HashMap<FlowKey, (TcpStream, TcpStream)>>,
     stats: Mutex<Stats>,
+    /// IPv6 destinations whose UDP the proxy never answered: new flows to them go direct.
+    silent6: Mutex<flows::Silent6>,
     proxy_state: Mutex<ProxyState>,
     proxy_pid: Mutex<Option<u32>>,
     /// `session_lock`, released once `shut` cleared the routing.
@@ -297,6 +299,7 @@ impl Live {
             flows: Mutex::new(HashMap::new()),
             conns: Mutex::new(HashMap::new()),
             stats: Mutex::new(Stats::default()),
+            silent6: Mutex::new(flows::Silent6::default()),
             proxy_state: Mutex::new(ProxyState::Unknown),
             proxy_pid: Mutex::new(None),
             lock: Mutex::new(Some(lock)),

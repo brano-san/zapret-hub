@@ -49,6 +49,7 @@ struct Relay {
     local: SocketAddr,
     /// Named in each datagram's header instead of the address, when known.
     domain: Option<String>,
+    answers: flows::Answers,
 }
 
 impl Relay {
@@ -56,6 +57,7 @@ impl Relay {
         let mut datagram = socks_header_to(dst, self.domain.as_deref());
         datagram.extend_from_slice(payload);
         let _ = self.socket.send_to(&datagram, self.relay);
+        self.answers.sent();
     }
 }
 
@@ -142,6 +144,8 @@ pub(super) struct Live {
     proxy_state: Mutex<ProxyState>,
     proxy_pid: Mutex<Option<u32>>,
     next_id: AtomicU16,
+    /// IPv6 destinations whose UDP the proxy never answered: new flows to them go direct.
+    silent6: Mutex<flows::Silent6>,
     /// A spawned `recompose` has not started yet: more requests ride on it.
     recompose_pending: AtomicBool,
 }
@@ -243,6 +247,7 @@ impl Live {
             proxy_state: Mutex::new(ProxyState::Unknown),
             proxy_pid: Mutex::new(None),
             next_id: AtomicU16::new(0),
+            silent6: Mutex::new(flows::Silent6::default()),
             recompose_pending: AtomicBool::new(false),
         });
         if let Err(e) = live.apply(Some(table)) {
@@ -557,7 +562,8 @@ impl Live {
             };
             let state = self.proxy_state.lock().unwrap().clone();
             let proxy_pid = *self.proxy_pid.lock().unwrap();
-            let reason = flows::decide(&state, pid, std::process::id(), proxy_pid);
+            let reason = flows::decide(&state, pid, std::process::id(), proxy_pid)
+                .or_else(|| self.silent6.lock().unwrap().reason(dst, now));
             let domain = self.domain_of(dst, now);
             let mut flows = self.flows.lock().unwrap();
             if let Entry::Vacant(e) = flows.entry(key) {
@@ -603,9 +609,21 @@ impl Live {
             Some(FlowState::Opening(pending)) => pending.push(packet.to_vec(), addr),
             Some(FlowState::Proxy(relay)) => {
                 let relay = relay.clone();
+                let now = Instant::now();
+                if relay.answers.silent6(dst, now) {
+                    let reason = flows::silent6_reason();
+                    flows.insert(key, FlowState::Direct(reason.clone()));
+                    drop(flows);
+                    self.silent6.lock().unwrap().mark(dst.ip(), now);
+                    let _ = handle.send(packet, &addr);
+                    let mut stats = self.stats.lock().unwrap();
+                    stats.set_via(key, Via::Direct { reason });
+                    stats.add(key, up, 0, now);
+                    return;
+                }
                 drop(flows);
                 relay.send(dst, payload);
-                self.stats.lock().unwrap().add(key, up, 0, Instant::now());
+                self.stats.lock().unwrap().add(key, up, 0, now);
             }
             Some(FlowState::Direct(_)) | None => {
                 drop(flows);
@@ -636,6 +654,7 @@ impl Live {
                 inbound,
                 local,
                 domain,
+                answers: flows::Answers::new(Instant::now()),
             }))
         });
         let latency_ms = started.elapsed().as_millis() as u32;
@@ -726,6 +745,7 @@ impl Live {
             let mut addr = relay.inbound;
             self.dll.checksums(&mut packet, &mut addr);
             self.inject(&packet, &addr);
+            relay.answers.answered();
             self.stats
                 .lock()
                 .unwrap()
