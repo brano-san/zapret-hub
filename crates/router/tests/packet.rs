@@ -110,6 +110,7 @@ fn only_unicast_packets_are_routed() {
     assert!(!unicast(ip("fe80::1"), ip("ff02::fb")), "IPv6 mDNS");
     assert!(!unicast(ip("::"), ip("ff02::1:2")), "DHCPv6");
     assert!(!unicast(ip("::"), ip("2606:4700::1")));
+    assert!(!unicast(ip("fe80::1"), ip("fe80::2")), "link-local");
 }
 
 /// 192.168.1.5:50000 -> 162.159.135.232:443, SYN, data offset 6 (an MSS option), checksums 0x1234 / 0xABCD.

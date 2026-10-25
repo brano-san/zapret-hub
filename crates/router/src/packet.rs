@@ -8,11 +8,14 @@ pub struct Udp<'a> {
     pub payload: &'a [u8],
 }
 
-/// Multicast, broadcast and DHCP (from 0.0.0.0 or ::) packets are never relayed: they go out
-/// unchanged.
+/// Multicast, broadcast, DHCP (from 0.0.0.0 or ::) and link-local IPv6 (it needs its interface,
+/// which no proxy has) packets are never relayed: they go out unchanged.
 pub fn unicast(src: IpAddr, dst: IpAddr) -> bool {
-    let broadcast = matches!(dst, IpAddr::V4(d) if d.is_broadcast());
-    !(dst.is_multicast() || broadcast || src.is_unspecified())
+    let local_only = match dst {
+        IpAddr::V4(d) => d.is_broadcast(),
+        IpAddr::V6(d) => d.is_unicast_link_local(),
+    };
+    !(dst.is_multicast() || local_only || src.is_unspecified())
 }
 
 fn be16(b: &[u8], at: usize) -> u16 {

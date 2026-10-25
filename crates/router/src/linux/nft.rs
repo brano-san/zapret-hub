@@ -167,6 +167,10 @@ pub fn ruleset(
                 cast += "        ip6 daddr ff00::/8 return\n";
             }
         }
+        if tproxy6.is_some() {
+            // Link-local IPv6 needs its interface: no proxy reaches it.
+            cast += "        ip6 daddr fe80::/10 return\n";
+        }
         let family = if tproxy6.is_none() {
             "        meta nfproto ipv6 return\n"
         } else {
@@ -553,6 +557,11 @@ mod tests {
         assert!(!v6.contains("nfproto ipv6"), "{v6}");
         assert!(
             v6.contains("        ip daddr @broadcast return\n        ip6 daddr ff00::/8 return\n")
+        );
+        assert_eq!(
+            v6.matches("        ip6 daddr fe80::/10 return\n").count(),
+            2,
+            "link-local skips TCP and UDP: {v6}"
         );
         assert!(v6.contains(
             "tproxy ip to 127.0.0.1:40001 accept\n        iifname \"lo\" meta l4proto udp meta mark & 0x10000000 != 0 tproxy ip6 to [::1]:40002 accept\n"
