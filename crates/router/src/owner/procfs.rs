@@ -12,6 +12,17 @@ fn net_files(protocol: Protocol) -> [&'static str; 2] {
     }
 }
 
+/// The tables a socket of the family may sit in: an IPv4 flow's in both (dual-stack sockets are
+/// IPv6 ones), the IPv4 table first; an IPv6 flow's in the IPv6 table only.
+pub fn family_files(protocol: Protocol, ipv6: bool) -> &'static [&'static str] {
+    match (protocol, ipv6) {
+        (Protocol::Udp, false) => &["/proc/net/udp", "/proc/net/udp6"],
+        (Protocol::Udp, true) => &["/proc/net/udp6"],
+        (_, false) => &["/proc/net/tcp", "/proc/net/tcp6"],
+        (_, true) => &["/proc/net/tcp6"],
+    }
+}
+
 /// TCP's LISTEN in the `st` column.
 const LISTEN: &str = "0A";
 
@@ -58,8 +69,8 @@ pub fn stat_start(stat: &str) -> Option<u64> {
     fields.nth(18)?.parse().ok()
 }
 
-fn inodes(protocol: Protocol, port: Option<u16>, listen_only: bool) -> Vec<u64> {
-    net_files(protocol)
+fn inodes(files: &[&str], port: Option<u16>, listen_only: bool) -> Vec<u64> {
+    files
         .iter()
         .filter_map(|file| std::fs::read_to_string(file).ok())
         .flat_map(|text| table_inodes(&text, port, listen_only))
@@ -107,7 +118,7 @@ fn owner_of(inodes: &[u64], skip: Option<u32>) -> Option<u32> {
 /// PIDs owning UDP sockets now, IPv4 and IPv6 tables, sorted and without duplicates.
 pub fn udp_pids() -> Vec<u32> {
     let pids = socket_pids(None);
-    let mut out: Vec<u32> = inodes(Protocol::Udp, None, false)
+    let mut out: Vec<u32> = inodes(&net_files(Protocol::Udp), None, false)
         .iter()
         .filter_map(|inode| pids.get(inode).copied())
         .collect();
@@ -145,18 +156,22 @@ pub fn port_pids() -> HashMap<(Protocol, u16), u32> {
 
 /// PID of the process listening on the TCP `port`.
 pub fn listener_pid(port: u16) -> Option<u32> {
-    owner_of(&inodes(Protocol::Tcp, Some(port), true), None)
+    owner_of(&inodes(&net_files(Protocol::Tcp), Some(port), true), None)
 }
 
-/// PID owning the local `local_port` per the socket tables, IPv4 then IPv6 (`Both` is TCP).
-pub fn table_pid(protocol: Protocol, local_port: u16) -> Option<u32> {
-    owner_of(&inodes(protocol, Some(local_port), false), None)
+/// PID owning the local `local_port` of a socket of the family (`ipv6`) per the socket tables
+/// (`family_files`; `Both` is TCP).
+pub fn table_pid(protocol: Protocol, local_port: u16, ipv6: bool) -> Option<u32> {
+    owner_of(
+        &inodes(family_files(protocol, ipv6), Some(local_port), false),
+        None,
+    )
 }
 
 /// `table_pid`, another process first: this one's relay sockets may hold the same port number
 /// (a UDP answer socket is bound to the flow's destination port).
-pub fn table_pid_other(protocol: Protocol, local_port: u16) -> Option<u32> {
-    let inodes = inodes(protocol, Some(local_port), false);
+pub fn table_pid_other(protocol: Protocol, local_port: u16, ipv6: bool) -> Option<u32> {
+    let inodes = inodes(family_files(protocol, ipv6), Some(local_port), false);
     owner_of(&inodes, Some(std::process::id())).or_else(|| owner_of(&inodes, None))
 }
 

@@ -19,50 +19,57 @@ pub use win32::{image_path, listener_pid, process_start, table_pid, udp_pids};
 
 pub const PID_WAIT: Duration = Duration::from_millis(50);
 
-/// Local port -> PID, fed by socket events; `wait` covers an event that trails its packet.
-/// `None` means "looked up, no owner found" and is not waited for again.
+/// Local port and family (IPv6) -> PID, fed by socket events; `wait` covers an event that
+/// trails its packet. `None` means "looked up, no owner found" and is not waited for again. An
+/// IPv4 and an IPv6 socket of two programs may hold one port number.
 #[derive(Default)]
 pub struct Owners {
-    map: Mutex<HashMap<u16, Option<u32>>>,
+    map: Mutex<HashMap<(u16, bool), Option<u32>>>,
     changed: Condvar,
 }
 
 impl Owners {
-    pub fn record(&self, local_port: u16, pid: u32) {
-        self.map.lock().unwrap().insert(local_port, Some(pid));
+    pub fn record(&self, local_port: u16, ipv6: bool, pid: u32) {
+        self.map
+            .lock()
+            .unwrap()
+            .insert((local_port, ipv6), Some(pid));
         self.changed.notify_all();
     }
 
-    pub fn forget(&self, local_port: u16) {
-        self.map.lock().unwrap().remove(&local_port);
+    pub fn forget(&self, local_port: u16, ipv6: bool) {
+        self.map.lock().unwrap().remove(&(local_port, ipv6));
     }
 
-    pub fn wait(&self, local_port: u16, timeout: Duration) -> Option<u32> {
+    pub fn wait(&self, local_port: u16, ipv6: bool, timeout: Duration) -> Option<u32> {
+        let key = (local_port, ipv6);
         let guard = self.map.lock().unwrap();
         let (guard, _) = self
             .changed
-            .wait_timeout_while(guard, timeout, |m| !m.contains_key(&local_port))
+            .wait_timeout_while(guard, timeout, |m| !m.contains_key(&key))
             .unwrap();
-        guard.get(&local_port).copied().flatten()
+        guard.get(&key).copied().flatten()
     }
 
     /// Known entry, else `lookup` (the tables), else wait for an event; a miss is remembered.
     pub fn pid(
         &self,
         local_port: u16,
+        ipv6: bool,
         timeout: Duration,
         lookup: impl FnOnce(u16) -> Option<u32>,
     ) -> Option<u32> {
-        if let Some(known) = self.map.lock().unwrap().get(&local_port) {
+        let key = (local_port, ipv6);
+        if let Some(known) = self.map.lock().unwrap().get(&key) {
             return *known;
         }
         if let Some(pid) = lookup(local_port) {
-            self.record(local_port, pid);
+            self.record(local_port, ipv6, pid);
             return Some(pid);
         }
-        let found = self.wait(local_port, timeout);
+        let found = self.wait(local_port, ipv6, timeout);
         if found.is_none() {
-            self.map.lock().unwrap().entry(local_port).or_insert(None);
+            self.map.lock().unwrap().entry(key).or_insert(None);
         }
         found
     }

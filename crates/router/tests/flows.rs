@@ -76,20 +76,48 @@ fn socks_errors_become_reasons() {
 }
 
 #[test]
+fn an_ipv4_and_an_ipv6_socket_on_one_port_have_their_own_owners() {
+    let owners = Owners::default();
+    owners.record(50001, false, 10);
+    owners.record(50001, true, 20);
+    assert_eq!(owners.pid(50001, false, Duration::ZERO, |_| None), Some(10));
+    assert_eq!(owners.pid(50001, true, Duration::ZERO, |_| None), Some(20));
+    owners.forget(50001, true);
+    assert_eq!(owners.pid(50001, false, Duration::ZERO, |_| None), Some(10));
+    assert_eq!(
+        owners.pid(50001, true, Duration::ZERO, |_| Some(30)),
+        Some(30)
+    );
+}
+
+#[test]
+fn an_ipv6_flow_never_takes_the_owner_of_an_ipv4_socket() {
+    let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let (u, t) = (
+        udp.local_addr().unwrap().port(),
+        tcp.local_addr().unwrap().port(),
+    );
+    assert_eq!(table_pid(Protocol::Udp, u, true), None);
+    assert_eq!(table_pid(Protocol::Tcp, t, true), None);
+    assert_eq!(table_pid(Protocol::Udp, u, false), Some(std::process::id()));
+}
+
+#[test]
 fn a_late_socket_event_is_waited_for_50_ms() {
     let owners = std::sync::Arc::new(Owners::default());
     let late = owners.clone();
     let writer = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(10));
-        late.record(50001, 77);
+        late.record(50001, false, 77);
     });
-    assert_eq!(owners.wait(50001, PID_WAIT), Some(77));
+    assert_eq!(owners.wait(50001, false, PID_WAIT), Some(77));
     writer.join().unwrap();
     let started = Instant::now();
-    assert_eq!(owners.wait(50002, PID_WAIT), None);
+    assert_eq!(owners.wait(50002, false, PID_WAIT), None);
     assert!(started.elapsed() >= PID_WAIT && started.elapsed() < Duration::from_millis(500));
-    owners.forget(50001);
-    assert_eq!(owners.wait(50001, Duration::ZERO), None);
+    owners.forget(50001, false);
+    assert_eq!(owners.wait(50001, false, Duration::ZERO), None);
 }
 
 #[test]
@@ -246,29 +274,35 @@ fn tcp_flows_never_go_idle_and_rows_name_protocol_and_domain() {
 fn an_unknown_owner_is_looked_up_then_remembered() {
     let owners = Owners::default();
     assert_eq!(
-        owners.pid(5000, PID_WAIT, |_| Some(42)),
+        owners.pid(5000, false, PID_WAIT, |_| Some(42)),
         Some(42),
         "from the tables"
     );
-    assert_eq!(owners.pid(5000, PID_WAIT, |_| panic!("known")), Some(42));
+    assert_eq!(
+        owners.pid(5000, false, PID_WAIT, |_| panic!("known")),
+        Some(42)
+    );
     let started = Instant::now();
-    assert_eq!(owners.pid(5001, PID_WAIT, |_| None), None);
+    assert_eq!(owners.pid(5001, false, PID_WAIT, |_| None), None);
     assert!(started.elapsed() >= PID_WAIT);
     let started = Instant::now();
-    assert_eq!(owners.pid(5001, PID_WAIT, |_| panic!("remembered")), None);
+    assert_eq!(
+        owners.pid(5001, false, PID_WAIT, |_| panic!("remembered")),
+        None
+    );
     assert!(
         started.elapsed() < PID_WAIT,
         "a port without an owner is not waited for again"
     );
-    owners.record(5001, 7);
+    owners.record(5001, false, 7);
     assert_eq!(
-        owners.pid(5001, PID_WAIT, |_| None),
+        owners.pid(5001, false, PID_WAIT, |_| None),
         Some(7),
         "a late event still lands"
     );
-    owners.forget(5001);
+    owners.forget(5001, false);
     assert_eq!(
-        owners.pid(5001, Duration::ZERO, |_| Some(8)),
+        owners.pid(5001, false, Duration::ZERO, |_| Some(8)),
         Some(8),
         "a closed socket is looked up again"
     );
@@ -280,11 +314,11 @@ fn the_owner_of_a_bound_port_is_found_in_the_tables() {
     let tcp = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let me = Some(std::process::id());
     assert_eq!(
-        table_pid(Protocol::Udp, udp.local_addr().unwrap().port()),
+        table_pid(Protocol::Udp, udp.local_addr().unwrap().port(), false),
         me
     );
     assert_eq!(
-        table_pid(Protocol::Tcp, tcp.local_addr().unwrap().port()),
+        table_pid(Protocol::Tcp, tcp.local_addr().unwrap().port(), false),
         me
     );
 }
@@ -352,11 +386,11 @@ fn an_ipv6_socket_is_found_in_the_ipv6_tables() {
     let udp = std::net::UdpSocket::bind("[::1]:0").unwrap();
     let me = Some(std::process::id());
     assert_eq!(
-        table_pid(Protocol::Tcp, tcp.local_addr().unwrap().port()),
+        table_pid(Protocol::Tcp, tcp.local_addr().unwrap().port(), true),
         me
     );
     assert_eq!(
-        table_pid(Protocol::Udp, udp.local_addr().unwrap().port()),
+        table_pid(Protocol::Udp, udp.local_addr().unwrap().port(), true),
         me
     );
 }

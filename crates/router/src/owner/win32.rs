@@ -58,7 +58,11 @@ fn owner_rows<Row, T>(
     None
 }
 
-fn tcp_pid(class: TCP_TABLE_CLASS, port: u16) -> Option<u32> {
+/// IPv4 (`ipv6` false): the IPv4 table, then the IPv6 one; IPv6: the IPv6 table only.
+fn tcp_pid(class: TCP_TABLE_CLASS, port: u16, ipv6: bool) -> Option<u32> {
+    if ipv6 {
+        return tcp6_pid(class, port);
+    }
     owner_rows(
         |table, size| {
             // SAFETY: `table` is None (size query) or a buffer of at least `*size` bytes.
@@ -70,23 +74,29 @@ fn tcp_pid(class: TCP_TABLE_CLASS, port: u16) -> Option<u32> {
                 .find_map(|r| row_owner(r.dwLocalPort, r.dwOwningPid, port))
         },
     )
-    .or_else(|| {
-        // Dual-stack sockets (bound on [::]) show up only in the IPv6 table.
-        owner_rows(
-            |table, size| {
-                // SAFETY: as above.
-                unsafe { GetExtendedTcpTable(table, size, false, AF_INET6, class, 0) }
-            },
-            std::mem::offset_of!(MIB_TCP6TABLE_OWNER_PID, table),
-            |rows: &[MIB_TCP6ROW_OWNER_PID]| {
-                rows.iter()
-                    .find_map(|r| row_owner(r.dwLocalPort, r.dwOwningPid, port))
-            },
-        )
-    })
+    // Dual-stack sockets (bound on [::]) show up only in the IPv6 table.
+    .or_else(|| tcp6_pid(class, port))
 }
 
-fn udp_pid(port: u16) -> Option<u32> {
+fn tcp6_pid(class: TCP_TABLE_CLASS, port: u16) -> Option<u32> {
+    owner_rows(
+        |table, size| {
+            // SAFETY: `table` is None (size query) or a buffer of at least `*size` bytes.
+            unsafe { GetExtendedTcpTable(table, size, false, AF_INET6, class, 0) }
+        },
+        std::mem::offset_of!(MIB_TCP6TABLE_OWNER_PID, table),
+        |rows: &[MIB_TCP6ROW_OWNER_PID]| {
+            rows.iter()
+                .find_map(|r| row_owner(r.dwLocalPort, r.dwOwningPid, port))
+        },
+    )
+}
+
+/// As `tcp_pid`.
+fn udp_pid(port: u16, ipv6: bool) -> Option<u32> {
+    if ipv6 {
+        return udp6_pid(port);
+    }
     owner_rows(
         |table, size| {
             // SAFETY: `table` is None (size query) or a buffer of at least `*size` bytes.
@@ -98,19 +108,21 @@ fn udp_pid(port: u16) -> Option<u32> {
                 .find_map(|r| row_owner(r.dwLocalPort, r.dwOwningPid, port))
         },
     )
-    .or_else(|| {
-        owner_rows(
-            |table, size| {
-                // SAFETY: as above.
-                unsafe { GetExtendedUdpTable(table, size, false, AF_INET6, UDP_TABLE_OWNER_PID, 0) }
-            },
-            std::mem::offset_of!(MIB_UDP6TABLE_OWNER_PID, table),
-            |rows: &[MIB_UDP6ROW_OWNER_PID]| {
-                rows.iter()
-                    .find_map(|r| row_owner(r.dwLocalPort, r.dwOwningPid, port))
-            },
-        )
-    })
+    .or_else(|| udp6_pid(port))
+}
+
+fn udp6_pid(port: u16) -> Option<u32> {
+    owner_rows(
+        |table, size| {
+            // SAFETY: `table` is None (size query) or a buffer of at least `*size` bytes.
+            unsafe { GetExtendedUdpTable(table, size, false, AF_INET6, UDP_TABLE_OWNER_PID, 0) }
+        },
+        std::mem::offset_of!(MIB_UDP6TABLE_OWNER_PID, table),
+        |rows: &[MIB_UDP6ROW_OWNER_PID]| {
+            rows.iter()
+                .find_map(|r| row_owner(r.dwLocalPort, r.dwOwningPid, port))
+        },
+    )
 }
 
 /// PIDs owning UDP sockets now, IPv4 and IPv6 tables, sorted and without duplicates.
@@ -148,14 +160,15 @@ pub fn udp_pids() -> Vec<u32> {
 
 /// PID of the process listening on the TCP `port`.
 pub fn listener_pid(port: u16) -> Option<u32> {
-    tcp_pid(TCP_TABLE_OWNER_PID_LISTENER, port)
+    tcp_pid(TCP_TABLE_OWNER_PID_LISTENER, port, false)
 }
 
-/// PID owning the local `local_port` per the Windows socket tables, IPv4 then IPv6 (`Both` is TCP).
-pub fn table_pid(protocol: Protocol, local_port: u16) -> Option<u32> {
+/// PID owning the local `local_port` of a socket of the family (`ipv6`) per the Windows socket
+/// tables: IPv4 then IPv6 (dual-stack sockets), or IPv6 only (`Both` is TCP).
+pub fn table_pid(protocol: Protocol, local_port: u16, ipv6: bool) -> Option<u32> {
     match protocol {
-        Protocol::Udp => udp_pid(local_port),
-        Protocol::Tcp | Protocol::Both => tcp_pid(TCP_TABLE_OWNER_PID_ALL, local_port),
+        Protocol::Udp => udp_pid(local_port, ipv6),
+        Protocol::Tcp | Protocol::Both => tcp_pid(TCP_TABLE_OWNER_PID_ALL, local_port, ipv6),
     }
 }
 

@@ -308,6 +308,11 @@ impl Address {
         a
     }
 
+    /// The packet or socket is IPv6.
+    pub fn ipv6(&self) -> bool {
+        self.0[10] & 0x10 != 0
+    }
+
     pub fn event(&self) -> u8 {
         self.0[9]
     }

@@ -152,8 +152,9 @@ impl Live {
         }
         // ponytail: like a new UDP flow, an owner missing from events and tables blocks capture up
         // to 50 ms per SYN (once per port).
-        let pid = self.tcp_owners.pid(key.local_port, PID_WAIT, |p| {
-            owner::table_pid(Protocol::Tcp, p)
+        let ipv6 = seg.src.is_ipv6();
+        let pid = self.tcp_owners.pid(key.local_port, ipv6, PID_WAIT, |p| {
+            owner::table_pid(Protocol::Tcp, p, ipv6)
         });
         let exe = pid.and_then(|p| self.images.get(p));
         let exe = exe.as_deref();

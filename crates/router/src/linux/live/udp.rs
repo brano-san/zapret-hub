@@ -155,7 +155,7 @@ impl Live {
         }
         drop(flows);
         // Only this thread adds flows: the key stays vacant until the insert below.
-        let pid = owner::table_pid_other(Protocol::Udp, client.port());
+        let pid = owner::table_pid_other(Protocol::Udp, client.port(), client.is_ipv6());
         let exe = pid.and_then(|p| self.images.get(p));
         let table = self.table.read().unwrap().clone();
         let decided = self

@@ -264,10 +264,10 @@ impl Live {
                     &l.owners
                 };
                 if addr.event() == divert::EVENT_SOCKET_CLOSE {
-                    owners.forget(port);
+                    owners.forget(port, addr.ipv6());
                     continue;
                 }
-                owners.record(port, addr.socket_pid());
+                owners.record(port, addr.ipv6(), addr.socket_pid());
                 if addr.socket_protocol() == PROTO_TCP {
                     continue;
                 }
@@ -531,8 +531,9 @@ impl Live {
         if !self.flows.lock().unwrap().contains_key(&key) {
             // ponytail: waiting for the PID blocks capture up to 50 ms per new flow (new flows are
             // rare); upgrade: a deferred queue of first packets.
-            let pid = self.owners.pid(key.local_port, PID_WAIT, |p| {
-                owner::table_pid(Protocol::Udp, p)
+            let ipv6 = src.is_ipv6();
+            let pid = self.owners.pid(key.local_port, ipv6, PID_WAIT, |p| {
+                owner::table_pid(Protocol::Udp, p, ipv6)
             });
             let exe = pid.and_then(|p| self.images.get(p));
             let now = Instant::now();
@@ -869,11 +870,13 @@ impl Live {
     fn close_flow(&self, key: FlowKey, now: Instant) {
         let mut flows = self.flows.lock().unwrap();
         let removed = flows.remove(&key);
-        let port_busy = flows.keys().any(|k| k.local_port == key.local_port);
+        let port_busy = flows
+            .keys()
+            .any(|k| k.local_port == key.local_port && k.dst.is_ipv6() == key.dst.is_ipv6());
         drop(flows);
         let was_loop = matches!(removed, Some(FlowState::Direct(DirectReason::Loop)));
         if !was_loop && !port_busy {
-            self.owners.forget(key.local_port);
+            self.owners.forget(key.local_port, key.dst.is_ipv6());
         }
         self.stats.lock().unwrap().close(key, now);
     }
