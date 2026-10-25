@@ -359,31 +359,28 @@ pub fn fill(
     agent.context.proxy_udp = ctx.proxy_udp;
 }
 
-/// Linux has no flow observation (WinDivert): a run sees no flows, so no culprits and no paths.
-/// What it could not see goes to `not_checked` as `platform:linux`; a verdict that rests on the
-/// flows (`no_flows`, `clean`, `inconclusive`) is `inconclusive` with low confidence. One from the
-/// client's log stays.
-pub fn unobserved_on_linux(summary: &mut Summary) {
+/// The flow observation did not run on Linux (`why`: no routing capabilities, or what failed): no
+/// flows, so no culprits and no paths. What it could not see goes to `not_checked` as
+/// `platform:linux`; a verdict that rests on the flows (`no_flows`, `clean`, `inconclusive`) is
+/// `inconclusive` with low confidence. One from the client's log stays.
+pub fn unobserved_on_linux(summary: &mut Summary, why: &str) {
     const CODE: &str = "platform:linux";
     let facts = [
         (
             "flows",
-            "соединения программы не наблюдались: на Linux нет WinDivert",
+            format!("соединения программы не наблюдались: {why}"),
         ),
-        (
-            "dns",
-            "ответы DNS программы не наблюдались: на Linux нет WinDivert",
-        ),
+        ("dns", format!("ответы DNS программы не наблюдались: {why}")),
         (
             "paths",
-            "пути обхода не проверялись: без наблюдения не найти виновников",
+            "пути обхода не проверялись: без наблюдения не найти виновников".to_owned(),
         ),
     ];
     let agent = &mut summary.agent;
     agent.not_checked.extend(facts.map(|(part, text)| Fact {
         code: CODE.into(),
         args: vec![part.into()],
-        text: text.into(),
+        text,
     }));
     if matches!(
         agent.verdict,
@@ -392,8 +389,9 @@ pub fn unobserved_on_linux(summary: &mut Summary) {
         agent.verdict = VerdictCode::Inconclusive;
         agent.confidence.level = Level::Low;
         agent.confidence.why.push(CODE.into());
-        summary.verdict_text = "на Linux соединения программы не наблюдаются: смотрите системные \
-                                проверки, пробы и журналы клиента"
-            .into();
+        summary.verdict_text = format!(
+            "на Linux соединения программы не наблюдались ({why}): смотрите системные проверки, \
+             пробы и журналы клиента"
+        );
     }
 }

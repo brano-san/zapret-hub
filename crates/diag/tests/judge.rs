@@ -493,7 +493,7 @@ fn unobserved_on_linux_is_at_most_inconclusive_and_says_why() {
     let mut s = Summary::default();
     run(&mut s, &[], &Evidence::default(), &https());
     assert_eq!(s.agent.verdict, VerdictCode::NoFlows);
-    diag::judge::unobserved_on_linux(&mut s);
+    diag::judge::unobserved_on_linux(&mut s, "нет прав");
     assert_eq!(s.agent.verdict, VerdictCode::Inconclusive);
     assert_eq!(s.agent.confidence.level, Level::Low);
     assert!(
@@ -503,6 +503,7 @@ fn unobserved_on_linux_is_at_most_inconclusive_and_says_why() {
             .contains(&"platform:linux".to_string())
     );
     assert!(s.verdict_text.contains("Linux"), "{}", s.verdict_text);
+    assert!(s.verdict_text.contains("нет прав"), "{}", s.verdict_text);
     let linux: Vec<&str> = s
         .agent
         .not_checked
@@ -523,7 +524,7 @@ fn unobserved_on_linux_is_at_most_inconclusive_and_says_why() {
     );
     assert_eq!(s.agent.verdict, VerdictCode::NotReproducible);
     let text = s.verdict_text.clone();
-    diag::judge::unobserved_on_linux(&mut s);
+    diag::judge::unobserved_on_linux(&mut s, "нет прав");
     assert_eq!(s.agent.verdict, VerdictCode::NotReproducible);
     assert_eq!(s.verdict_text, text);
     assert_eq!(

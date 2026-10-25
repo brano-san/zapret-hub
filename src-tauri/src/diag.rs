@@ -48,8 +48,23 @@ pub enum Reply {
     Choice(Vec<String>),
 }
 
-const NO_DNS: &str =
-    "наблюдение шло без ответов DNS (WinDivert их не отдал): адреса без SNI сгруппированы по /24";
+const NO_DNS: &str = if cfg!(windows) {
+    "наблюдение шло без ответов DNS (WinDivert их не отдал): адреса без SNI сгруппированы по /24"
+} else {
+    "наблюдение шло без ответов DNS (сниффер DNS не открылся): адреса сгруппированы по /24"
+};
+
+/// Why Linux observed nothing (`judge::unobserved_on_linux`).
+fn unobserved_why(err: &anyhow::Error) -> String {
+    #[cfg(target_os = "linux")]
+    if !router::linux::caps::present() {
+        return "нет прав CAP_NET_ADMIN: нажмите «Разрешить маршрутизацию» на вкладке «Маршруты» \
+                и перезапустите Zapret Hub"
+            .into();
+    }
+    format!("наблюдение не запустилось: {err:#}")
+}
+
 const RECHECK_CUT: &str = "перепроверка других профилей прервана: время диагностики вышло";
 const RECHECK_STOPPED: &str = "перепроверка других профилей пропущена: перебор остановлен";
 /// The page gets this long to untick culprits; then all are checked.
@@ -197,7 +212,11 @@ fn watch(
     show: bool,
 ) -> anyhow::Result<(Vec<FlowCounters>, bool)> {
     let state = state(app);
-    let dll = routing::dll(&state)?;
+    // WinDivert's, Windows only: Linux observes with conntrack.
+    let dll = match cfg!(windows) {
+        true => routing::dll(&state)?,
+        false => PathBuf::new(),
+    };
     let proxy_port = router::parse_proxy(state.socks5().as_deref())
         .ok()
         .map(|a| a.port());
@@ -299,12 +318,9 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
         log::info!("diagnostics without system checks: {err:#}");
         Vec::new()
     });
-    // Linux observes no flows (no WinDivert): the run is the system checks, the probes and the
-    // client logs, and says what it could not see (`judge::unobserved_on_linux`). The «not
-    // running» shortcut stays Windows': Linux names the programs otherwise (no `.exe`, 15 chars).
-    let observed = cfg!(windows);
-    // Nothing to watch: say so at once instead of after the whole observation.
-    if observed
+    // The «not running» shortcut stays Windows': Linux names the programs otherwise (no `.exe`,
+    // 15 chars). Nothing to watch: say so at once instead of after the whole observation.
+    if cfg!(windows)
         && !ctx.profile.apps.is_empty()
         && !ctx
             .profile
@@ -317,10 +333,16 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
         return Ok(summary);
     }
     // Watching changes nothing: no snapshot yet.
-    let (flows, dns) = if observed {
-        watch(app, &ctx.profile.apps, observe_secs, true)?
-    } else {
-        (Vec::new(), true)
+    // Linux observes with conntrack when the hub has the routing capabilities; without them the
+    // run is the system checks, the probes and the client logs, and says what it could not see
+    // (`judge::unobserved_on_linux`).
+    let (flows, dns, unobserved) = match watch(app, &ctx.profile.apps, observe_secs, true) {
+        Ok((flows, dns)) => (flows, dns, None),
+        Err(err) if cfg!(windows) => return Err(err),
+        Err(err) => {
+            log::warn!("diagnostics without flow observation: {err:#}");
+            (Vec::new(), true, Some(unobserved_why(&err)))
+        }
     };
     let verdict = culprits::verdict(&flows);
     let groups = match &verdict {
@@ -371,8 +393,8 @@ fn job(app: &AppHandle, request: &Request, profile: Profile) -> anyhow::Result<S
     context::fill(&state, &ctx, engine2.as_ref(), &mut summary);
     summary.sources_missing = missing;
     diag::judge::fill(&mut summary, &flows, &evidence, &ctx, observe_secs);
-    if !observed {
-        diag::judge::unobserved_on_linux(&mut summary);
+    if let Some(why) = &unobserved {
+        diag::judge::unobserved_on_linux(&mut summary, why);
     }
     summary.explanations.extend(summary::check_lines(&checks));
     summary.system_checks = checks;
