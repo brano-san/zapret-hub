@@ -25,14 +25,17 @@ pub fn setup(state: &AppState) -> anyhow::Result<Setup> {
     Ok(Setup { dll, proxy })
 }
 
-/// Linux: gives the hub's exe the capabilities routing needs (one root step); they take effect
-/// on its next start.
+/// Linux: gives the launcher next to the hub's exe the capabilities routing needs (one root
+/// step); the hub gets them through it on its next start.
 pub fn grant() -> anyhow::Result<()> {
     #[cfg(target_os = "linux")]
     {
         let exe = std::env::current_exe()?;
         router::linux::caps::grant(&exe)?;
-        log::info!("routing capabilities granted to {}", exe.display());
+        log::info!(
+            "routing capabilities granted to {}",
+            exe.with_file_name(router::linux::caps::LAUNCHER).display()
+        );
         Ok(())
     }
     #[cfg(not(target_os = "linux"))]

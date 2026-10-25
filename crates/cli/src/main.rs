@@ -553,6 +553,18 @@ type Call<'a> = &'a mut dyn FnMut(Request) -> Result<Value, Fail>;
 type Note<'a> = &'a mut dyn FnMut(&str);
 
 fn main() -> ExitCode {
+    // The launcher of the hub (router::linux::caps): the file capabilities `routes grant` gives
+    // this exe are for the hub, the CLI's own commands drop them.
+    #[cfg(target_os = "linux")]
+    {
+        use router::linux::caps;
+        let mut args = std::env::args_os().skip(1);
+        if args.next().is_some_and(|a| a == caps::LAUNCH_ARG) {
+            let err = caps::launch(args);
+            return finish(Err(Fail::new(UNAVAILABLE, format!("{err:#}"))));
+        }
+        caps::drop_all();
+    }
     let args = match Cli::try_parse() {
         Ok(args) => args,
         // --help, as clap prints it.
