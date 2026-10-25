@@ -4,7 +4,7 @@
 
 use std::collections::VecDeque;
 use std::io::ErrorKind;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, TcpStream, UdpSocket};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -31,7 +31,7 @@ pub(super) struct Relay {
 }
 
 impl Relay {
-    fn send(&self, dst: SocketAddrV4, payload: &[u8]) {
+    fn send(&self, dst: SocketAddr, payload: &[u8]) {
         let mut datagram = socks_header_to(dst, self.domain.as_deref());
         datagram.extend_from_slice(payload);
         let _ = self.socket.send_to(&datagram, self.relay);
@@ -58,18 +58,23 @@ impl Up {
 
 /// A UDP flow: its row's key and the program's address (two addresses may send from one port).
 // ponytail: such two flows share one row (`Stats` is keyed by `FlowKey`, as on Windows).
-pub(super) type UdpKey = (FlowKey, Ipv4Addr);
+pub(super) type UdpKey = (FlowKey, IpAddr);
 
 pub(super) struct Flow {
-    client: SocketAddrV4,
+    client: SocketAddr,
     /// Bound to the flow's destination: answers reach the program from where it sent.
     reply: Arc<UdpSocket>,
     up: Up,
 }
 
 /// A socket to `dst` whose packets skip the routing (`MARK_OWN`).
-fn direct_socket(dst: SocketAddrV4) -> std::io::Result<Arc<UdpSocket>> {
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+fn direct_socket(dst: SocketAddr) -> std::io::Result<Arc<UdpSocket>> {
+    let any: IpAddr = if dst.is_ipv6() {
+        Ipv6Addr::UNSPECIFIED.into()
+    } else {
+        Ipv4Addr::UNSPECIFIED.into()
+    };
+    let socket = UdpSocket::bind((any, 0))?;
     SockRef::from(&socket).set_mark(nft::MARK_OWN)?;
     socket.connect(dst)?;
     socket.set_read_timeout(Some(RELAY_POLL))?;
@@ -78,10 +83,10 @@ fn direct_socket(dst: SocketAddrV4) -> std::io::Result<Arc<UdpSocket>> {
 
 impl Live {
     /// Ends with the session (the socket's read timeout lets it look).
-    pub(super) fn udp_loop(self: &Arc<Self>) {
+    pub(super) fn udp_loop(self: &Arc<Self>, tproxy: &UdpSocket) {
         let mut buf = vec![0u8; MAX_DATAGRAM];
         while !self.is_stopped() {
-            match sockopt::recv_orig(&self.tproxy, &mut buf) {
+            match sockopt::recv_orig(tproxy, &mut buf) {
                 Ok((n, client, Some(dst))) => self.on_datagram(client, dst, &buf[..n]),
                 Ok(_) => {}
                 Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
@@ -90,13 +95,13 @@ impl Live {
         }
     }
 
-    fn on_datagram(self: &Arc<Self>, client: SocketAddrV4, dst: SocketAddrV4, payload: &[u8]) {
+    fn on_datagram(self: &Arc<Self>, client: SocketAddr, dst: SocketAddr, payload: &[u8]) {
         let key = FlowKey {
             protocol: Protocol::Udp,
             local_port: client.port(),
             dst,
         };
-        let id = (key, *client.ip());
+        let id = (key, client.ip());
         let now = Instant::now();
         let up = payload.len() as u64;
         let mut flows = self.flows.lock().unwrap();
@@ -256,7 +261,7 @@ impl Live {
     fn relay_rx(
         &self,
         id: UdpKey,
-        client: SocketAddrV4,
+        client: SocketAddr,
         reply: &UdpSocket,
         socket: &UdpSocket,
         relay: Option<SocketAddrV4>,
@@ -286,7 +291,7 @@ impl Live {
                 }
             };
             let data = match relay {
-                Some(r) if from != SocketAddr::V4(r) => continue,
+                Some(r) if from != r.into() => continue,
                 Some(_) => match parse_socks_udp_from(&buf[..n], key.dst) {
                     Some((_, data)) => data,
                     None => continue,

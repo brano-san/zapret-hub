@@ -8,9 +8,11 @@ mod udp;
 use std::collections::HashMap;
 use std::io::{ErrorKind, Write as _};
 use std::mem::discriminant;
-use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream, UdpSocket};
+use std::net::{
+    IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket,
+};
 use std::os::linux::net::SocketAddrExt as _;
-use std::os::unix::net::{SocketAddr, UnixListener};
+use std::os::unix::net::{SocketAddr as UnixAddr, UnixListener};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, Weak};
@@ -42,8 +44,12 @@ pub(crate) struct Live {
     proxy: SocketAddrV4,
     stopped: AtomicBool,
     acceptor: TcpListener,
+    /// The acceptor on `[::1]`, same port; with `tproxy6`, `None` when the system has no IPv6
+    /// loopback (IPv6 then passes unrouted).
+    acceptor6: Option<TcpListener>,
     acceptor_port: u16,
     tproxy: UdpSocket,
+    tproxy6: Option<UdpSocket>,
     /// The rules without resolved names; `table` is it with them.
     base: Mutex<Table>,
     table: RwLock<Arc<Table>>,
@@ -107,7 +113,7 @@ pub(crate) fn run<S: AsRef<str>>(
 /// One session per network namespace (the app and `zapret-hub-cli routes start` share one table):
 /// an abstract socket name, which the kernel frees when its process dies, so a crash never blocks.
 fn session_lock() -> Result<UnixListener> {
-    let name = SocketAddr::from_abstract_name(format!("{}.lock", nft::TABLE))?;
+    let name = UnixAddr::from_abstract_name(format!("{}.lock", nft::TABLE))?;
     UnixListener::bind_addr(&name).map_err(|e| match e.kind() {
         ErrorKind::AddrInUse => anyhow::anyhow!(
             "another Zapret Hub process (the app or zapret-hub-cli) is routing already: stop it first"
@@ -120,18 +126,39 @@ fn nft(text: &str) -> Result<(), String> {
     run("nft", &["-f", "-"], Some(text)).map(drop)
 }
 
-/// Removes the table and the policy routing, also what a crashed session or an older version
-/// left: every rule with our mark, and the route in the table it looks up. Harmless when there is
-/// nothing to remove.
+/// Removes the table and the policy routing of both families, also what a crashed session or an
+/// older version left: every rule with our mark, and the route in the table it looks up.
+/// Harmless when there is nothing to remove (or no IPv6).
 fn clear() {
     let _ = nft(&nft::delete());
-    if let Ok(rules) = run("ip", &["-4", "rule", "show"], None) {
-        for policy in nft::ours(&rules) {
-            for argv in policy.argv(false) {
-                let _ = run("ip", &argv, None);
+    for (family, v6) in [("-4", false), ("-6", true)] {
+        if let Ok(rules) = run("ip", &[family, "rule", "show"], None) {
+            for policy in nft::ours(&rules) {
+                for argv in policy.argv(false, v6) {
+                    let _ = run("ip", &argv, None);
+                }
             }
         }
     }
+}
+
+/// The acceptor on 127.0.0.1 and, when the system has an IPv6 loopback, on `[::1]` at the same
+/// port (one `redirect to :port` serves both families).
+fn acceptors() -> Result<(TcpListener, Option<TcpListener>)> {
+    for _ in 0..16 {
+        let v4 = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let port = v4.local_addr()?.port();
+        match TcpListener::bind((Ipv6Addr::LOCALHOST, port)) {
+            Ok(v6) => return Ok((v4, Some(v6))),
+            // Someone holds the port on [::1]: another one.
+            Err(e) if e.kind() == ErrorKind::AddrInUse => {}
+            Err(e) => {
+                log::info!("routing IPv4 only: no IPv6 loopback: {e}");
+                return Ok((v4, None));
+            }
+        }
+    }
+    bail!("no port is free on both 127.0.0.1 and [::1]")
 }
 
 /// A rule priority and a table nobody else uses (`nft::pick`): `ip` rules of both families,
@@ -225,14 +252,29 @@ impl Live {
         // Taken before `clear`: what it removes is a dead session's.
         let lock = session_lock()?;
         clear();
-        let acceptor = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-            .context("cannot open the local TCP acceptor")?;
+        let (acceptor, acceptor6) = acceptors().context("cannot open the local TCP acceptor")?;
         let acceptor_port = acceptor.local_addr()?.port();
         let tproxy =
-            sockopt::transparent_udp(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0), nft::MARK_OWN)
+            sockopt::transparent_udp(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)), nft::MARK_OWN)
                 .context("cannot open the TPROXY socket")?;
         tproxy.set_read_timeout(Some(POLL))?;
         let tproxy_port = tproxy.local_addr()?.port();
+        let tproxy6 = match &acceptor6 {
+            Some(_) => {
+                let socket = sockopt::transparent_udp(
+                    SocketAddr::from((Ipv6Addr::LOCALHOST, 0)),
+                    nft::MARK_OWN,
+                )
+                .context("cannot open the IPv6 TPROXY socket")?;
+                socket.set_read_timeout(Some(POLL))?;
+                Some(socket)
+            }
+            None => None,
+        };
+        let tproxy6_port = match &tproxy6 {
+            Some(s) => Some(s.local_addr()?.port()),
+            None => None,
+        };
         let sniffer = Sniffer::open(POLL).context("cannot open the DNS sniffer")?;
         inner.names.lock().unwrap().expire(Instant::now(), &[]);
         if table.idle_apps() {
@@ -243,8 +285,10 @@ impl Live {
             proxy: setup.proxy,
             stopped: AtomicBool::new(false),
             acceptor,
+            acceptor6,
             acceptor_port,
             tproxy,
+            tproxy6,
             base: Mutex::new(Table::default()),
             table: RwLock::new(Arc::new(Table::default())),
             applied: Mutex::new(String::new()),
@@ -265,6 +309,7 @@ impl Live {
                 &full,
                 acceptor_port,
                 tproxy_port,
+                tproxy6_port,
                 setup.proxy,
                 bypass_group(),
                 &broadcasts,
@@ -272,9 +317,11 @@ impl Live {
             let installed = nft(&text).and_then(|()| {
                 let policy = free_policy()?;
                 // The rule first: `clear` finds the route through it.
+                let v6 = live.tproxy6.as_ref().map(|_| policy.argv(true, true));
                 policy
-                    .argv(true)
+                    .argv(true, false)
                     .iter()
+                    .chain(v6.iter().flatten())
                     .try_for_each(|argv| run("ip", argv, None).map(drop))
             });
             if let Err(e) = installed {
@@ -285,9 +332,15 @@ impl Live {
             *applied = nft::update(&full, acceptor_port, &broadcasts);
         }
         let l = live.clone();
-        spawn(move || l.accept_loop());
+        spawn(move || l.accept_loop(&l.acceptor));
         let l = live.clone();
-        spawn(move || l.udp_loop());
+        spawn(move || l.udp_loop(&l.tproxy));
+        if live.tproxy6.is_some() {
+            let l = live.clone();
+            spawn(move || l.accept_loop(l.acceptor6.as_ref().unwrap()));
+            let l = live.clone();
+            spawn(move || l.udp_loop(l.tproxy6.as_ref().unwrap()));
+        }
         let l = live.clone();
         spawn(move || l.dns_loop(&sniffer));
         let l = live.clone();
@@ -326,11 +379,12 @@ impl Live {
             let _ = a.shutdown(std::net::Shutdown::Both);
             let _ = b.shutdown(std::net::Shutdown::Both);
         }
-        // Wakes the acceptor, which then sees `stopped`.
-        let _ = TcpStream::connect_timeout(
-            &std::net::SocketAddr::from((Ipv4Addr::LOCALHOST, self.acceptor_port)),
-            Duration::from_secs(1),
-        );
+        // Wakes the acceptors, which then see `stopped`.
+        for acceptor in std::iter::once(&self.acceptor).chain(&self.acceptor6) {
+            if let Ok(addr) = acceptor.local_addr() {
+                let _ = TcpStream::connect_timeout(&addr, Duration::from_secs(1));
+            }
+        }
         self.flows
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -382,11 +436,11 @@ impl Live {
         }
     }
 
-    fn domain_of(&self, dst: SocketAddrV4, now: Instant) -> Option<String> {
+    fn domain_of(&self, dst: SocketAddr, now: Instant) -> Option<String> {
         self.names
             .lock()
             .unwrap()
-            .name_of(*dst.ip(), now)
+            .name_of(dst.ip(), now)
             .map(str::to_owned)
     }
 
@@ -536,14 +590,14 @@ impl Live {
                 self.close_flow(key, now);
             }
             self.stats.lock().unwrap().prune(now);
-            let mut live: Vec<Ipv4Addr> = self
+            let mut live: Vec<IpAddr> = self
                 .flows
                 .lock()
                 .unwrap()
                 .keys()
-                .map(|k| *k.0.dst.ip())
+                .map(|k| k.0.dst.ip())
                 .collect();
-            live.extend(self.conns.lock().unwrap().keys().map(|k| *k.dst.ip()));
+            live.extend(self.conns.lock().unwrap().keys().map(|k| k.dst.ip()));
             self.names.lock().unwrap().expire(now, &live);
             if tick.is_multiple_of(RULES_CHECK_TICKS) {
                 self.images.prune(owner::process_start);

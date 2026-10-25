@@ -115,7 +115,7 @@ pub fn lists(dir: &Path, host: &str, ips: &[Ipv4Addr]) -> anyhow::Result<Vec<Str
 pub fn route(rules: &[Rule], host: &str, ips: &[Ipv4Addr]) -> Option<String> {
     let table = Table::new(rules);
     std::iter::once(None)
-        .chain(ips.iter().copied().map(Some))
+        .chain(ips.iter().map(|&ip| Some(ip.into())))
         .find_map(|ip| table.rule_for(host, ip))
         .map(str::to_owned)
 }

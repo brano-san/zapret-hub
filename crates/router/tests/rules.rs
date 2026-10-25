@@ -87,13 +87,24 @@ fn ports_and_subnets_are_checked() {
             .collect::<Vec<_>>()
     };
     assert_eq!(
-        fields(with(&["443", "1-65535"], &["10.0.0.1", "10.1.2.3/8"])),
+        fields(with(
+            &["443", "1-65535"],
+            &["10.0.0.1", "10.1.2.3/8", "::1", "2001:db8::/32", "::/0"]
+        )),
         Vec::<String>::new()
     );
     for ports in [["0"], ["100-50"], ["65536"], ["x"]] {
         assert_eq!(fields(with(&ports, &["1.1.1.1"])), ["ports"], "{ports:?}");
     }
-    for ips in [["300.1.1.1"], ["1.2.3.0/33"], ["discord.media"], ["::1"]] {
+    for ips in [
+        ["300.1.1.1"],
+        ["1.2.3.0/33"],
+        ["discord.media"],
+        ["2001:db8::/129"],
+        ["fe80::1%eth0"],
+        ["[::1]"],
+        ["2001:db8::g"],
+    ] {
         assert_eq!(fields(with(&[], &ips)), ["ips"], "{ips:?}");
     }
     assert_eq!(fields(with(&[], &[])), ["ips"], "a rule needs a target");
@@ -619,4 +630,81 @@ fn the_rule_for_a_name_or_an_address_is_the_first_that_covers_it() {
         None
     );
     assert_eq!(table.rule_for("example.com", None), None);
+}
+
+#[test]
+fn ipv6_addresses_and_subnets_match_beside_ipv4_and_names_add_aaaa() {
+    let mut tg = rules::preset(Preset::Telegram);
+    tg.ips
+        .extend(["2001:b28:f23d::/48".into(), "2001:67c:4e8::1".into()]);
+    assert!(rules::check(&tg).is_empty());
+    let mut voice = voice();
+    voice.ips.push("2606:4700::/32".into());
+    let table = Table::new(&[tg, voice]);
+    let at = |p, a: &str| table.matches(p, a.parse().unwrap());
+    assert_eq!(
+        at(Protocol::Tcp, "[2001:b28:f23d:1::5]:443"),
+        Some("Telegram")
+    );
+    assert_eq!(at(Protocol::Udp, "[2001:67c:4e8::1]:80"), Some("Telegram"));
+    assert_eq!(
+        at(Protocol::Tcp, "[2001:67c:4e8::2]:443"),
+        None,
+        "a host, not a net"
+    );
+    assert_eq!(at(Protocol::Tcp, "[2001:b28:f23d::1]:22"), None, "port");
+    assert_eq!(
+        at(Protocol::Udp, "[2606:4700::1]:50001"),
+        Some("Discord голос")
+    );
+    // An IPv4-mapped address is its IPv4 one.
+    assert_eq!(
+        at(Protocol::Tcp, "[::ffff:149.154.167.51]:443"),
+        Some("Telegram")
+    );
+    assert_eq!(at(Protocol::Tcp, "149.154.167.51:443"), Some("Telegram"));
+    assert_eq!(
+        table.rule_for("", Some("2001:b28:f23d::9".parse().unwrap())),
+        Some("Telegram")
+    );
+    // A domain's AAAA answer joins its rule; the IPv4 ranges stay as they were.
+    let ranges = table.rules[1].ranges.clone();
+    let named = table.clone().with_names(&[(
+        "2606:4700:3030::1".parse::<std::net::IpAddr>().unwrap(),
+        "c-fra08.discord.media".to_owned(),
+    )]);
+    assert_eq!(named.rules[1].ranges, ranges);
+    assert_eq!(
+        named.match_udp("[2606:4700:3030::1]:50000".parse().unwrap()),
+        Some("Discord голос")
+    );
+    assert_eq!(
+        rules::parse_net6("2001:db8::1/32"),
+        Some((0x2001_0db8 << 96, (0x2001_0db8 << 96) | (u128::MAX >> 32)))
+    );
+    assert_eq!(rules::parse_net6("::/0"), Some((0, u128::MAX)));
+    assert_eq!(rules::parse_net6("1.2.3.4"), None);
+}
+
+#[test]
+fn import_and_domains_tell_ipv6_apart() {
+    let got = rules::import(&[], &[], "2001:b28:f23d::/48\nt.me\n").unwrap();
+    assert_eq!(
+        (got.ips, got.domains),
+        (
+            vec!["2001:b28:f23d::/48".to_owned()],
+            vec!["t.me".to_owned()]
+        )
+    );
+    for bad in ["2001:db8::/200\n", "fe80::1::2\n"] {
+        let err = rules::import(&[], &[], bad).unwrap_err();
+        assert_eq!(err.field.as_deref(), Some("ips"), "{bad}");
+    }
+    let rule = Rule {
+        domains: vec!["2001:db8::1".into()],
+        ..voice()
+    };
+    let errors = rules::check(&rule);
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].message.contains("put it in ips"), "{errors:?}");
 }

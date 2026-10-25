@@ -1,6 +1,6 @@
 //! `routes.toml`: rule format, validation, the voice preset, ipset import and the match table.
 
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -208,6 +208,24 @@ pub fn parse_net(s: &str) -> Option<(u32, u32)> {
     Some((ip & mask, ip | !mask))
 }
 
+/// `a:b::c` or `a:b::/n` as an inclusive range; host bits are zeroed.
+pub fn parse_net6(s: &str) -> Option<(u128, u128)> {
+    let (ip, bits) = match s.split_once('/') {
+        Some((ip, n)) => (ip, n.parse::<u32>().ok().filter(|n| *n <= 128)?),
+        None => (s, 128),
+    };
+    let ip = u128::from(ip.parse::<Ipv6Addr>().ok()?);
+    let mask = u128::MAX.checked_shl(128 - bits).unwrap_or(0);
+    Some((ip & mask, ip | !mask))
+}
+
+/// An IPv4 or IPv6 address or subnet, as `ips` takes it.
+pub fn valid_net(s: &str) -> bool {
+    parse_net(s).is_some() || parse_net6(s).is_some()
+}
+
+const NOT_A_NET: &str = "is not an IP address or subnet like 1.2.3.0/24 or 2001:db8::/32";
+
 fn valid_name(name: &str) -> bool {
     let letter =
         |c: char| c.is_ascii_alphanumeric() || matches!(c, 'а'..='я' | 'А'..='Я' | 'ё' | 'Ё');
@@ -225,6 +243,9 @@ fn domain_error(d: &str) -> Option<String> {
         return Some(format!(
             "\"{d}\": write the domain itself, its subdomains are included"
         ));
+    }
+    if parse_net6(d).is_some() {
+        return Some(format!("\"{d}\" is an IP address: put it in ips"));
     }
     if !d.is_ascii() {
         return Some(format!(
@@ -316,11 +337,8 @@ pub fn check(rule: &Rule) -> Vec<FieldError> {
         }
     }
     for ip in &rule.ips {
-        if parse_net(ip).is_none() {
-            out.push(err(
-                "ips",
-                format!("\"{ip}\" is not an IPv4 address or a.b.c.d/n subnet"),
-            ));
+        if !valid_net(ip) {
+            out.push(err("ips", format!("\"{ip}\" {NOT_A_NET}")));
         }
     }
     for d in &rule.domains {
@@ -525,18 +543,16 @@ pub fn import(ips: &[String], domains: &[String], text: &str) -> Result<Imported
             field: Some(field.into()),
             message,
         };
-        if parse_net(line).is_some() {
+        if valid_net(line) {
             if !out.ips.iter().any(|x| x == line) {
                 out.ips.push(line.to_string());
             }
         } else if line
             .bytes()
-            .all(|c| c.is_ascii_digit() || c == b'.' || c == b'/')
+            .all(|c| c.is_ascii_hexdigit() || matches!(c, b'.' | b'/' | b':'))
+            && (line.contains(':') || !line.bytes().any(|c| c.is_ascii_alphabetic()))
         {
-            return Err(at(
-                "ips",
-                format!("\"{line}\" is not an IPv4 address or a.b.c.d/n subnet"),
-            ));
+            return Err(at("ips", format!("\"{line}\" {NOT_A_NET}")));
         } else if let Some(message) = domain_error(line) {
             return Err(at("domains", message));
         } else {
@@ -592,13 +608,30 @@ pub fn remove(rules: &mut Vec<Rule>, name: &str) -> Result<Rule> {
     }
 }
 
+/// An address as a number: `u32` for IPv4, `u128` for IPv6.
+pub(crate) trait Addr: Copy + Ord {
+    fn next(self) -> Self;
+}
+
+impl Addr for u32 {
+    fn next(self) -> Self {
+        self.saturating_add(1)
+    }
+}
+
+impl Addr for u128 {
+    fn next(self) -> Self {
+        self.saturating_add(1)
+    }
+}
+
 /// Sorts and merges overlapping or adjacent inclusive ranges.
-pub(crate) fn merge(mut nets: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
+pub(crate) fn merge<T: Addr>(mut nets: Vec<(T, T)>) -> Vec<(T, T)> {
     nets.sort_unstable();
-    let mut ranges: Vec<(u32, u32)> = Vec::new();
+    let mut ranges: Vec<(T, T)> = Vec::new();
     for n in nets {
         match ranges.last_mut() {
-            Some(cur) if n.0 <= cur.1.saturating_add(1) => cur.1 = cur.1.max(n.1),
+            Some(cur) if n.0 <= cur.1.next() => cur.1 = cur.1.max(n.1),
             _ => ranges.push(n),
         }
     }
@@ -613,8 +646,10 @@ pub struct Compiled {
     pub domains: Vec<String>,
     /// Empty means every port.
     pub ports: Vec<(u16, u16)>,
-    /// Sorted, merged, inclusive.
+    /// IPv4, sorted, merged, inclusive.
     pub ranges: Vec<(u32, u32)>,
+    /// IPv6 likewise.
+    pub ranges6: Vec<(u128, u128)>,
     /// Programs, lowercase with backslashes.
     pub apps: Vec<String>,
     /// A UDP rule's program is running, so its UDP is captured.
@@ -625,6 +660,21 @@ impl Compiled {
     fn takes(&self, protocol: Protocol, port: u16) -> bool {
         (self.protocol == Protocol::Both || self.protocol == protocol)
             && (self.ports.is_empty() || self.ports.iter().any(|&(a, b)| (a..=b).contains(&port)))
+    }
+
+    /// One of the rule's subnets (or resolved names) holds `ip`; an IPv4-mapped IPv6 address
+    /// counts as its IPv4 one.
+    fn holds(&self, ip: IpAddr) -> bool {
+        match ip.to_canonical() {
+            IpAddr::V4(ip) => {
+                let ip = u32::from(ip);
+                self.ranges.iter().any(|&(a, b)| (a..=b).contains(&ip))
+            }
+            IpAddr::V6(ip) => {
+                let ip = u128::from(ip);
+                self.ranges6.iter().any(|&(a, b)| (a..=b).contains(&ip))
+            }
+        }
     }
 
     fn runs_any(&self, exe: &str) -> bool {
@@ -657,6 +707,7 @@ impl Table {
                     .collect(),
                 ports: r.ports.iter().filter_map(|s| parse_port(s)).collect(),
                 ranges: merge(r.ips.iter().filter_map(|s| parse_net(s)).collect()),
+                ranges6: merge(r.ips.iter().filter_map(|s| parse_net6(s)).collect()),
                 apps: r.apps.iter().map(|a| norm_app(a)).collect(),
                 running: false,
             })
@@ -669,16 +720,10 @@ impl Table {
     }
 
     /// Name of the first rule (file order) that matches a flow of `protocol` to the destination.
-    pub fn matches(&self, protocol: Protocol, dst: SocketAddrV4) -> Option<&str> {
-        let ip = u32::from(*dst.ip());
-        let port = dst.port();
+    pub fn matches(&self, protocol: Protocol, dst: SocketAddr) -> Option<&str> {
         self.rules
             .iter()
-            .find(|r| {
-                (r.protocol == Protocol::Both || r.protocol == protocol)
-                    && (r.ports.is_empty() || r.ports.iter().any(|&(a, b)| (a..=b).contains(&port)))
-                    && r.ranges.iter().any(|&(a, b)| (a..=b).contains(&ip))
-            })
+            .find(|r| r.takes(protocol, dst.port()) && r.holds(dst.ip()))
             .map(|r| r.name.as_str())
     }
 
@@ -686,16 +731,14 @@ impl Table {
     pub fn matches_flow(
         &self,
         protocol: Protocol,
-        dst: SocketAddrV4,
+        dst: SocketAddr,
         exe: Option<&str>,
     ) -> Option<&str> {
-        let ip = u32::from(*dst.ip());
         self.rules
             .iter()
             .find(|r| {
                 r.takes(protocol, dst.port())
-                    && (r.ranges.iter().any(|&(a, b)| (a..=b).contains(&ip))
-                        || exe.is_some_and(|e| r.runs_any(e)))
+                    && (r.holds(dst.ip()) || exe.is_some_and(|e| r.runs_any(e)))
             })
             .map(|r| r.name.as_str())
     }
@@ -729,7 +772,7 @@ impl Table {
             .any(|r| r.udp_apps() && !r.running && r.runs_any(exe))
     }
 
-    pub fn match_udp(&self, dst: SocketAddrV4) -> Option<&str> {
+    pub fn match_udp(&self, dst: SocketAddr) -> Option<&str> {
         self.matches(Protocol::Udp, dst)
     }
 
@@ -742,31 +785,29 @@ impl Table {
 
     /// Name of the first rule (file order) whose domains cover `name` (lowercase) or whose
     /// subnets hold `ip`.
-    pub fn rule_for(&self, name: &str, ip: Option<Ipv4Addr>) -> Option<&str> {
+    pub fn rule_for(&self, name: &str, ip: Option<IpAddr>) -> Option<&str> {
         self.rules
             .iter()
-            .find(|r| {
-                r.domains.iter().any(|d| covers(d, name))
-                    || ip.is_some_and(|ip| {
-                        r.ranges
-                            .iter()
-                            .any(|&(a, b)| (a..=b).contains(&u32::from(ip)))
-                    })
-            })
+            .find(|r| r.domains.iter().any(|d| covers(d, name)) || ip.is_some_and(|ip| r.holds(ip)))
             .map(|r| r.name.as_str())
     }
 
-    /// Adds each resolved IP to the rules whose domains cover its name.
-    pub fn with_names(mut self, names: &[(Ipv4Addr, String)]) -> Table {
+    /// Adds each resolved IP (A or AAAA) to the rules whose domains cover its name.
+    pub fn with_names<A: Copy + Into<IpAddr>>(mut self, names: &[(A, String)]) -> Table {
         for r in &mut self.rules {
             let mut nets = std::mem::take(&mut r.ranges);
+            let mut nets6 = std::mem::take(&mut r.ranges6);
             for (ip, name) in names {
                 let name = name.to_ascii_lowercase();
                 if r.domains.iter().any(|d| covers(d, &name)) {
-                    nets.push((u32::from(*ip), u32::from(*ip)));
+                    match (*ip).into().to_canonical() {
+                        IpAddr::V4(ip) => nets.push((u32::from(ip), u32::from(ip))),
+                        IpAddr::V6(ip) => nets6.push((u128::from(ip), u128::from(ip))),
+                    }
                 }
             }
             r.ranges = merge(nets);
+            r.ranges6 = merge(nets6);
         }
         self
     }

@@ -1,7 +1,7 @@
 //! DNS answers from the network (untrusted) and the IP-to-domain table built from them.
 
 use std::collections::{HashMap, HashSet};
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, Instant};
 
 /// A known address stays at least this long, whatever the TTL says.
@@ -14,8 +14,8 @@ pub const MAX_TTL: u32 = 86_400;
 pub struct Answer {
     /// The asked name: lowercase, no trailing dot, at most 253 bytes.
     pub name: String,
-    /// A records (with TTL) owned by the asked name or by a name of its CNAME chain.
-    pub ips: Vec<(Ipv4Addr, u32)>,
+    /// A and AAAA records (with TTL) owned by the asked name or by a name of its CNAME chain.
+    pub ips: Vec<(IpAddr, u32)>,
 }
 
 /// Reads a (possibly compressed) name at `pos`; returns it and the offset after it in place.
@@ -83,11 +83,14 @@ pub fn parse(m: &[u8]) -> Option<Answer> {
         let rdata = m.get(data..data + rdlen)?;
         match (kind, class) {
             (5, 1) => edges.entry(owner).or_default().push(read_name(m, data)?.0),
-            (1, 1) if rdlen == 4 => ips.push((
-                owner,
-                Ipv4Addr::new(rdata[0], rdata[1], rdata[2], rdata[3]),
-                ttl,
-            )),
+            (1, 1) if rdlen == 4 => {
+                let ip = Ipv4Addr::from(<[u8; 4]>::try_from(rdata).ok()?);
+                ips.push((owner, IpAddr::V4(ip), ttl));
+            }
+            (28, 1) if rdlen == 16 => {
+                let ip = Ipv6Addr::from(<[u8; 16]>::try_from(rdata).ok()?);
+                ips.push((owner, IpAddr::V6(ip), ttl));
+            }
             _ => {}
         }
         pos = data + rdlen;
@@ -110,7 +113,7 @@ pub fn parse(m: &[u8]) -> Option<Answer> {
 }
 
 #[derive(Default)]
-pub struct Names(HashMap<Ipv4Addr, (String, Instant)>);
+pub struct Names(HashMap<IpAddr, (String, Instant)>);
 
 impl Names {
     /// True when an address is new or changed its name (the capture filter needs a rebuild).
@@ -135,16 +138,16 @@ impl Names {
         changed
     }
 
-    pub fn name_of(&self, ip: Ipv4Addr, now: Instant) -> Option<&str> {
+    pub fn name_of(&self, ip: impl Into<IpAddr>, now: Instant) -> Option<&str> {
         self.0
-            .get(&ip)
+            .get(&ip.into())
             .filter(|(_, until)| *until > now)
             .map(|(n, _)| n.as_str())
     }
 
     /// Addresses in `live` (destinations of live flows) are kept: their name lives another
     /// `MIN_TTL` from now, so the capture filter keeps them while they are in use.
-    pub fn expire(&mut self, now: Instant, live: &[Ipv4Addr]) -> bool {
+    pub fn expire(&mut self, now: Instant, live: &[IpAddr]) -> bool {
         let before = self.0.len();
         self.0.retain(|ip, (_, until)| {
             if live.contains(ip) {
@@ -155,7 +158,7 @@ impl Names {
         self.0.len() != before
     }
 
-    pub fn entries(&self) -> Vec<(Ipv4Addr, String)> {
+    pub fn entries(&self) -> Vec<(IpAddr, String)> {
         let mut all: Vec<_> = self.0.iter().map(|(ip, (n, _))| (*ip, n.clone())).collect();
         all.sort();
         all

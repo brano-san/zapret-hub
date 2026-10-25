@@ -169,8 +169,8 @@ impl Observer {
         let names = self.shared.names.lock().unwrap();
         let now = Instant::now();
         for r in &mut rows {
-            if let Ok(SocketAddr::V4(dst)) = r.dst.parse() {
-                r.domain = names.name_of(*dst.ip(), now).map(str::to_string);
+            if let Ok(dst) = r.dst.parse::<SocketAddr>() {
+                r.domain = names.name_of(dst.ip(), now).map(str::to_string);
             }
         }
         rows

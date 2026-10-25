@@ -1,7 +1,9 @@
 use router::divert::Address;
+use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
+
 use router::packet::{
-    ACK, SYN, build_udp, parse_socks_udp, parse_socks_udp_from, parse_tcp, parse_udp, rewrite_tcp,
-    socks_header, socks_header_to,
+    ACK, SYN, build_udp, build_udp6, parse_socks_udp, parse_socks_udp_from, parse_tcp, parse_udp,
+    parse_udp_any, parse_udp6, rewrite_tcp, socks_header, socks_header_to,
 };
 
 #[test]
@@ -170,8 +172,9 @@ fn a_reflected_segment_has_new_addresses_and_zero_checksums() {
 
 #[test]
 fn a_known_domain_goes_into_the_socks_udp_header() {
-    let dst = "35.214.1.1:50005".parse().unwrap();
-    assert_eq!(socks_header_to(dst, None), socks_header(dst).to_vec());
+    let v4: SocketAddrV4 = "35.214.1.1:50005".parse().unwrap();
+    let dst = SocketAddr::V4(v4);
+    assert_eq!(socks_header_to(dst, None), socks_header(v4).to_vec());
     let named = [&[0u8, 0, 0, 3, 15][..], b"a.discord.media", &[0xC3, 0x55]].concat();
     assert_eq!(socks_header_to(dst, Some("a.discord.media")), named);
     let reply = [named.as_slice(), b"ok"].concat();
@@ -181,5 +184,63 @@ fn a_known_domain_goes_into_the_socks_udp_header() {
     assert_eq!(
         parse_socks_udp_from(&ipv4, "1.1.1.1:1".parse().unwrap()),
         Some((dst, &b"x"[..]))
+    );
+}
+
+#[test]
+fn an_ipv6_destination_is_address_type_4_both_ways() {
+    let dst: SocketAddr = "[2001:db8::7]:443".parse().unwrap();
+    let mut header = vec![0u8, 0, 0, 4, 0x20, 0x01, 0x0d, 0xb8];
+    header.extend([0; 11]);
+    header.extend([7, 0x01, 0xBB]);
+    assert_eq!(socks_header_to(dst, None), header);
+    let datagram = [header.as_slice(), b"ok"].concat();
+    assert_eq!(parse_socks_udp(&datagram), Some((dst, &b"ok"[..])));
+    assert_eq!(
+        parse_socks_udp_from(&datagram, "1.1.1.1:1".parse().unwrap()),
+        Some((dst, &b"ok"[..]))
+    );
+    assert_eq!(parse_socks_udp(&datagram[..21]), None, "a cut address");
+    let named = socks_header_to(dst, Some("a.discord.media"));
+    assert_eq!(
+        &named[..5],
+        [0, 0, 0, 3, 15],
+        "a known name still goes by name"
+    );
+}
+
+#[test]
+fn an_ipv6_udp_packet_builds_and_parses_back() {
+    let src: SocketAddrV6 = "[fd00::1]:40000".parse().unwrap();
+    let dst: SocketAddrV6 = "[2001:db8::53]:53".parse().unwrap();
+    let p = build_udp6(src, dst, b"zapret-hub");
+    assert_eq!(p.len(), 40 + 8 + 10);
+    assert_eq!(&p[..8], [0x60, 0, 0, 0, 0, 18, 17, 64]);
+    let u = parse_udp6(&p).unwrap();
+    assert_eq!((u.src, u.dst, u.payload), (src, dst, &b"zapret-hub"[..]));
+    assert_eq!(
+        parse_udp_any(&p),
+        Some((src.into(), dst.into(), &b"zapret-hub"[..]))
+    );
+    assert!(parse_udp(&p).is_none(), "not IPv4");
+    assert!(parse_udp6(&p[..p.len() - 1]).is_none(), "truncated");
+    let mut tcp = p.clone();
+    tcp[6] = 6;
+    assert!(parse_udp6(&tcp).is_none() && parse_udp_any(&tcp).is_none());
+    let mut hop_by_hop = p.clone();
+    hop_by_hop[6] = 0;
+    assert!(
+        parse_udp6(&hop_by_hop).is_none(),
+        "extension headers are not read"
+    );
+    let v4 = build_udp(
+        "10.0.0.1:1".parse().unwrap(),
+        "10.0.0.2:53".parse().unwrap(),
+        b"x",
+        1,
+    );
+    assert_eq!(
+        parse_udp_any(&v4).map(|(_, d, x)| (d.to_string(), x)),
+        Some(("10.0.0.2:53".into(), &b"x"[..]))
     );
 }

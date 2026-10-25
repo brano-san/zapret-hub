@@ -2,7 +2,7 @@
 //! names learned from sniffed DNS answers.
 
 use std::io;
-use std::net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -46,11 +46,11 @@ impl Live {
         self.out(handle, &p, &a);
     }
 
-    pub(crate) fn domain_of(&self, dst: SocketAddrV4, now: Instant) -> Option<String> {
+    pub(crate) fn domain_of(&self, dst: SocketAddr, now: Instant) -> Option<String> {
         self.names
             .lock()
             .unwrap()
-            .name_of(*dst.ip(), now)
+            .name_of(dst.ip(), now)
             .map(str::to_owned)
     }
 
@@ -107,7 +107,7 @@ impl Live {
         let key = FlowKey {
             protocol: Protocol::Tcp,
             local_port: seg.src.port(),
-            dst: seg.dst,
+            dst: seg.dst.into(),
         };
         match verdict {
             Verdict::Rewrite { src, dst } => {
@@ -122,7 +122,7 @@ impl Live {
             Verdict::Drop => {}
             Verdict::Marked => {
                 let table = self.table.read().unwrap().clone();
-                if let Some(rule) = table.matches(Protocol::Tcp, seg.dst) {
+                if let Some(rule) = table.matches(Protocol::Tcp, seg.dst.into()) {
                     self.direct_row(key, rule, None, DirectReason::Marked, now);
                 }
                 self.out(handle, packet, &addr);
@@ -141,7 +141,7 @@ impl Live {
         now: Instant,
     ) {
         let table = self.table.read().unwrap().clone();
-        if table.matches(Protocol::Tcp, seg.dst).is_none()
+        if table.matches(Protocol::Tcp, seg.dst.into()).is_none()
             && !table.wants_owner(Protocol::Tcp, seg.dst.port())
         {
             return self.out(handle, packet, &addr);
@@ -153,7 +153,7 @@ impl Live {
         });
         let exe = pid.and_then(|p| self.images.get(p));
         let exe = exe.as_deref();
-        let Some(rule) = table.matches_flow(Protocol::Tcp, seg.dst, exe) else {
+        let Some(rule) = table.matches_flow(Protocol::Tcp, seg.dst.into(), exe) else {
             self.direct_row(key, "", exe, DirectReason::NoRule, now);
             return self.out(handle, packet, &addr);
         };
@@ -215,7 +215,7 @@ impl Live {
             let key = FlowKey {
                 protocol: Protocol::Tcp,
                 local_port: seg.src.port(),
-                dst: seg.dst,
+                dst: seg.dst.into(),
             };
             let reason = DirectReason::Failed {
                 error: "the capture filter did not open".into(),
@@ -300,10 +300,10 @@ impl Live {
         let key = FlowKey {
             protocol: Protocol::Tcp,
             local_port: port,
-            dst: orig,
+            dst: orig.into(),
         };
-        let domain = self.domain_of(orig, Instant::now());
-        let up = match socks::connect(self.proxy, orig, domain.as_deref(), OPEN_TIMEOUT) {
+        let domain = self.domain_of(orig.into(), Instant::now());
+        let up = match socks::connect(self.proxy, orig.into(), domain.as_deref(), OPEN_TIMEOUT) {
             Ok(up) => up,
             Err(e) => {
                 let now = Instant::now();
@@ -347,13 +347,17 @@ impl Live {
         if self.is_stopped() {
             return Ok(()); // `shut` may have run before the insert
         }
+        // The NAT is IPv4, as are the connections it hands over.
+        let IpAddr::V4(dst) = key.dst.ip() else {
+            return Ok(());
+        };
         let l = self.clone();
         let stop = move || {
             l.is_stopped()
                 || l.nat
                     .lock()
                     .unwrap()
-                    .original(key.local_port, *key.dst.ip())
+                    .original(key.local_port, dst)
                     .is_none()
         };
         let (from, to, l, stop2) = (
@@ -398,7 +402,7 @@ impl Live {
             .lock()
             .unwrap()
             .keys()
-            .map(|k| *k.dst.ip())
+            .map(|k| k.dst.ip())
             .collect();
         live.extend(
             self.nat
@@ -406,17 +410,17 @@ impl Live {
                 .unwrap()
                 .destinations()
                 .iter()
-                .map(|d| *d.ip()),
+                .map(|d| IpAddr::V4(*d.ip())),
         );
         self.names.lock().unwrap().expire(now, &live);
         let (gone, unaccepted) = {
             let mut nat = self.nat.lock().unwrap();
             (nat.expire(now), nat.unaccepted(now))
         };
-        let key = |local_port, dst| FlowKey {
+        let key = |local_port, dst: SocketAddrV4| FlowKey {
             protocol: Protocol::Tcp,
             local_port,
-            dst,
+            dst: dst.into(),
         };
         for (port, dst) in gone {
             self.end_conn(key(port, dst));

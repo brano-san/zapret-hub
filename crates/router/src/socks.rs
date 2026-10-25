@@ -2,7 +2,7 @@
 
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, SocketAddrV4, TcpStream};
+use std::net::{IpAddr, SocketAddr, SocketAddrV4, TcpStream};
 use std::time::{Duration, Instant};
 
 /// How long opening a flow waits for the proxy.
@@ -95,17 +95,31 @@ pub fn check(proxy: SocketAddrV4, timeout: Duration) -> Result<Duration, SocksEr
     Ok(started.elapsed())
 }
 
+/// `dst` as a request names it: address type 1 (IPv4) or 4 (IPv6), the address, the port.
+fn put_addr(request: &mut Vec<u8>, dst: SocketAddr) {
+    match dst.ip() {
+        IpAddr::V4(ip) => {
+            request.push(1);
+            request.extend_from_slice(&ip.octets());
+        }
+        IpAddr::V6(ip) => {
+            request.push(4);
+            request.extend_from_slice(&ip.octets());
+        }
+    }
+    request.extend_from_slice(&dst.port().to_be_bytes());
+}
+
 /// Asks the proxy for a UDP relay towards `dst`.
 pub fn udp_associate(
     proxy: SocketAddrV4,
-    dst: SocketAddrV4,
+    dst: SocketAddr,
     timeout: Duration,
 ) -> Result<Association, SocksError> {
     let mut stream = dial(proxy, timeout)?;
     greet(&mut stream)?;
-    let mut request = vec![5, 3, 0, 1];
-    request.extend_from_slice(&dst.ip().octets());
-    request.extend_from_slice(&dst.port().to_be_bytes());
+    let mut request = vec![5, 3, 0];
+    put_addr(&mut request, dst);
     stream.write_all(&request)?;
     let port = read_reply(&mut stream)?;
     // The bound address is ignored: the proxy is local, so its own address is the relay.
@@ -119,7 +133,7 @@ pub fn udp_associate(
 /// The returned stream has no timeouts.
 pub fn connect(
     proxy: SocketAddrV4,
-    dst: SocketAddrV4,
+    dst: SocketAddr,
     domain: Option<&str>,
     timeout: Duration,
 ) -> Result<TcpStream, SocksError> {
@@ -130,13 +144,10 @@ pub fn connect(
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "domain name too long"))?;
             request.extend_from_slice(&[3, len]);
             request.extend_from_slice(name.as_bytes());
+            request.extend_from_slice(&dst.port().to_be_bytes());
         }
-        None => {
-            request.push(1);
-            request.extend_from_slice(&dst.ip().octets());
-        }
+        None => put_addr(&mut request, dst),
     }
-    request.extend_from_slice(&dst.port().to_be_bytes());
     let mut stream = dial(proxy, timeout)?;
     greet(&mut stream)?;
     stream.write_all(&request)?;

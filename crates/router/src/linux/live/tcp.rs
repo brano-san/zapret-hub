@@ -2,7 +2,7 @@
 //! owner, then relays it through the proxy or, marked so it is not redirected again, directly.
 
 use std::io;
-use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -16,8 +16,8 @@ use crate::tcp;
 
 impl Live {
     /// Ends on the first connection after the session stopped (`shut` makes one).
-    pub(super) fn accept_loop(self: &Arc<Self>) {
-        for conn in self.acceptor.incoming() {
+    pub(super) fn accept_loop(self: &Arc<Self>, acceptor: &TcpListener) {
+        for conn in acceptor.incoming() {
             if self.is_stopped() {
                 return;
             }
@@ -34,9 +34,7 @@ impl Live {
     // ponytail: two threads per connection and a /proc walk for its owner; a pool and a cached
     // socket map if connections reach the hundreds.
     fn relay_tcp(self: Arc<Self>, client: TcpStream) {
-        let (Ok(SocketAddr::V4(peer)), Ok(orig)) =
-            (client.peer_addr(), sockopt::original_dst(&client))
-        else {
+        let (Ok(peer), Ok(orig)) = (client.peer_addr(), sockopt::original_dst(&client)) else {
             return tcp::reset(client);
         };
         // Loopback is never redirected: a connection made to the acceptor itself, whose own

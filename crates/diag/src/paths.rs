@@ -1,6 +1,6 @@
 //! Which temporary configurations to try on a culprit, in order (spec section 6).
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 
 use router::rules::{Protocol, Rule, Table};
 use serde::{Deserialize, Serialize};
@@ -139,14 +139,11 @@ fn point_rule(group: &Group, ctx: &Ctx) -> Rule {
 /// The enabled rule that sends the group through the proxy now: by address or name, or as a flow
 /// of the profile's program.
 pub fn routed_by(group: &Group, ctx: &Ctx) -> Option<String> {
-    let v4 = |dst: &str| match dst.parse() {
-        Ok(SocketAddr::V4(a)) => Some(a),
-        _ => None,
-    };
-    let names: Vec<(Ipv4Addr, String)> = group
+    let addr = |dst: &str| dst.parse::<SocketAddr>().ok();
+    let names: Vec<(IpAddr, String)> = group
         .members
         .iter()
-        .filter_map(|f| Some((*v4(&f.dst)?.ip(), f.domain.clone().or(f.sni.clone())?)))
+        .filter_map(|f| Some((addr(&f.dst)?.ip(), f.domain.clone().or(f.sni.clone())?)))
         .collect();
     let table = Table::new(&ctx.rules).with_names(&names);
     let apps = ctx
@@ -158,7 +155,7 @@ pub fn routed_by(group: &Group, ctx: &Ctx) -> Option<String> {
     let dsts: Vec<_> = group
         .representatives
         .iter()
-        .filter_map(|f| v4(&f.dst))
+        .filter_map(|f| addr(&f.dst))
         .collect();
     apps.flat_map(|app| dsts.iter().map(move |dst| (app, *dst)))
         .find_map(|(app, dst)| table.matches_flow(group.protocol, dst, app))

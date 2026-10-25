@@ -8,7 +8,10 @@
 #![cfg(target_os = "linux")]
 
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket};
+use std::net::{
+    IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpListener, TcpStream,
+    UdpSocket,
+};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::spawn;
@@ -16,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use router::flows::{DirectReason, FlowRow, ProxyState, Via};
 use router::linux::{nft, sockopt};
-use router::packet::socks_header;
+use router::packet::{socks_header, socks_header_to};
 use router::rules::{Protocol, Rule};
 use router::{Router, RouterState, Setup};
 
@@ -26,6 +29,9 @@ type Log = Arc<Mutex<Vec<String>>>;
 const ECHO: Ipv4Addr = Ipv4Addr::new(10, 77, 0, 2);
 /// The address `echo.test` resolves to.
 const NAMED: Ipv4Addr = Ipv4Addr::new(10, 77, 0, 3);
+const ECHO6: Ipv6Addr = Ipv6Addr::new(0xfd77, 0, 0, 0, 0, 0, 0, 2);
+/// The IPv6 address echo.test resolves to.
+const NAMED6: Ipv6Addr = Ipv6Addr::new(0xfd77, 0, 0, 0, 0, 0, 0, 3);
 const WAIT: Duration = Duration::from_secs(5);
 
 fn cmd(program: &str, args: &str) -> String {
@@ -50,13 +56,19 @@ fn echo_tcp(mut conn: TcpStream) {
     }
 }
 
-/// Answers every query with `NAMED` (TTL 60).
+/// Answers every A query with `NAMED`, every AAAA one with `NAMED6` (TTL 60).
 fn dns_answer(query: &[u8]) -> Vec<u8> {
+    let aaaa = query[query.len() - 4..query.len() - 2] == [0, 28];
     let mut m = query[..2].to_vec();
     m.extend([0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0]);
     m.extend(&query[12..]);
-    m.extend([0xC0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4]);
-    m.extend(NAMED.octets());
+    if aaaa {
+        m.extend([0xC0, 12, 0, 28, 0, 1, 0, 0, 0, 60, 0, 16]);
+        m.extend(NAMED6.octets());
+    } else {
+        m.extend([0xC0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4]);
+        m.extend(NAMED.octets());
+    }
     m
 }
 
@@ -71,60 +83,76 @@ fn internet() {
         ip(&format!("link add vb type veth peer name va netns {main}"));
         ip(&format!("addr add {ECHO}/24 dev vb"));
         ip(&format!("addr add {NAMED}/24 dev vb"));
+        ip(&format!("addr add {ECHO6}/64 dev vb nodad"));
+        ip(&format!("addr add {NAMED6}/64 dev vb nodad"));
         ip("link set vb up");
         ip("link set lo up");
+        // Dual-stack sockets: IPv4 and IPv6 alike.
         for port in [7000, 7100] {
-            let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).unwrap();
+            let listener = TcpListener::bind((Ipv6Addr::UNSPECIFIED, port)).unwrap();
             spawn(move || {
                 for conn in listener.incoming().flatten() {
                     spawn(move || echo_tcp(conn));
                 }
             });
         }
-        let udp = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 7001)).unwrap();
-        spawn(move || {
-            let mut buf = [0u8; 2048];
-            while let Ok((n, from)) = udp.recv_from(&mut buf) {
-                let _ = udp.send_to(&buf[..n], from);
-            }
-        });
-        let dns = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 53)).unwrap();
-        spawn(move || {
-            let mut buf = [0u8; 512];
-            while let Ok((n, from)) = dns.recv_from(&mut buf) {
-                let _ = dns.send_to(&dns_answer(&buf[..n]), from);
-            }
-        });
+        // UDP answers from the asked address: a program's connected socket takes no other, and
+        // an answer from another one is no DNS answer (`Asked`). (A socket bound to `::` would
+        // answer IPv6 from `NAMED6`.)
+        for at in [IpAddr::V4(ECHO), IpAddr::V6(ECHO6)] {
+            let udp = UdpSocket::bind(SocketAddr::new(at, 7001)).unwrap();
+            spawn(move || {
+                let mut buf = [0u8; 2048];
+                while let Ok((n, from)) = udp.recv_from(&mut buf) {
+                    let _ = udp.send_to(&buf[..n], from);
+                }
+            });
+            let dns = UdpSocket::bind(SocketAddr::new(at, 53)).unwrap();
+            spawn(move || {
+                let mut buf = [0u8; 512];
+                while let Ok((n, from)) = dns.recv_from(&mut buf) {
+                    let _ = dns.send_to(&dns_answer(&buf[..n]), from);
+                }
+            });
+        }
         tx.send(()).unwrap();
     });
     rx.recv_timeout(WAIT).expect("the second namespace is up");
 }
 
-/// A SOCKS5 address (type 1 or 3) at `at`: its text and where it goes; `echo.test` is `NAMED`.
-fn target(at: &[u8]) -> Option<(String, SocketAddrV4, usize)> {
-    let (ip, name, end) = match at.first()? {
+/// A SOCKS5 address (type 1, 3 or 4) at `at`: its text and where it goes; `echo.test` is `NAMED`.
+fn target(at: &[u8]) -> Option<(String, SocketAddr, usize)> {
+    let port_at = |end: usize| Some(u16::from_be_bytes([*at.get(end)?, *at.get(end + 1)?]));
+    let (dst, name, end) = match at.first()? {
         1 => {
-            let ip = Ipv4Addr::new(*at.get(1)?, *at.get(2)?, *at.get(3)?, *at.get(4)?);
-            (ip, ip.to_string(), 5)
+            let ip = Ipv4Addr::from(<[u8; 4]>::try_from(at.get(1..5)?).ok()?);
+            let dst = SocketAddr::from((ip, port_at(5)?));
+            (dst, dst.to_string(), 5)
+        }
+        4 => {
+            let ip = Ipv6Addr::from(<[u8; 16]>::try_from(at.get(1..17)?).ok()?);
+            let dst = SocketAddr::from((ip, port_at(17)?));
+            (dst, dst.to_string(), 17)
         }
         3 => {
             let len = usize::from(*at.get(1)?);
             let name = String::from_utf8(at.get(2..2 + len)?.to_vec()).ok()?;
             assert_eq!(name, "echo.test");
-            (NAMED, name, 2 + len)
+            let port = port_at(2 + len)?;
+            (
+                SocketAddr::from((NAMED, port)),
+                format!("{name}:{port}"),
+                2 + len,
+            )
         }
         _ => return None,
     };
-    let port = u16::from_be_bytes([*at.get(end)?, *at.get(end + 1)?]);
-    Some((
-        format!("{name}:{port}"),
-        SocketAddrV4::new(ip, port),
-        end + 2,
-    ))
+    Some((name, dst, end + 2))
 }
 
+/// Dual-stack: IPv4 goes as an IPv4-mapped address.
 fn marked_udp() -> UdpSocket {
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+    let socket = UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0)).unwrap();
     socket2::SockRef::from(&socket)
         .set_mark(nft::MARK_OWN)
         .unwrap();
@@ -172,8 +200,9 @@ fn serve(mut conn: TcpStream, log: &Log) {
                 let (relay, out, client) = (relay.clone(), out.clone(), client.clone());
                 spawn(move || {
                     let mut buf = [0u8; 2048];
-                    while let Ok((n, SocketAddr::V4(from))) = out.recv_from(&mut buf) {
-                        let mut datagram = socks_header(from).to_vec();
+                    while let Ok((n, from)) = out.recv_from(&mut buf) {
+                        let from = SocketAddr::new(from.ip().to_canonical(), from.port());
+                        let mut datagram = socks_header_to(from, None);
                         datagram.extend(&buf[..n]);
                         if let Some(to) = *client.lock().unwrap() {
                             let _ = relay.send_to(&datagram, to);
@@ -190,6 +219,12 @@ fn serve(mut conn: TcpStream, log: &Log) {
                     };
                     log.lock().unwrap().push(format!("udp {name}"));
                     *client.lock().unwrap() = Some(from);
+                    let dst = match dst {
+                        SocketAddr::V4(d) => {
+                            SocketAddrV6::new(d.ip().to_ipv6_mapped(), d.port(), 0, 0).into()
+                        }
+                        v6 => v6,
+                    };
                     let _ = out.send_to(&buf[3 + end..n], dst);
                 }
             });
@@ -223,7 +258,8 @@ fn bash(script: &str) -> String {
 
 /// Sends `text` over `proto` (`tcp`/`udp`) from `bash` and returns the echo.
 fn echo(proto: &str, dst: &str, text: &str) -> String {
-    let (host, port) = dst.split_once(':').unwrap();
+    let (host, port) = dst.rsplit_once(':').unwrap();
+    let host = host.trim_start_matches('[').trim_end_matches(']');
     bash(&format!(
         "exec 3<>/dev/{proto}/{host}/{port} && printf {text} >&3 && read -t 5 -N {} r <&3; \
          printf %s \"$r\"",
@@ -270,6 +306,12 @@ fn fwmark_rules() -> usize {
         .count()
 }
 
+fn fwmark_rules6() -> usize {
+    ip("-6 rule")
+        .matches("fwmark 0x10000000/0x10000000")
+        .count()
+}
+
 #[test]
 #[ignore = "needs ip, nft, bash and a fresh network namespace: unshare -rn <this binary> --ignored"]
 fn the_router_carries_tcp_udp_programs_and_domains_through_the_proxy() {
@@ -288,11 +330,17 @@ fn the_router_carries_tcp_udp_programs_and_domains_through_the_proxy() {
     ip("link set lo up");
     internet();
     ip("addr add 10.77.0.1/24 dev va");
+    ip("addr add fd77::1/64 dev va nodad");
     ip("link set va up");
     assert_eq!(
         echo("tcp", "10.77.0.2:7000", "plain"),
         "plain",
         "the veth works"
+    );
+    assert_eq!(
+        echo("tcp", "[fd77::2]:7000", "plain6"),
+        "plain6",
+        "IPv6 too"
     );
 
     let log: Log = Arc::default();
@@ -306,6 +354,8 @@ fn the_router_carries_tcp_udp_programs_and_domains_through_the_proxy() {
         ip("-4 rule add fwmark 0x10000000/0x10000000 lookup 100");
     }
     ip("-4 route add local 0.0.0.0/0 dev lo table 100");
+    ip("-6 rule add fwmark 0x10000000/0x10000000 lookup 100");
+    ip("-6 route add local ::/0 dev lo table 100");
     let theirs = format!(
         "-4 route add 192.0.2.0/24 dev lo table {}",
         nft::ROUTE_TABLE
@@ -315,7 +365,7 @@ fn the_router_carries_tcp_udp_programs_and_domains_through_the_proxy() {
     let dir = tempfile::tempdir().unwrap();
     let r = Router::new(dir.path().join("routes.toml"));
     let mut ips = rule("ips", Protocol::Both, &["7000", "7001"]);
-    ips.ips = vec![format!("{ECHO}/32")];
+    ips.ips = vec![format!("{ECHO}/32"), format!("{ECHO6}/128")];
     let mut prog = rule("prog", Protocol::Tcp, &["7100"]);
     prog.apps = vec!["bash".into()];
     let mut dom = rule("dom", Protocol::Tcp, &["7000"]);
@@ -332,6 +382,8 @@ fn the_router_carries_tcp_udp_programs_and_domains_through_the_proxy() {
     .unwrap();
     assert_eq!(r.status().state, RouterState::Running);
     assert_eq!(fwmark_rules(), 1, "the stale rules went, one is in force");
+    assert_eq!(fwmark_rules6(), 1, "IPv6 likewise");
+    assert_eq!(ip("-6 route show table 100"), "");
     assert_eq!(
         ip("-4 route show table 100"),
         "",
@@ -376,6 +428,27 @@ fn the_router_carries_tcp_udp_programs_and_domains_through_the_proxy() {
         f.protocol == "udp" && f.destination == "10.77.0.2:7001" && f.down >= 4.0
     });
     assert_eq!((udp.rule.as_deref(), &udp.via), (Some("ips"), &Via::Proxy));
+
+    // IPv6 TCP and UDP by address: the IPv6 acceptor and TPROXY socket, address type 4.
+    assert_eq!(echo("tcp", "[fd77::2]:7000", "hello6"), "hello6");
+    assert!(proxied("tcp [fd77::2]:7000"), "{log:?}");
+    let tcp6 = row(&r, |f| {
+        f.protocol == "tcp" && f.destination == "[fd77::2]:7000" && f.down >= 6.0
+    });
+    assert_eq!(
+        (tcp6.rule.as_deref(), &tcp6.via),
+        (Some("ips"), &Via::Proxy)
+    );
+    assert!(is_bash(&tcp6), "{tcp6:?}");
+    assert_eq!(echo("udp", "[fd77::2]:7001", "ping6"), "ping6");
+    assert!(proxied("udp [fd77::2]:7001"), "{log:?}");
+    let udp6 = row(&r, |f| {
+        f.protocol == "udp" && f.destination == "[fd77::2]:7001" && f.down >= 5.0
+    });
+    assert_eq!(
+        (udp6.rule.as_deref(), &udp6.via),
+        (Some("ips"), &Via::Proxy)
+    );
 
     // A program rule: bash on its port.
     assert_eq!(echo("tcp", "10.77.0.2:7100", "prog"), "prog");
@@ -458,6 +531,35 @@ fn the_router_carries_tcp_udp_programs_and_domains_through_the_proxy() {
         (named.rule.as_deref(), named.domain.as_deref(), &named.via),
         (Some("dom"), Some("echo.test"), &Via::Proxy)
     );
+    // Its AAAA answer, asked over IPv6, puts the IPv6 address in force too.
+    let resolver6 = UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0)).unwrap();
+    resolver6.set_read_timeout(Some(WAIT)).unwrap();
+    let mut query6 = vec![0x43, 0x22, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+    query6.extend(b"\x04echo\x04test\x00\x00\x1c\x00\x01");
+    resolver6.send_to(&query6, (ECHO6, 53)).unwrap();
+    resolver6.recv_from(&mut buf).expect("a DNS answer");
+    until("the name's IPv6 address is routed", || {
+        cmd("nft", "list chain inet zapret_hub_route tcp_match").contains("fd77::3")
+    });
+    let by_name = || {
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter(|l| *l == "tcp echo.test:7000")
+            .count()
+    };
+    let before = by_name();
+    assert_eq!(echo("tcp", "[fd77::3]:7000", "named6"), "named6");
+    assert_eq!(by_name(), before + 1, "by name: {log:?}");
+    let named6 = row(&r, |f| f.destination == "[fd77::3]:7000");
+    assert_eq!(
+        (
+            named6.rule.as_deref(),
+            named6.domain.as_deref(),
+            &named6.via
+        ),
+        (Some("dom"), Some("echo.test"), &Via::Proxy)
+    );
 
     // Subnet broadcasts follow the interfaces: one address more, then gone again.
     let broadcasts = || cmd("nft", "list set inet zapret_hub_route broadcast");
@@ -475,8 +577,10 @@ fn the_router_carries_tcp_udp_programs_and_domains_through_the_proxy() {
     r.stop();
     assert_eq!(r.status().state, RouterState::Off);
     assert_eq!(fwmark_rules(), 0);
+    assert_eq!(fwmark_rules6(), 0);
     assert!(!cmd("nft", "list tables").contains("zapret_hub_route"));
     assert_eq!(ip(&format!("-4 route show table {next}")), "");
+    assert_eq!(ip(&format!("-6 route show table {next}")), "");
     assert!(
         ip(&format!("-4 route show table {}", nft::ROUTE_TABLE)).contains("192.0.2.0/24"),
         "the user's route stays"
@@ -484,5 +588,7 @@ fn the_router_carries_tcp_udp_programs_and_domains_through_the_proxy() {
     let count = log.lock().unwrap().len();
     assert_eq!(echo("tcp", "10.77.0.2:7000", "after"), "after");
     assert_eq!(echo("udp", "10.77.0.2:7001", "after"), "after");
+    assert_eq!(echo("tcp", "[fd77::2]:7000", "after"), "after");
+    assert_eq!(echo("udp", "[fd77::2]:7001", "after"), "after");
     assert_eq!(log.lock().unwrap().len(), count, "not through the proxy");
 }

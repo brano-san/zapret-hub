@@ -48,7 +48,7 @@ struct Relay {
 }
 
 impl Relay {
-    fn send(&self, dst: SocketAddrV4, payload: &[u8]) {
+    fn send(&self, dst: SocketAddr, payload: &[u8]) {
         let mut datagram = socks_header_to(dst, self.domain.as_deref());
         datagram.extend_from_slice(payload);
         let _ = self.socket.send_to(&datagram, self.relay);
@@ -83,7 +83,7 @@ struct Waiting {
 impl Waiting {
     /// The filter in force catches the connection's later segments.
     fn covers(&self, dst: SocketAddrV4) -> bool {
-        self.active.matches(Protocol::Tcp, dst).is_some() || self.held.contains(dst.ip())
+        self.active.matches(Protocol::Tcp, dst.into()).is_some() || self.held.contains(dst.ip())
     }
 
     /// Puts a new filter in force and takes the held SYNs it covers (and unparsable ones, which
@@ -367,7 +367,7 @@ impl Live {
             .unwrap()
             .destinations()
             .into_iter()
-            .filter(|d| table.matches(Protocol::Tcp, *d).is_none())
+            .filter(|d| table.matches(Protocol::Tcp, (*d).into()).is_none())
             .map(|d| *d.ip())
             .collect();
         let text = divert::capture_filter(&table, Some(self.acceptor_port), &held);
@@ -475,14 +475,16 @@ impl Live {
             return;
         };
         let table = self.table.read().unwrap().clone();
-        if table.match_udp(udp.dst).is_none() && !table.wants_owner(Protocol::Udp, udp.dst.port()) {
+        if table.match_udp(udp.dst.into()).is_none()
+            && !table.wants_owner(Protocol::Udp, udp.dst.port())
+        {
             let _ = handle.send(packet, &addr);
             return;
         }
         let key = FlowKey {
             protocol: rules::Protocol::Udp,
             local_port: udp.src.port(),
-            dst: udp.dst,
+            dst: udp.dst.into(),
         };
         let up = udp.payload.len() as u64;
         if !self.flows.lock().unwrap().contains_key(&key) {
@@ -493,7 +495,8 @@ impl Live {
             });
             let exe = pid.and_then(|p| self.images.get(p));
             let now = Instant::now();
-            let Some(rule) = table.matches_flow(Protocol::Udp, udp.dst, exe.as_deref()) else {
+            let Some(rule) = table.matches_flow(Protocol::Udp, udp.dst.into(), exe.as_deref())
+            else {
                 // Caught for a program rule, not its program: remembered, sent unchanged.
                 let mut flows = self.flows.lock().unwrap();
                 let new = match flows.entry(key) {
@@ -520,7 +523,7 @@ impl Live {
             let state = self.proxy_state.lock().unwrap().clone();
             let proxy_pid = *self.proxy_pid.lock().unwrap();
             let reason = flows::decide(&state, pid, std::process::id(), proxy_pid);
-            let domain = self.domain_of(udp.dst, now);
+            let domain = self.domain_of(udp.dst.into(), now);
             let mut flows = self.flows.lock().unwrap();
             if let Entry::Vacant(e) = flows.entry(key) {
                 match reason {
@@ -566,7 +569,7 @@ impl Live {
             Some(FlowState::Proxy(relay)) => {
                 let relay = relay.clone();
                 drop(flows);
-                relay.send(udp.dst, udp.payload);
+                relay.send(udp.dst.into(), udp.payload);
                 self.stats.lock().unwrap().add(key, up, 0, Instant::now());
             }
             Some(FlowState::Direct(_)) | None => {
@@ -613,7 +616,7 @@ impl Live {
             Ok(relay) => {
                 for (packet, _) in &pending {
                     if let Some(udp) = parse_udp(packet) {
-                        relay.send(udp.dst, udp.payload);
+                        relay.send(udp.dst.into(), udp.payload);
                         up += udp.payload.len() as u64;
                     }
                 }
@@ -677,7 +680,7 @@ impl Live {
                 continue;
             }
             // A short domain header leaves more than MAX_PAYLOAD, which `build_udp` refuses.
-            let Some((src, data)) = parse_socks_udp_from(&buf[..n], key.dst)
+            let Some((SocketAddr::V4(src), data)) = parse_socks_udp_from(&buf[..n], key.dst)
                 .filter(|(_, data)| data.len() <= MAX_PAYLOAD)
             else {
                 continue;

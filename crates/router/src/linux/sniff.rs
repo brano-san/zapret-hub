@@ -1,22 +1,22 @@
 //! DNS answers read off every interface, `lo` included (systemd-resolved's stub answers programs
 //! there), by an `AF_PACKET` socket (`CAP_NET_RAW`) for the domain rules. Datagram packet sockets
 //! hand over the IP packet without its link header; a classic BPF filter keeps the kernel from
-//! copying anything but IPv4 UDP to or from port 53. An answer counts only for a query seen
-//! going out (`Asked`): a spoofed answer must guess the query's port and id, so another host of
-//! the network cannot route chosen addresses through the proxy by sending fake answers.
+//! copying anything but IPv4 or IPv6 UDP to or from port 53. An answer counts only for a query
+//! seen going out (`Asked`): a spoofed answer must guess the query's port and id, so another host
+//! of the network cannot route chosen addresses through the proxy by sending fake answers.
 
 use std::collections::HashMap;
-use std::net::SocketAddrV4;
+use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use crate::dns::{self, Answer};
-use crate::packet::parse_udp;
+use crate::packet::parse_udp_any;
 
 /// One query and its answer: who asked whom, with which id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Exchange {
-    pub client: SocketAddrV4,
-    pub server: SocketAddrV4,
+    pub client: SocketAddr,
+    pub server: SocketAddr,
     pub id: u16,
 }
 
@@ -26,27 +26,27 @@ pub enum Seen {
     Answer(Exchange, Answer),
 }
 
-/// The DNS query or answer an IPv4 packet carries (UDP to or from port 53).
+/// The DNS query or answer an IPv4 or IPv6 packet carries (UDP to or from port 53).
 pub fn seen(packet: &[u8]) -> Option<Seen> {
-    let u = parse_udp(packet)?;
-    let id = u16::from_be_bytes([*u.payload.first()?, *u.payload.get(1)?]);
-    let query = *u.payload.get(2)? & 0x80 == 0;
-    if u.dst.port() == 53 && query && u.payload.len() >= 12 {
+    let (src, dst, payload) = parse_udp_any(packet)?;
+    let id = u16::from_be_bytes([*payload.first()?, *payload.get(1)?]);
+    let query = *payload.get(2)? & 0x80 == 0;
+    if dst.port() == 53 && query && payload.len() >= 12 {
         return Some(Seen::Query(Exchange {
-            client: u.src,
-            server: u.dst,
+            client: src,
+            server: dst,
             id,
         }));
     }
-    if u.src.port() != 53 {
+    if src.port() != 53 {
         return None;
     }
     let exchange = Exchange {
-        client: u.dst,
-        server: u.src,
+        client: dst,
+        server: src,
         id,
     };
-    dns::parse(u.payload).map(|a| Seen::Answer(exchange, a))
+    dns::parse(payload).map(|a| Seen::Answer(exchange, a))
 }
 
 /// How long an answer to a query is waited for.
@@ -90,22 +90,28 @@ mod sys {
 
     use super::Seen;
 
-    /// `ip[9] == 17 && !(ip[6:2] & 0x1fff) && (udp[0:2] == 53 || udp[2:2] == 53)`, offsets from
-    /// the IP header; IPv4 by the packet's link protocol (the socket takes every protocol).
-    const FILTER: [SockFilter; 13] = [
-        SockFilter::new(0x28, 0, 0, 0xffff_f000), // ldh proto (SKF_AD_PROTOCOL)
-        SockFilter::new(0x15, 0, 10, 0x0800),     // jeq IPv4, else drop
-        SockFilter::new(0x30, 0, 0, 9),           // ldb [9]: protocol
-        SockFilter::new(0x15, 0, 8, 17),          // jeq UDP, else drop
-        SockFilter::new(0x28, 0, 0, 6),           // ldh [6]: fragment offset
-        SockFilter::new(0x45, 6, 0, 0x1fff),      // jset: a later fragment, drop
-        SockFilter::new(0xb1, 0, 0, 0),           // ldxb 4*([0]&0xf): header length
-        SockFilter::new(0x48, 0, 0, 0),           // ldh [x+0]: source port
-        SockFilter::new(0x15, 2, 0, 53),          // jeq 53: accept
-        SockFilter::new(0x48, 0, 0, 2),           // ldh [x+2]: destination port
-        SockFilter::new(0x15, 0, 1, 53),          // jeq 53, else drop
-        SockFilter::new(0x06, 0, 0, 0xffff),      // accept
-        SockFilter::new(0x06, 0, 0, 0),           // drop
+    /// IPv4: `ip[9] == 17 && !(ip[6:2] & 0x1fff)`, IPv6: `ip6[6] == 17` (UDP right after the
+    /// fixed header); then `udp[0:2] == 53 || udp[2:2] == 53`. Offsets from the IP header; the
+    /// family by the packet's link protocol (the socket takes every protocol).
+    const FILTER: [SockFilter; 18] = [
+        SockFilter::new(0x28, 0, 0, 0xffff_f000), // 0 ldh proto (SKF_AD_PROTOCOL)
+        SockFilter::new(0x15, 7, 0, 0x86dd),      // 1 jeq IPv6: to 9
+        SockFilter::new(0x15, 0, 14, 0x0800),     // 2 jeq IPv4, else drop
+        SockFilter::new(0x30, 0, 0, 9),           // 3 ldb [9]: protocol
+        SockFilter::new(0x15, 0, 12, 17),         // 4 jeq UDP, else drop
+        SockFilter::new(0x28, 0, 0, 6),           // 5 ldh [6]: fragment offset
+        SockFilter::new(0x45, 10, 0, 0x1fff),     // 6 jset: a later fragment, drop
+        SockFilter::new(0xb1, 0, 0, 0),           // 7 ldxb 4*([0]&0xf): header length
+        SockFilter::new(0x05, 0, 0, 3),           // 8 ja 12: the ports
+        SockFilter::new(0x30, 0, 0, 6),           // 9 ldb [6]: next header
+        SockFilter::new(0x15, 0, 6, 17),          // 10 jeq UDP, else drop
+        SockFilter::new(0x01, 0, 0, 40),          // 11 ldx #40: header length
+        SockFilter::new(0x48, 0, 0, 0),           // 12 ldh [x+0]: source port
+        SockFilter::new(0x15, 2, 0, 53),          // 13 jeq 53: accept
+        SockFilter::new(0x48, 0, 0, 2),           // 14 ldh [x+2]: destination port
+        SockFilter::new(0x15, 0, 1, 53),          // 15 jeq 53, else drop
+        SockFilter::new(0x06, 0, 0, 0xffff),      // 16 accept
+        SockFilter::new(0x06, 0, 0, 0),           // 17 drop
     ];
 
     pub struct Sniffer(Socket);
@@ -140,10 +146,10 @@ pub use sys::Sniffer;
 
 #[cfg(test)]
 mod tests {
-    use std::net::{Ipv4Addr, SocketAddrV4};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddrV4, SocketAddrV6};
 
     use super::*;
-    use crate::packet::build_udp;
+    use crate::packet::{build_udp, build_udp6};
 
     /// An answer for `name` with one A record.
     fn response(name: &str, ip: [u8; 4]) -> Vec<u8> {
@@ -174,8 +180,8 @@ mod tests {
     const CLIENT: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 40000);
     const SERVER: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 53), 53);
     const EXCHANGE: Exchange = Exchange {
-        client: CLIENT,
-        server: SERVER,
+        client: SocketAddr::V4(CLIENT),
+        server: SocketAddr::V4(SERVER),
         id: 0x1234,
     };
 
@@ -187,7 +193,7 @@ mod tests {
         };
         assert_eq!(exchange, EXCHANGE);
         assert_eq!(answer.name, "discord.media");
-        assert_eq!(answer.ips, [(Ipv4Addr::new(1, 2, 3, 4), 60)]);
+        assert_eq!(answer.ips, [(IpAddr::from([1, 2, 3, 4]), 60)]);
         let asked = build_udp(CLIENT, SERVER, &query("discord.media"), 1);
         assert_eq!(seen(&asked), Some(Seen::Query(EXCHANGE)));
         let other = build_udp(CLIENT, addr([1, 1, 1, 1], 443), &query("x.y"), 1);
@@ -196,6 +202,26 @@ mod tests {
         let mut tcp = packet.clone();
         tcp[9] = 6;
         assert_eq!(seen(&tcp), None, "not UDP");
+    }
+
+    #[test]
+    fn an_ipv6_query_and_its_answer_are_read_too() {
+        let client: SocketAddrV6 = "[fd00::1]:40000".parse().unwrap();
+        let server: SocketAddrV6 = "[2001:4860:4860::8888]:53".parse().unwrap();
+        let exchange = Exchange {
+            client: client.into(),
+            server: server.into(),
+            id: 0x1234,
+        };
+        let asked = build_udp6(client, server, &query("t.me"));
+        assert_eq!(seen(&asked), Some(Seen::Query(exchange)));
+        let answer = build_udp6(server, client, &response("t.me", [5, 6, 7, 8]));
+        let Some(Seen::Answer(e, a)) = seen(&answer) else {
+            panic!("an answer");
+        };
+        assert_eq!((e, a.name.as_str()), (exchange, "t.me"));
+        let other = build_udp6(client, "[fd00::2]:443".parse().unwrap(), &query("t.me"));
+        assert_eq!(seen(&other), None, "not DNS");
     }
 
     #[test]
@@ -216,11 +242,11 @@ mod tests {
                 ..EXCHANGE
             },
             Exchange {
-                client: addr([127, 0, 0, 1], 40001),
+                client: addr([127, 0, 0, 1], 40001).into(),
                 ..EXCHANGE
             },
             Exchange {
-                server: addr([10, 0, 0, 1], 53),
+                server: addr([10, 0, 0, 1], 53).into(),
                 ..EXCHANGE
             },
         ] {
@@ -229,7 +255,7 @@ mod tests {
         for port in 0..MAX_ASKED as u16 + 10 {
             asked.ask(
                 Exchange {
-                    client: addr([10, 0, 0, 2], port),
+                    client: addr([10, 0, 0, 2], port).into(),
                     ..EXCHANGE
                 },
                 now + ANSWER_WITHIN,
@@ -246,30 +272,35 @@ mod tests {
     fn sniffer_reads_a_loopback_query_and_answer() {
         use std::net::UdpSocket;
         let sniffer = Sniffer::open(Duration::from_millis(200)).unwrap();
-        let server = UdpSocket::bind("127.0.0.1:53").unwrap();
-        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
-        client.send_to(b"not dns", "127.0.0.1:9").unwrap();
-        client.send_to(&query("t.me"), "127.0.0.1:53").unwrap();
-        server
-            .send_to(
-                &response("t.me", [5, 6, 7, 8]),
-                client.local_addr().unwrap(),
-            )
-            .unwrap();
-        let mut buf = vec![0; 65536];
-        // The filter dropped the datagram to port 9: the query comes first, twice on `lo`.
-        let mut got = vec![];
-        while let Ok(Some(s)) = sniffer.next(&mut buf) {
-            got.push(s);
+        for host in ["127.0.0.1", "[::1]"] {
+            let server = UdpSocket::bind(format!("{host}:53")).unwrap();
+            let client = UdpSocket::bind(format!("{host}:0")).unwrap();
+            client.send_to(b"not dns", format!("{host}:9")).unwrap();
+            client
+                .send_to(&query("t.me"), format!("{host}:53"))
+                .unwrap();
+            server
+                .send_to(
+                    &response("t.me", [5, 6, 7, 8]),
+                    client.local_addr().unwrap(),
+                )
+                .unwrap();
+            let mut buf = vec![0; 65536];
+            // The filter dropped the datagram to port 9: the query comes first, twice on `lo`.
+            let mut got = vec![];
+            while let Ok(Some(s)) = sniffer.next(&mut buf) {
+                got.push(s);
+            }
+            let Some(Seen::Query(asked)) = got.first() else {
+                panic!("{host}: {got:?}");
+            };
+            let Some(Seen::Answer(answered, answer)) = got.last() else {
+                panic!("{host}: {got:?}");
+            };
+            assert_eq!(asked, answered);
+            assert_eq!(asked.client, client.local_addr().unwrap());
+            assert_eq!(answer.name, "t.me");
+            assert_eq!(answer.ips, [(IpAddr::from([5, 6, 7, 8]), 60)]);
         }
-        let Some(Seen::Query(asked)) = got.first() else {
-            panic!("{got:?}");
-        };
-        let Some(Seen::Answer(answered, answer)) = got.last() else {
-            panic!("{got:?}");
-        };
-        assert_eq!(asked, answered);
-        assert_eq!(answer.name, "t.me");
-        assert_eq!(answer.ips, [(Ipv4Addr::new(5, 6, 7, 8), 60)]);
     }
 }

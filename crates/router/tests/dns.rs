@@ -1,5 +1,5 @@
 use router::dns::{self, Answer, MAX_TTL, MIN_TTL, Names};
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::time::{Duration, Instant};
 
 fn name(n: &str) -> Vec<u8> {
@@ -43,7 +43,7 @@ fn message(q: &str, answers: &[Vec<u8>]) -> Vec<u8> {
     ]
     .concat()
 }
-fn ip(s: &str) -> Ipv4Addr {
+fn ip(s: &str) -> IpAddr {
     s.parse().unwrap()
 }
 
@@ -209,4 +209,32 @@ fn a_name_in_use_outlives_its_ttl() {
         "a used name lives another MIN_TTL after its last use"
     );
     assert!(names.expire(late + MIN_TTL, &[]));
+}
+
+#[test]
+fn aaaa_records_go_under_the_asked_name_too() {
+    let v6: Ipv6Addr = "2606:4700::6810:84e5".parse().unwrap();
+    let m = message(
+        "discord.com",
+        &[
+            rr(&name("discord.com"), 28, 120, &v6.octets()),
+            rr(&name("discord.com"), 1, 60, &[162, 159, 128, 233]),
+            // A wrong length is no record.
+            rr(&name("discord.com"), 28, 60, &[1, 2, 3, 4]),
+        ],
+    );
+    let answer = dns::parse(&m).unwrap();
+    assert_eq!(
+        answer.ips,
+        [(IpAddr::V6(v6), 120), (ip("162.159.128.233"), 60)]
+    );
+    let mut names = Names::default();
+    let now = Instant::now();
+    assert!(names.record(&answer, now));
+    assert_eq!(names.name_of(v6, now), Some("discord.com"));
+    assert!(
+        names.expire(now + MIN_TTL, &[IpAddr::V6(v6)]),
+        "the A record goes"
+    );
+    assert_eq!(names.entries().len(), 1, "only the live one stays");
 }

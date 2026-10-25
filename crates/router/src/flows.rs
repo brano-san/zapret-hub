@@ -1,7 +1,7 @@
 //! Per-flow decisions, the queue of packets waiting for the proxy, and counters.
 
 use std::collections::{HashMap, VecDeque};
-use std::net::SocketAddrV4;
+use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -144,7 +144,7 @@ pub fn decide(
 pub fn route<'a>(
     table: &'a Table,
     protocol: Protocol,
-    dst: SocketAddrV4,
+    dst: SocketAddr,
     exe: Option<&str>,
     decided: Option<DirectReason>,
 ) -> (&'a str, Option<DirectReason>) {
@@ -178,7 +178,7 @@ pub fn checked(current: &ProxyState, new: ProxyState, failures: &mut u32) -> Opt
 pub struct FlowKey {
     pub protocol: Protocol,
     pub local_port: u16,
-    pub dst: SocketAddrV4,
+    pub dst: SocketAddr,
 }
 
 struct Flow {

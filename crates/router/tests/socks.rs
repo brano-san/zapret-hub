@@ -175,3 +175,39 @@ fn connect_rejects_a_name_over_255_bytes() {
     let r = socks::connect(addr, DST.parse().unwrap(), Some(&name), SHORT);
     assert!(matches!(r, Err(SocksError::Io(_))));
 }
+
+/// CONNECT and UDP ASSOCIATE to an IPv6 address name it as address type 4; a reply binding an
+/// IPv6 address is read too.
+#[test]
+fn an_ipv6_destination_is_address_type_4() {
+    let dst: SocketAddr = "[2001:db8::7]:443".parse().unwrap();
+    let mut want = vec![5u8, 0, 0, 4, 0x20, 0x01, 0x0d, 0xb8];
+    want.extend([0; 11]);
+    want.extend([7, 1, 187]);
+    for command in [1u8, 3] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = v4(listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut got = vec![0u8; 3 + 22];
+            s.read_exact(&mut got[..3]).unwrap();
+            s.write_all(&[5, 0]).unwrap();
+            s.read_exact(&mut got[3..]).unwrap();
+            let mut reply = vec![5, 0, 0, 4];
+            reply.extend([0; 16]);
+            reply.extend([0x1F, 0x90]);
+            s.write_all(&reply).unwrap();
+            got.drain(..3);
+            got
+        });
+        if command == 1 {
+            socks::connect(addr, dst, None, Duration::from_secs(2)).unwrap();
+        } else {
+            let assoc = socks::udp_associate(addr, dst, Duration::from_secs(2)).unwrap();
+            assert_eq!(assoc.relay, SocketAddrV4::new(*addr.ip(), 8080));
+        }
+        let mut expected = want.clone();
+        expected[1] = command;
+        assert_eq!(server.join().unwrap(), expected);
+    }
+}

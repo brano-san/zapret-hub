@@ -13,9 +13,9 @@
 //! keeps addresses of live flows) is their timeout, never an nft timeout that would cut a live UDP
 //! flow mid-call.
 
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4};
 
-use crate::rules::{Protocol, Table, merge};
+use crate::rules::{Addr, Protocol, Table, merge};
 
 pub const TABLE: &str = "zapret_hub_route";
 /// A UDP packet to hand to the TPROXY socket.
@@ -37,6 +37,19 @@ fn net((a, b): (u32, u32)) -> String {
     }
 }
 
+fn net6((a, b): (u128, u128)) -> String {
+    match (b - a).checked_add(1) {
+        None => "::/0".into(),
+        Some(size) if size.is_power_of_two() && a % size == 0 => {
+            match 128 - size.trailing_zeros() {
+                128 => Ipv6Addr::from(a).to_string(),
+                bits => format!("{}/{bits}", Ipv6Addr::from(a)),
+            }
+        }
+        Some(_) => format!("{}-{}", Ipv6Addr::from(a), Ipv6Addr::from(b)),
+    }
+}
+
 fn port((a, b): (u32, u32)) -> String {
     if a == b {
         a.to_string()
@@ -45,13 +58,13 @@ fn port((a, b): (u32, u32)) -> String {
     }
 }
 
-fn set(items: Vec<(u32, u32)>, show: fn((u32, u32)) -> String) -> String {
+fn set<T: Addr>(items: Vec<(T, T)>, show: fn((T, T)) -> String) -> String {
     let items: Vec<String> = merge(items).into_iter().map(show).collect();
     format!("{{ {} }}", items.join(", "))
 }
 
-/// The match expressions of `protocol`, one per rule and kind, in file order: a rule's subnets
-/// (and resolved names), and for a rule with programs every flow on its ports, which the acceptor
+/// The match expressions of `protocol`, one per rule and kind, in file order: a rule's IPv4 and
+/// IPv6 subnets (and resolved names), and for a rule with programs every flow on its ports, which the acceptor
 /// sorts by owner (UDP only while a program runs, as `Table::wants_owner`).
 fn matches(table: &Table, protocol: Protocol) -> Vec<String> {
     let mut out = Vec::new();
@@ -67,6 +80,12 @@ fn matches(table: &Table, protocol: Protocol) -> Vec<String> {
         };
         if !r.ranges.is_empty() {
             out.push(format!(" ip daddr {}{ports}", set(r.ranges.clone(), net)));
+        }
+        if !r.ranges6.is_empty() {
+            out.push(format!(
+                " ip6 daddr {}{ports}",
+                set(r.ranges6.clone(), net6)
+            ));
         }
         if !r.apps.is_empty() && (protocol == Protocol::Tcp || r.running) {
             out.push(ports);
@@ -119,11 +138,14 @@ pub fn update(table: &Table, acceptor: u16, broadcasts: &[Ipv4Addr]) -> String {
 }
 
 /// The whole table, replacing any left by a crashed session. `bypass_group`: `GROUP` exists
-/// (`nft` refuses an unknown group name).
+/// (`nft` refuses an unknown group name). `tproxy6`: the IPv6 TPROXY socket's port; `None` (no
+/// IPv6 loopback) lets IPv6 pass untouched. The acceptor listens on both loopbacks at one port,
+/// so one `redirect` serves both families.
 pub fn ruleset(
     table: &Table,
     acceptor: u16,
     tproxy: u16,
+    tproxy6: Option<u16>,
     proxy: SocketAddrV4,
     bypass_group: bool,
     broadcasts: &[Ipv4Addr],
@@ -137,14 +159,21 @@ pub fn ruleset(
         // Answers to multicast (mDNS, SSDP) and broadcast never come back to a relay. Subnet
         // broadcasts (192.168.1.255) come from the interfaces: `fib daddr type` would tell them
         // apart, but needs nft_fib, which some kernels (WSL) lack.
-        let cast = if proto == "udp" {
-            "        ip daddr { 224.0.0.0/4, 255.255.255.255 } return\n\
-             \x20       ip daddr @broadcast return\n"
+        let mut cast = String::new();
+        if proto == "udp" {
+            cast += "        ip daddr { 224.0.0.0/4, 255.255.255.255 } return\n\
+                     \x20       ip daddr @broadcast return\n";
+            if tproxy6.is_some() {
+                cast += "        ip6 daddr ff00::/8 return\n";
+            }
+        }
+        let family = if tproxy6.is_none() {
+            "        meta nfproto ipv6 return\n"
         } else {
             ""
         };
         format!(
-            "        meta nfproto ipv6 return\n\
+            "{family}\
              \x20       oifname \"lo\" return\n\
              {cast}\
              \x20       meta mark & {MARK_OWN:#x} != 0 return\n\
@@ -175,11 +204,15 @@ pub fn ruleset(
          \x20   chain prerouting_udp {{\n\
          \x20       type filter hook prerouting priority mangle; policy accept;\n\
          \x20       iifname \"lo\" meta l4proto udp meta mark & {MARK_TPROXY:#x} != 0 tproxy ip to 127.0.0.1:{tproxy} accept\n\
+         {}\
          \x20   }}\n\
          }}\n{}",
         delete(),
         skips("tcp"),
         skips("udp"),
+        tproxy6.map_or(String::new(), |port| format!(
+            "        iifname \"lo\" meta l4proto udp meta mark & {MARK_TPROXY:#x} != 0 tproxy ip6 to [::1]:{port} accept\n"
+        )),
         update(table, acceptor, broadcasts)
     )
 }
@@ -205,9 +238,9 @@ pub struct Policy {
 }
 
 impl Policy {
-    /// `ip` arguments that add (`true`) or remove the rule and its `local` route. The route is
-    /// `replace`d, so adding twice is harmless.
-    pub fn argv(self, add: bool) -> [Vec<String>; 2] {
+    /// `ip` arguments that add (`true`) or remove the rule and its `local` route, IPv4 or (`v6`)
+    /// IPv6. The route is `replace`d, so adding twice is harmless.
+    pub fn argv(self, add: bool, v6: bool) -> [Vec<String>; 2] {
         let (rule, route) = if add {
             ("add", "replace")
         } else {
@@ -215,20 +248,17 @@ impl Policy {
         };
         let (priority, table) = (self.priority.to_string(), self.table.to_string());
         let words = |w: &[&str]| w.iter().map(|w| (*w).to_owned()).collect();
+        let (family, all) = if v6 {
+            ("-6", "::/0")
+        } else {
+            ("-4", "0.0.0.0/0")
+        };
         [
             words(&[
-                "-4", "rule", rule, "priority", &priority, "fwmark", MARK_RULE, "lookup", &table,
+                family, "rule", rule, "priority", &priority, "fwmark", MARK_RULE, "lookup", &table,
             ]),
             words(&[
-                "-4",
-                "route",
-                route,
-                "local",
-                "0.0.0.0/0",
-                "dev",
-                "lo",
-                "table",
-                &table,
+                family, "route", route, "local", all, "dev", "lo", "table", &table,
             ]),
         ]
     }
@@ -252,7 +282,7 @@ fn after<'a>(words: &[&'a str], key: &str) -> Option<&'a str> {
         .and_then(|i| words.get(i + 1).copied())
 }
 
-/// Our rules in `ip -4 rule show`: the mark and a table `pick` gives, whatever the priority; also
+/// Our rules in `ip -4 rule show` or `ip -6 rule show`: the mark and a table `pick` gives, whatever the priority; also
 /// those a crashed session or an older version (table 100) left. Another program's rule with the
 /// same mark and another table stays.
 pub fn ours(rules: &str) -> Vec<Policy> {
@@ -313,7 +343,7 @@ mod tests {
 
     #[test]
     fn an_empty_table_is_the_skeleton_with_empty_match_chains() {
-        let text = ruleset(&Table::default(), 40000, 40001, PROXY, true, &[]);
+        let text = ruleset(&Table::default(), 40000, 40001, None, PROXY, true, &[]);
         assert_eq!(
             text,
             "table inet zapret_hub_route\n\
@@ -355,7 +385,7 @@ mod tests {
              flush chain inet zapret_hub_route udp_match\n\
              flush set inet zapret_hub_route broadcast\n"
         );
-        let without = ruleset(&Table::default(), 40000, 40001, PROXY, false, &[]);
+        let without = ruleset(&Table::default(), 40000, 40001, None, PROXY, false, &[]);
         assert!(!without.contains("skgid"));
         assert_eq!(
             without.len(),
@@ -461,15 +491,72 @@ mod tests {
             table: 23112,
         };
         assert_eq!(
-            p.argv(true),
+            p.argv(true, false),
             [
                 "-4 rule add priority 1000 fwmark 0x10000000/0x10000000 lookup 23112",
                 "-4 route replace local 0.0.0.0/0 dev lo table 23112",
             ]
             .map(|l| l.split(' ').map(str::to_owned).collect::<Vec<_>>())
         );
-        assert_eq!(p.argv(false)[0][2], "del");
-        assert_eq!(p.argv(false)[1][2], "del");
+        assert_eq!(p.argv(false, false)[0][2], "del");
+        assert_eq!(p.argv(false, false)[1][2], "del");
+        assert_eq!(
+            p.argv(false, true),
+            [
+                "-6 rule del priority 1000 fwmark 0x10000000/0x10000000 lookup 23112",
+                "-6 route del local ::/0 dev lo table 23112",
+            ]
+            .map(|l| l.split(' ').map(str::to_owned).collect::<Vec<_>>())
+        );
+    }
+
+    #[test]
+    fn ipv6_subnets_and_names_become_ip6_lines_beside_the_ipv4_ones() {
+        let mut r = rule(
+            "Tg",
+            Protocol::Udp,
+            &["443"],
+            &["1.2.3.0/24", "2001:b28:f23d::/48", "2001:b28:f23f::/48"],
+            &[],
+        );
+        r.domains = vec!["t.me".into()];
+        let table = Table::new(&[r]).with_names(&[(
+            "2001:67c:4e8:f004::9".parse::<std::net::IpAddr>().unwrap(),
+            "t.me".to_owned(),
+        )]);
+        assert_eq!(
+            matches(&table, Protocol::Udp),
+            [
+                " ip daddr { 1.2.3.0/24 } th dport { 443 }",
+                " ip6 daddr { 2001:67c:4e8:f004::9, 2001:b28:f23d::/48, \
+                 2001:b28:f23f::/48 } th dport { 443 }",
+            ]
+        );
+        assert_eq!(net6((0, u128::MAX)), "::/0");
+        assert_eq!(net6((1, 2)), "::1-::2");
+        assert_eq!(net6((2, 3)), "::2/127");
+    }
+
+    #[test]
+    fn with_ipv6_the_base_chains_let_it_in_and_a_second_tproxy_takes_it() {
+        let v4 = ruleset(&Table::default(), 40000, 40001, None, PROXY, false, &[]);
+        let v6 = ruleset(
+            &Table::default(),
+            40000,
+            40001,
+            Some(40002),
+            PROXY,
+            false,
+            &[],
+        );
+        assert!(v4.contains("meta nfproto ipv6 return") && !v4.contains("ip6"));
+        assert!(!v6.contains("nfproto ipv6"), "{v6}");
+        assert!(
+            v6.contains("        ip daddr @broadcast return\n        ip6 daddr ff00::/8 return\n")
+        );
+        assert!(v6.contains(
+            "tproxy ip to 127.0.0.1:40001 accept\n        iifname \"lo\" meta l4proto udp meta mark & 0x10000000 != 0 tproxy ip6 to [::1]:40002 accept\n"
+        ));
     }
 
     const RULES: &str = "0:\tfrom all lookup local\n\
@@ -536,7 +623,7 @@ mod tests {
                 "Tg",
                 Protocol::Both,
                 &["443", "80"],
-                &["1.2.3.0/24", "9.9.9.9"],
+                &["1.2.3.0/24", "9.9.9.9", "2001:db8::/32", "2001:db8:1::5"],
                 &[],
             ),
             rule("Game", Protocol::Both, &["3000-3100"], &[], &["game"]),
@@ -560,7 +647,15 @@ mod tests {
             Ipv4Addr::new(10, 9, 0, 255),
             Ipv4Addr::new(192, 168, 1, 255),
         ];
-        nft(&ruleset(&table, 40000, 40001, PROXY, false, &b));
+        nft(&ruleset(
+            &table,
+            40000,
+            40001,
+            Some(40002),
+            PROXY,
+            false,
+            &b,
+        ));
         nft(&update(&Table::default(), 40000, &[]));
         nft(&update(&table, 40000, &b[..1]));
         nft(&update(&table, 40000, &b));
@@ -601,7 +696,15 @@ mod tests {
         run(
             "nft",
             &["-f", "-"],
-            Some(&ruleset(&table, 40000, 40001, PROXY, false, &found)),
+            Some(&ruleset(
+                &table,
+                40000,
+                40001,
+                Some(40002),
+                PROXY,
+                false,
+                &found,
+            )),
         );
         // Counts marked datagrams after the route chain (mangle) marked them.
         run(
