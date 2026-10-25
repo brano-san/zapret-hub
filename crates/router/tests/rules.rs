@@ -708,3 +708,36 @@ fn import_and_domains_tell_ipv6_apart() {
     assert_eq!(errors.len(), 1);
     assert!(errors[0].message.contains("put it in ips"), "{errors:?}");
 }
+
+#[test]
+fn an_ipv4_mapped_subnet_is_its_ipv4_one() {
+    let table = Table::new(&[Rule {
+        name: "mapped".into(),
+        enabled: true,
+        protocol: Protocol::Both,
+        ports: vec![],
+        ips: vec![
+            "::ffff:1.2.3.4".into(),
+            "::ffff:10.0.0.0/104".into(),
+            "::/0".into(),
+        ],
+        domains: vec![],
+        apps: vec![],
+    }]);
+    let r = &table.rules[0];
+    assert_eq!(
+        r.ranges,
+        [(0x0102_0304, 0x0102_0304), (0x0A00_0000, 0x0AFF_FFFF)]
+    );
+    assert_eq!(r.ranges6, [(0, u128::MAX)], "a wider IPv6 range stays IPv6");
+    assert!(
+        table
+            .matches(Protocol::Tcp, "1.2.3.4:443".parse().unwrap())
+            .is_some()
+    );
+    assert!(
+        table
+            .matches(Protocol::Udp, "10.9.8.7:53".parse().unwrap())
+            .is_some()
+    );
+}

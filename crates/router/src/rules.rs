@@ -608,6 +608,14 @@ pub fn remove(rules: &mut Vec<Rule>, name: &str) -> Result<Rule> {
     }
 }
 
+/// An IPv6 range wholly inside `::ffff:0:0/96` (IPv4-mapped) as the IPv4 range it names: a flow's
+/// mapped address is matched as IPv4, and no packet carries one.
+fn mapped((lo, hi): (u128, u128)) -> Option<(u32, u32)> {
+    const BASE: u128 = 0xFFFF_0000_0000;
+    (lo >= BASE && hi <= BASE + u128::from(u32::MAX))
+        .then(|| ((lo - BASE) as u32, (hi - BASE) as u32))
+}
+
 /// An address as a number: `u32` for IPv4, `u128` for IPv6.
 pub(crate) trait Addr: Copy + Ord {
     fn next(self) -> Self;
@@ -706,8 +714,18 @@ impl Table {
                     .map(|d| d.strip_suffix('.').unwrap_or(d).to_ascii_lowercase())
                     .collect(),
                 ports: r.ports.iter().filter_map(|s| parse_port(s)).collect(),
-                ranges: merge(r.ips.iter().filter_map(|s| parse_net(s)).collect()),
-                ranges6: merge(r.ips.iter().filter_map(|s| parse_net6(s)).collect()),
+                ranges: merge(
+                    r.ips
+                        .iter()
+                        .filter_map(|s| parse_net(s).or_else(|| mapped(parse_net6(s)?)))
+                        .collect(),
+                ),
+                ranges6: merge(
+                    r.ips
+                        .iter()
+                        .filter_map(|s| parse_net6(s).filter(|n| mapped(*n).is_none()))
+                        .collect(),
+                ),
                 apps: r.apps.iter().map(|a| norm_app(a)).collect(),
                 running: false,
             })
