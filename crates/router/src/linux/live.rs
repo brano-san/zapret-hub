@@ -207,11 +207,10 @@ impl Live {
 
     pub(crate) fn open(inner: &Arc<Inner>, setup: &Setup, table: Table) -> Result<Arc<Live>> {
         if !caps::present() {
-            let launcher = std::env::current_exe().map(|e| e.with_file_name(caps::LAUNCHER));
-            if launcher.is_ok_and(|l| caps::file_grants(&l)) {
-                bail!(caps::RESTART_HINT);
-            }
-            bail!(caps::HINT);
+            let installed = std::env::current_exe()
+                .map(|exe| caps::installed(&exe))
+                .unwrap_or(caps::Installed::None);
+            bail!(caps::hint(installed));
         }
         // Taken before `clear`: what it removes is a dead session's.
         let lock = session_lock()?;

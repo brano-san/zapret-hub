@@ -128,6 +128,15 @@ pub fn export_bindings() -> anyhow::Result<()> {
         .map_err(|err| anyhow::anyhow!("failed to export IPC bindings: {err}"))
 }
 
+/// The hub's program as the user started it. Linux: the routing launcher runs root's copy of it
+/// (`router::linux::caps::hub_exe`); the autostart and the next grant name the original.
+pub(crate) fn exe() -> std::io::Result<std::path::PathBuf> {
+    #[cfg(target_os = "linux")]
+    return router::linux::caps::hub_exe();
+    #[cfg(not(target_os = "linux"))]
+    std::env::current_exe()
+}
+
 /// What `main` does with an error from `run`.
 pub fn report(err: &anyhow::Error) {
     fatal(&format!("{}\n\n{err:#}", texts::FAILED_TO_START));

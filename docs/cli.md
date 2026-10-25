@@ -137,7 +137,7 @@ PowerShell читает вывод программ в кодировке `[Cons
 | `routes enable <name>`, `routes disable <name>` | включает и выключает правило | `set_route_enabled` |
 | `routes remove <name> --yes` | удаляет правило | `delete_route` |
 | `routes preset discord-voice\|discord\|cloudflare\|telegram\|twitch\|dbd` | добавляет готовое правило «Discord голос», «Discord целиком», «Cloudflare», «Telegram», «Twitch» или «Dead by Daylight» | `add_route_preset` |
-| `routes grant` | Linux: выдаёт `CAP_NET_ADMIN` и `CAP_NET_RAW` (`setcap`, один запрос пароля) файлу `zapret-hub-cli`, через который приложение запускает себя (`--launch-hub`, см. `docs/linux.md`), как кнопка «Разрешить маршрутизацию»; действует после перезапуска приложения, после обновления — снова. `router status` → `needs_grant: true`, пока прав нет | `grant_routing` |
+| `routes grant` | Linux: копирует приложение и CLI в `/usr/local/lib/zapret-hub/` (root) и выдаёт копии CLI `CAP_NET_ADMIN` и `CAP_NET_RAW` (`setcap`, один запрос пароля) для текущего пользователя; приложение запускает себя через неё (`--launch-hub`, см. `docs/linux.md`), как кнопка «Разрешить маршрутизацию»; действует после перезапуска приложения, после обновления — снова. `router status` → `needs_grant: true`, пока прав нет | `grant_routing` |
 | `routes flows [--all]` | открытые потоки и закрытые за последние 30 с; `--all` — и потоки без правила, пойманные ради правил по программе | `route_flows` |
 | `diag profiles` | профили диагностики | `diag_profiles` |
 | `diag run (--profile <id>\|--app <exe>) [--mode auto\|ask] [--observe <с>] [--budget <мин>] [--wait [--full]] [--timeout <s>]` | запускает диагностику (раздел «Диагностика») | `start_diag` |

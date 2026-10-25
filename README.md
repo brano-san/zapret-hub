@@ -82,8 +82,9 @@ Windows — `winws2.exe` и WinDivert, Linux — `nfqws2` и nftables (подр�
    добавьте правило `sudoers` или polkit для своего пользователя (пример и оговорки — в `docs/linux.md`); хаб
    таких правил сам не ставит.
 5. Маршрутизация через SOCKS5: кнопка «Разрешить маршрутизацию» на вкладке «Маршруты» (или
-   `zapret-hub-cli routes grant`) выдаёт `CAP_NET_ADMIN`/`CAP_NET_RAW` через `setcap` программе
-   `zapret-hub-cli`, через которую хаб запускает себя, затем перезапустите хаб; после обновления — снова. Только IPv4 (раздел «Маршрутизация» в `docs/linux.md`).
+   `zapret-hub-cli routes grant`) копирует хаб и `zapret-hub-cli` в `/usr/local/lib/zapret-hub/` и выдаёт
+   `CAP_NET_ADMIN`/`CAP_NET_RAW` копии `zapret-hub-cli` для вас одного; хаб запускает себя через неё. Затем
+   перезапустите хаб; после обновления — снова. Только IPv4 (раздел «Маршрутизация» в `docs/linux.md`).
 
 ## Где данные
 

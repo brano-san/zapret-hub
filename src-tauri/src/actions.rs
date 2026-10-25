@@ -254,12 +254,12 @@ pub fn save_settings(app: &AppHandle, settings: Settings, pipe: bool) -> anyhow:
     // Linux: against the entry on the disk, which the desktop's settings may have changed.
     #[cfg(not(windows))]
     let old = Settings {
-        autostart: crate::autostart::is_enabled(&std::env::current_exe()?),
+        autostart: crate::autostart::is_enabled(&crate::exe()?),
         ..old
     };
     if settings.autostart != old.autostart {
         if settings.autostart {
-            crate::autostart::enable(&std::env::current_exe()?)?;
+            crate::autostart::enable(&crate::exe()?)?;
         } else {
             crate::autostart::disable()?;
         }
@@ -370,7 +370,7 @@ fn nearby_dirs(budget: Duration) -> Vec<PathBuf> {
     let deadline = std::time::Instant::now() + budget;
     let var = |name: &str| std::env::var_os(name).map(PathBuf::from);
     let mut roots: Vec<PathBuf> = Vec::new();
-    if let Some(app) = std::env::current_exe()
+    if let Some(app) = crate::exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf))
     {

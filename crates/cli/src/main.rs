@@ -563,7 +563,12 @@ fn main() -> ExitCode {
             let err = caps::launch(args);
             return finish(Err(Fail::new(UNAVAILABLE, format!("{err:#}"))));
         }
-        caps::drop_all();
+        if let Err(err) = caps::drop_all() {
+            return finish(Err(Fail::new(
+                UNAVAILABLE,
+                format!("cannot drop the routing capabilities: {err}"),
+            )));
+        }
     }
     let args = match Cli::try_parse() {
         Ok(args) => args,

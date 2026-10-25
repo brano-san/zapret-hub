@@ -62,7 +62,7 @@ pub fn get_settings(state: State<'_, AppState>) -> Settings {
     // Linux: the autostart entry may have been switched off in the desktop's own settings.
     #[cfg(not(windows))]
     let settings = Settings {
-        autostart: std::env::current_exe().is_ok_and(|exe| crate::autostart::is_enabled(&exe)),
+        autostart: crate::exe().is_ok_and(|exe| crate::autostart::is_enabled(&exe)),
         ..settings
     };
     settings

@@ -187,7 +187,7 @@ fn startup(app: &AppHandle, flowseal: Option<PathBuf>) {
         }
     }
     if state.settings().autostart {
-        let refreshed = std::env::current_exe()
+        let refreshed = crate::exe()
             .map_err(anyhow::Error::from)
             .and_then(|exe| crate::autostart::refresh(&exe));
         if let Err(err) = refreshed {
