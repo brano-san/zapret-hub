@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, bail};
 use socket2::{Domain, Socket, Type};
 
-use super::conntrack::{Conns, EVENT_GROUPS, Msg, dump_request, parse};
+use super::conntrack::{Conns, EVENT_GROUPS, Msg, dump_request, parse, parse_reply};
 use super::{FlowCounters, of_programs};
 use crate::dns::Names;
 use crate::linux::caps;
@@ -28,7 +28,7 @@ use crate::rules::{Protocol, norm_app, runs};
 
 const POLL: Duration = Duration::from_millis(100);
 const DUMP_EVERY: Duration = Duration::from_secs(1);
-const TABLE: &str = "zapret_hub_observe";
+pub(crate) const TABLE: &str = "zapret_hub_observe";
 
 struct Shared {
     stopped: AtomicBool,
@@ -84,7 +84,7 @@ fn dump(socket: &Socket, seq: u32, buf: &mut [u8]) -> Vec<Msg> {
     }
     // Bounded: a silent socket times out after `POLL`.
     while let Ok(n) = (&*socket).read(buf) {
-        let msgs = parse(&buf[..n]);
+        let msgs = parse_reply(&buf[..n], seq);
         let end = n == 0 || msgs.iter().any(|m| !matches!(m, Msg::Entry(_)));
         out.extend(msgs);
         if end {
@@ -215,10 +215,18 @@ fn track(s: &Shared, events: &Socket, dumps: &Socket, apps: &[String]) {
     let (mut dumped, mut resolved): (Option<Instant>, Option<Instant>) = (None, None);
     let mut seq = 0;
     while !s.stopped.load(Ordering::SeqCst) {
-        // A timeout, or an overflow (`ENOBUFS`) that the next dump makes up for.
+        // A timeout, or an overflow (`ENOBUFS`) that the next dump makes up for; any other error
+        // waits a poll, not to spin.
         let mut seen = match (&*events).read(&mut buf) {
             Ok(n) => parse(&buf[..n]),
-            Err(_) => Vec::new(),
+            Err(e) => {
+                let expected = matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
+                    || e.raw_os_error() == Some(libc::ENOBUFS);
+                if !expected {
+                    std::thread::sleep(POLL);
+                }
+                Vec::new()
+            }
         };
         if dumped.is_none_or(|at| at.elapsed() >= DUMP_EVERY) {
             seq += 1;

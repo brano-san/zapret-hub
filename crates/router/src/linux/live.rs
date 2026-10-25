@@ -247,6 +247,13 @@ pub(crate) fn clear_stale() -> bool {
         return false;
     }
     clear();
+    // A diagnosis that died mid-observation left its table (conntrack stays loaded).
+    let t = crate::observe::OBSERVE_TABLE;
+    let _ = nft(&format!(
+        "add table inet {t}
+delete table inet {t}
+"
+    ));
     true
 }
 

@@ -168,6 +168,16 @@ fn entry(b: &[u8]) -> Option<Entry> {
 
 /// The messages of one netlink datagram: a dump's part or events.
 pub fn parse(buf: &[u8]) -> Vec<Msg> {
+    parse_where(buf, |_| true)
+}
+
+/// `parse` of the messages answering the request `seq`: what is left of an earlier dump (one
+/// whose reads timed out) is skipped.
+pub fn parse_reply(buf: &[u8], seq: u32) -> Vec<Msg> {
+    parse_where(buf, |s| s == seq)
+}
+
+fn parse_where(buf: &[u8], keep: impl Fn(u32) -> bool) -> Vec<Msg> {
     let mut out = Vec::new();
     let mut at = 0;
     while let (Some(len), Some(kind)) = (ne32(buf, at), ne16(buf, at + 4)) {
@@ -175,6 +185,10 @@ pub fn parse(buf: &[u8]) -> Vec<Msg> {
         let Some(body) = buf.get(at + NLMSG_HDRLEN..at + len) else {
             break;
         };
+        if !keep(ne32(buf, at + 8).unwrap_or(0)) {
+            at += align4(len.max(NLMSG_HDRLEN));
+            continue;
+        }
         match kind {
             NLMSG_DONE => out.push(Msg::Done),
             NLMSG_ERROR => out.push(Msg::Error(ne32(body, 0).unwrap_or(0) as i32)),
@@ -600,5 +614,16 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert!(rows[0].via_system_proxy);
         assert_eq!(rows[0].syns, 0);
+    }
+
+    #[test]
+    fn a_dump_reads_only_the_replies_to_its_request() {
+        let old = msg(NLMSG_DONE, &[0; 4]); // seq 7: what a timed-out dump left
+        let mut new = old.clone();
+        new[8..12].copy_from_slice(&8u32.to_ne_bytes());
+        let both = [old, new].concat();
+        assert!(matches!(parse_reply(&both, 8)[..], [Msg::Done]));
+        assert!(parse_reply(&both[..20], 8).is_empty());
+        assert_eq!(parse(&both).len(), 2);
     }
 }

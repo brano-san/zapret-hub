@@ -469,6 +469,8 @@ pub mod conntrack;
 mod netlink;
 #[cfg(target_os = "linux")]
 pub use netlink::Observer;
+#[cfg(target_os = "linux")]
+pub(crate) use netlink::TABLE as OBSERVE_TABLE;
 
 /// Observation needs WinDivert or conntrack: elsewhere it never starts.
 #[cfg(not(any(windows, target_os = "linux")))]
