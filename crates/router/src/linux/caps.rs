@@ -187,6 +187,7 @@ pub fn grant(hub: &Path) -> anyhow::Result<()> {
 /// the hub the launcher starts. The C library already drops `LD_*` in the launcher.
 // ponytail: a deny list; a module path it misses runs with the capabilities. They are the user's
 // own anyway: only their group may run the launcher.
+#[cfg(target_os = "linux")]
 const UNSAFE_ENV: [&str; 9] = [
     "GTK_MODULES",
     "GTK3_MODULES",
