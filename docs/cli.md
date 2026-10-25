@@ -217,7 +217,7 @@ zapret-hub-cli settings set socks5 '""'
 enabled = true
 protocol = "udp"                  # "tcp" | "udp" | "both"
 ports = ["19294-19344", "50000-65535"]
-ips = ["104.29.0.0/16", "35.217.0.0/16"]
+ips = ["104.29.0.0/16", "35.217.0.0/16"]   # и IPv6: "2001:db8::/32"
 domains = ["discord.media"]
 ```
 
