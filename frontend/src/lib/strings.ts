@@ -650,10 +650,10 @@ export const S = {
     protocols: { udp: "UDP", tcp: "TCP", both: "TCP и UDP" } satisfies Record<Protocol, string>,
     ports: "Порты",
     portPlaceholder: "через запятую: 443, 80 или 50000-65535; пусто — все",
-    cols: { domains: "Домены", ips: "Подсети IPv4", apps: "Программы" },
+    cols: { domains: "Домены", ips: "Подсети IPv4 и IPv6", apps: "Программы" },
     colHints: {
       domains: "По одному в строке, поддомены входят; узнаются из ответов DNS",
-      ips: "По одной в строке, адрес или подсеть CIDR",
+      ips: "По одной в строке, адрес или подсеть CIDR: 1.2.3.0/24, 2001:db8::/32",
       apps: "Имя файла .exe или полный путь, по одному в строке",
     },
     liveHint: "Правила работают сразу для новых соединений: перезапускать zapret не нужно.",
