@@ -264,7 +264,7 @@ impl Live {
                     &l.owners
                 };
                 if addr.event() == divert::EVENT_SOCKET_CLOSE {
-                    owners.forget(port, addr.ipv6());
+                    owners.closed(port, addr.ipv6());
                     continue;
                 }
                 owners.record(port, addr.ipv6(), addr.socket_pid());

@@ -37,6 +37,16 @@ impl Owners {
         self.changed.notify_all();
     }
 
+    /// A socket closed: an IPv6 one may have been dual-stack, whose IPv4 flows were recorded under
+    /// IPv4 from the tables; both go.
+    pub fn closed(&self, local_port: u16, ipv6: bool) {
+        let mut map = self.map.lock().unwrap();
+        map.remove(&(local_port, ipv6));
+        if ipv6 {
+            map.remove(&(local_port, false));
+        }
+    }
+
     pub fn forget(&self, local_port: u16, ipv6: bool) {
         self.map.lock().unwrap().remove(&(local_port, ipv6));
     }

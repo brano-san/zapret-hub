@@ -88,6 +88,20 @@ fn an_ipv4_and_an_ipv6_socket_on_one_port_have_their_own_owners() {
         owners.pid(50001, true, Duration::ZERO, |_| Some(30)),
         Some(30)
     );
+    owners.closed(50001, false);
+    assert_eq!(
+        owners.pid(50001, true, Duration::ZERO, |_| None),
+        Some(30),
+        "IPv4 closes alone"
+    );
+    // A dual-stack socket: its IPv4 flow got the owner from the tables under IPv4.
+    owners.record(50001, false, 30);
+    owners.closed(50001, true);
+    assert_eq!(
+        owners.pid(50001, false, Duration::ZERO, |_| Some(40)),
+        Some(40),
+        "both went"
+    );
 }
 
 #[test]
