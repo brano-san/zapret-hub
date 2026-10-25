@@ -2,7 +2,7 @@ use router::divert::{
     FILTER_BUDGET, MAX_FILTER_RANGES, capture_filter, filter, refused, refused_for_good,
 };
 use router::rules::{self, Preset, Protocol, Rule, Table};
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 
 fn rule(ports: &[&str], ips: &[&str]) -> Rule {
     Rule {
@@ -18,7 +18,7 @@ fn rule(ports: &[&str], ips: &[&str]) -> Rule {
 fn the_voice_preset_makes_the_scripts_filter() {
     assert_eq!(
         filter(&Table::new(&[rules::preset(Preset::DiscordVoice)])).unwrap(),
-        "outbound and !loopback and ip and ((udp and ((udp.DstPort >= 19294 and udp.DstPort <= 19344) \
+        "outbound and !loopback and ((udp and ((udp.DstPort >= 19294 and udp.DstPort <= 19344) \
          or udp.DstPort >= 50000) and ((ip.DstAddr >= 35.217.0.0 and ip.DstAddr <= 35.217.255.255) \
          or (ip.DstAddr >= 104.29.0.0 and ip.DstAddr <= 104.29.255.255))))"
     );
@@ -32,7 +32,7 @@ fn single_values_and_missing_ports_are_short() {
             rule(&[], &["10.0.0.0/8"])
         ]))
         .unwrap(),
-        "outbound and !loopback and ip and ((udp and (udp.DstPort == 443) and (ip.DstAddr == 1.1.1.1)) \
+        "outbound and !loopback and ((udp and (udp.DstPort == 443) and (ip.DstAddr == 1.1.1.1)) \
          or (udp and ((ip.DstAddr >= 10.0.0.0 and ip.DstAddr <= 10.255.255.255))))"
     );
     assert_eq!(filter(&Table::new(&[])), None, "no rules, no handle");
@@ -76,7 +76,7 @@ fn a_domain_rule_without_answers_captures_only_first_syns() {
             &[]
         )
         .unwrap(),
-        "outbound and !loopback and ip and ((tcp and tcp.Syn and !tcp.Ack) or (tcp and tcp.SrcPort == 61000))",
+        "outbound and !loopback and ((tcp and tcp.Syn and !tcp.Ack) or (tcp and tcp.SrcPort == 61000))",
         "only the first SYNs: no UDP, no TCP past the handshake"
     );
     assert_eq!(
@@ -105,7 +105,7 @@ fn a_domain_tcp_rule_catches_first_syns_on_its_ports() {
             &[]
         )
         .unwrap(),
-        "outbound and !loopback and ip and ((tcp and tcp.Syn and !tcp.Ack and (tcp.DstPort == 443 or (tcp.DstPort >= 8000 and tcp.DstPort <= 8100))))"
+        "outbound and !loopback and ((tcp and tcp.Syn and !tcp.Ack and (tcp.DstPort == 443 or (tcp.DstPort >= 8000 and tcp.DstPort <= 8100))))"
     );
 }
 
@@ -121,7 +121,7 @@ fn resolved_ips_and_the_acceptor_replies_are_captured() {
     );
     assert_eq!(
         capture_filter(&table, Some(61000), &[]).unwrap(),
-        "outbound and !loopback and ip and (((udp or tcp) and (ip.DstAddr == 162.159.135.232 or ip.DstAddr == 162.159.136.232)) or (tcp and tcp.Syn and !tcp.Ack) or (tcp and tcp.SrcPort == 61000))"
+        "outbound and !loopback and (((udp or tcp) and (ip.DstAddr == 162.159.135.232 or ip.DstAddr == 162.159.136.232)) or (tcp and tcp.Syn and !tcp.Ack) or (tcp and tcp.SrcPort == 61000))"
     );
 }
 
@@ -139,7 +139,7 @@ fn tcp_and_both_rules_use_their_own_port_fields() {
     };
     assert_eq!(
         capture_filter(&Table::new(&[tcp, both]), Some(61000), &[]).unwrap(),
-        "outbound and !loopback and ip and ((tcp and (tcp.DstPort == 443) and (ip.DstAddr == 1.1.1.1)) or (((udp and (udp.DstPort == 443 or udp.DstPort >= 50000)) or (tcp and (tcp.DstPort == 443 or tcp.DstPort >= 50000))) and (ip.DstAddr == 2.2.2.2)) or (tcp and tcp.SrcPort == 61000))"
+        "outbound and !loopback and ((tcp and (tcp.DstPort == 443) and (ip.DstAddr == 1.1.1.1)) or (((udp and (udp.DstPort == 443 or udp.DstPort >= 50000)) or (tcp and (tcp.DstPort == 443 or tcp.DstPort >= 50000))) and (ip.DstAddr == 2.2.2.2)) or (tcp and tcp.SrcPort == 61000))"
     );
 }
 
@@ -167,15 +167,15 @@ fn a_live_connection_keeps_its_destination_in_the_filter() {
     let held = ["162.159.135.232".parse().unwrap()];
     assert_eq!(
         capture_filter(&Table::new(&[]), Some(61000), &held).unwrap(),
-        "outbound and !loopback and ip and ((tcp and (ip.DstAddr == 162.159.135.232)) or (tcp and tcp.SrcPort == 61000))"
+        "outbound and !loopback and ((tcp and (ip.DstAddr == 162.159.135.232)) or (tcp and tcp.SrcPort == 61000))"
     );
-    let held: Vec<Ipv4Addr> = ["10.0.0.2", "10.0.0.1", "10.0.0.2"]
+    let held: Vec<IpAddr> = ["10.0.0.2", "10.0.0.1", "10.0.0.2"]
         .iter()
         .map(|s| s.parse().unwrap())
         .collect();
     assert_eq!(
         capture_filter(&Table::new(&[]), None, &held).unwrap(),
-        "outbound and !loopback and ip and ((tcp and ((ip.DstAddr >= 10.0.0.1 and ip.DstAddr <= 10.0.0.2))))"
+        "outbound and !loopback and ((tcp and ((ip.DstAddr >= 10.0.0.1 and ip.DstAddr <= 10.0.0.2))))"
     );
 }
 
@@ -188,7 +188,7 @@ fn too_many_ranges_merge_the_closest_ones() {
     assert_eq!(text.matches("ip.DstAddr >=").count(), 64);
     assert!(
         text.starts_with(
-            "outbound and !loopback and ip and ((udp and (udp.DstPort >= 50000) and ((ip.DstAddr >= 10.0.0.0 and ip.DstAddr <= 10.1.0.255) or "
+            "outbound and !loopback and ((udp and (udp.DstPort >= 50000) and ((ip.DstAddr >= 10.0.0.0 and ip.DstAddr <= 10.1.0.255) or "
         ),
         "{text}"
     );
@@ -247,8 +247,8 @@ fn both_discord_presets_with_many_answers_fit_the_budget() {
         rules::preset(Preset::DiscordVoice),
     ])
     .with_names(&names);
-    let held: Vec<Ipv4Addr> = (0..100u32)
-        .map(|i| Ipv4Addr::from(0xC000_0000 + i * 7))
+    let held: Vec<IpAddr> = (0..100u32)
+        .map(|i| Ipv4Addr::from(0xC000_0000 + i * 7).into())
         .collect();
     let text = capture_filter(&table, Some(61000), &held).unwrap();
     assert!(
@@ -337,12 +337,12 @@ fn an_app_rule_captures_first_syns_and_udp_only_while_its_program_runs() {
     let both = Table::new(&[app_rule(Protocol::Both, &[])]);
     assert_eq!(
         capture_filter(&both, Some(61000), &[]).unwrap(),
-        "outbound and !loopback and ip and ((tcp and tcp.Syn and !tcp.Ack) or (tcp and tcp.SrcPort == 61000))",
+        "outbound and !loopback and ((tcp and tcp.Syn and !tcp.Ack) or (tcp and tcp.SrcPort == 61000))",
         "the game is not running: SYNs only"
     );
     assert_eq!(
         capture_filter(&both.with_running(&[DBD]), Some(61000), &[]).unwrap(),
-        "outbound and !loopback and ip and ((tcp and tcp.Syn and !tcp.Ack) or (udp) or (tcp and tcp.SrcPort == 61000))"
+        "outbound and !loopback and ((tcp and tcp.Syn and !tcp.Ack) or (udp) or (tcp and tcp.SrcPort == 61000))"
     );
     let udp = Table::new(&[app_rule(Protocol::Udp, &["7000-8000"])]);
     assert_eq!(filter(&udp), None, "nothing while the game is not running");
@@ -352,12 +352,65 @@ fn an_app_rule_captures_first_syns_and_udp_only_while_its_program_runs() {
     );
     assert_eq!(
         filter(&udp.with_running(&[DBD])).unwrap(),
-        "outbound and !loopback and ip and ((udp and ((udp.DstPort >= 7000 and udp.DstPort <= 8000))))"
+        "outbound and !loopback and ((udp and ((udp.DstPort >= 7000 and udp.DstPort <= 8000))))"
     );
     let dbd = Table::new(&[rules::preset(Preset::Dbd)]);
     assert_eq!(
         filter(&dbd).unwrap(),
-        "outbound and !loopback and ip and ((tcp and tcp.Syn and !tcp.Ack))",
+        "outbound and !loopback and ((tcp and tcp.Syn and !tcp.Ack))",
         "domain and program share the SYN part"
     );
+}
+
+#[test]
+fn ipv6_subnets_and_answers_go_into_ipv6_terms() {
+    assert_eq!(
+        filter(&Table::new(&[rule(
+            &["443"],
+            &["1.1.1.1", "2001:db8::1", "2a00:1450::/32"]
+        )]))
+        .unwrap(),
+        "outbound and !loopback and ((udp and (udp.DstPort == 443) and (ip.DstAddr == 1.1.1.1 \
+         or ipv6.DstAddr == 2001:db8::1 \
+         or (ipv6.DstAddr >= 2a00:1450:: and ipv6.DstAddr <= 2a00:1450:ffff:ffff:ffff:ffff:ffff:ffff))))"
+    );
+    let names: Vec<(IpAddr, String)> = vec![
+        ("162.159.135.232".parse().unwrap(), "discord.com".into()),
+        ("2606:4700::6810:1".parse().unwrap(), "discord.com".into()),
+    ];
+    let table = Table::new(&[rules::preset(Preset::Discord)]).with_names(&names);
+    assert_eq!(
+        capture_filter(&table, Some(61000), &["2001:db8::7".parse().unwrap()]).unwrap(),
+        "outbound and !loopback and (((udp or tcp) and (ip.DstAddr == 162.159.135.232 \
+         or ipv6.DstAddr == 2606:4700::6810:1)) or (tcp and tcp.Syn and !tcp.Ack) \
+         or (tcp and (ipv6.DstAddr == 2001:db8::7)) or (tcp and tcp.SrcPort == 61000))",
+        "an AAAA answer and a held IPv6 destination"
+    );
+}
+
+#[test]
+fn ipv6_ranges_merge_before_ipv4_ones() {
+    let v6: Vec<String> = (0..64)
+        .map(|i| format!("2001:db8:{:x}::/48", i * 2))
+        .collect();
+    let v4: Vec<String> = (0..10).map(|i| format!("10.{}.0.0/24", i * 2)).collect();
+    let ips: Vec<&str> = v4.iter().chain(&v6).map(String::as_str).collect();
+    let table = Table::new(&[rule(&[], &ips)]);
+    let text = filter(&table).unwrap();
+    assert_eq!(
+        text.matches("(ip.DstAddr >=").count(),
+        10,
+        "IPv4 stays exact: {text}"
+    );
+    // 64 ranges at most: ten IPv6 merges, the first pair each time (equal gaps).
+    assert_eq!(text.matches("(ipv6.DstAddr >=").count(), 54, "{text}");
+    assert!(text.contains(
+        "(ipv6.DstAddr >= 2001:db8:: and ipv6.DstAddr <= 2001:db8:14:ffff:ffff:ffff:ffff:ffff)"
+    ));
+    assert_eq!(
+        table.match_udp("[2001:db8:1::1]:5000".parse().unwrap()),
+        None,
+        "the hub matches exactly"
+    );
+    assert!(tests(&text) <= FILTER_BUDGET);
 }

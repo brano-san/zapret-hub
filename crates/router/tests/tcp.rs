@@ -1,7 +1,7 @@
 use router::packet::{ACK, FIN, RST, SYN, Tcp, parse_tcp, rewrite_tcp};
 use router::tcp::{self, ACCEPT_WAIT, DIRECT_FOR, IDLE, LINGER, Nat, Verdict};
 use std::io::{ErrorKind, Read, Write};
-use std::net::{Shutdown, SocketAddrV4, TcpListener, TcpStream};
+use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering::SeqCst},
@@ -12,7 +12,7 @@ const AP: u16 = 61000;
 const CLIENT: &str = "192.168.1.5:50000";
 const SERVER: &str = "162.159.135.232:443";
 
-fn sa(s: &str) -> SocketAddrV4 {
+fn sa(s: &str) -> SocketAddr {
     s.parse().unwrap()
 }
 fn seg(src: &str, dst: &str, flags: u8) -> Tcp<'static> {
@@ -72,11 +72,24 @@ fn a_syn_is_reflected_to_the_acceptor_and_its_replies_back() {
     assert_eq!(nat.destinations(), [sa(SERVER)]);
 }
 
-/// IPv4/TCP, 20 + 20 bytes, checksums 0xAAAA / 0xBBBB.
-fn packet(src: SocketAddrV4, dst: SocketAddrV4, flags: u8) -> Vec<u8> {
-    let mut p = vec![0x45, 0, 0, 40, 0, 1, 0x40, 0, 128, 6, 0xAA, 0xAA];
-    p.extend_from_slice(&src.ip().octets());
-    p.extend_from_slice(&dst.ip().octets());
+/// IPv4/TCP, 20 + 20 bytes, checksums 0xAAAA / 0xBBBB; or IPv6/TCP, 40 + 20 bytes, checksum
+/// 0xBBBB.
+fn packet(src: SocketAddr, dst: SocketAddr, flags: u8) -> Vec<u8> {
+    let mut p = match (src.ip(), dst.ip()) {
+        (IpAddr::V4(s), IpAddr::V4(d)) => [
+            &[0x45, 0, 0, 40, 0, 1, 0x40, 0, 128, 6, 0xAA, 0xAA][..],
+            &s.octets(),
+            &d.octets(),
+        ]
+        .concat(),
+        (IpAddr::V6(s), IpAddr::V6(d)) => [
+            &[0x60, 0, 0, 0, 0, 20, 6, 128][..],
+            &s.octets(),
+            &d.octets(),
+        ]
+        .concat(),
+        _ => unreachable!(),
+    };
     p.extend_from_slice(&src.port().to_be_bytes());
     p.extend_from_slice(&dst.port().to_be_bytes());
     p.extend_from_slice(&[
@@ -116,6 +129,66 @@ fn reflection_rewrites_the_bytes_both_ways() {
         assert_eq!((&p[10..12], &p[36..38]), (&[0u8, 0][..], &[0u8, 0][..]));
         assert_eq!(p[33], parse_tcp(p).unwrap().flags, "flags stay");
     }
+}
+
+#[test]
+fn an_ipv6_connection_is_reflected_like_an_ipv4_one() {
+    const CLIENT6: &str = "[2a02:6b8::5]:50000";
+    const SERVER6: &str = "[2606:4700::6810:84e5]:443";
+    let (t0, mut nat) = (Instant::now(), Nat::default());
+    let mut syn = packet(sa(CLIENT6), sa(SERVER6), SYN);
+    assert_eq!(
+        nat.from_client(&parse_tcp(&syn).unwrap(), AP, t0),
+        Verdict::Syn
+    );
+    let v = nat.admit(&parse_tcp(&syn).unwrap(), AP, t0);
+    assert_eq!(
+        v,
+        Verdict::Rewrite {
+            src: sa("[2606:4700::6810:84e5]:50000"),
+            dst: sa("[2a02:6b8::5]:61000"),
+        }
+    );
+    apply(&mut syn, v);
+    let ip = |s: &str| match s.parse::<IpAddr>().unwrap() {
+        IpAddr::V6(ip) => ip.octets(),
+        IpAddr::V4(_) => unreachable!(),
+    };
+    assert_eq!(syn[8..24], ip("2606:4700::6810:84e5"));
+    assert_eq!(syn[24..40], ip("2a02:6b8::5"));
+    assert_eq!(syn[40..44], [0xC3, 0x50, 0xEE, 0x48], "50000 -> 61000");
+    assert_eq!(
+        &syn[56..58],
+        &[0u8, 0][..],
+        "the checksum is left to WinDivert"
+    );
+    assert_eq!(syn[53], SYN, "flags stay");
+    assert_eq!(
+        nat.original(50000, "2606:4700::6810:84e5".parse().unwrap()),
+        Some(sa(SERVER6))
+    );
+    let mut synack = packet(
+        sa("[2a02:6b8::5]:61000"),
+        sa("[2606:4700::6810:84e5]:50000"),
+        SYN | ACK,
+    );
+    let v = nat.from_acceptor(&parse_tcp(&synack).unwrap(), t0);
+    assert_eq!(
+        v,
+        Verdict::Rewrite {
+            src: sa(SERVER6),
+            dst: sa(CLIENT6)
+        }
+    );
+    apply(&mut synack, v);
+    assert_eq!(synack[8..24], ip("2606:4700::6810:84e5"));
+    assert_eq!(synack[40..44], [0x01, 0xBB, 0xC3, 0x50], "443 -> 50000");
+    assert_eq!(
+        nat.from_acceptor(&reply(50000, ACK), t0),
+        Verdict::Drop,
+        "an IPv4 reply on the port is not the IPv6 entry's"
+    );
+    assert_eq!(nat.destinations(), [sa(SERVER6)]);
 }
 
 #[test]

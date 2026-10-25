@@ -14,7 +14,7 @@ use super::{FlowCounters, Tally, of_programs, sniff_text};
 use crate::divert::{DNS_FILTER, Dll, FLAG_RECV_ONLY, FLAG_SNIFF, Handle, Layer, MAX_PACKET};
 use crate::dns::{self, Names};
 use crate::owner::Images;
-use crate::packet::parse_udp;
+use crate::packet::parse_udp_any;
 use crate::rules::{Protocol, norm_app, runs};
 
 const IPPROTO_UDP: u8 = 17;
@@ -122,7 +122,7 @@ impl Observer {
             let Some(dns) = &s.dns else { return };
             let mut buf = vec![0u8; MAX_PACKET];
             while let Ok((n, _)) = dns.recv(&mut buf) {
-                if let Some(answer) = parse_udp(&buf[..n]).and_then(|u| dns::parse(u.payload)) {
+                if let Some(answer) = parse_udp_any(&buf[..n]).and_then(|(_, _, p)| dns::parse(p)) {
                     s.names.lock().unwrap().record(&answer, Instant::now());
                 }
             }
@@ -180,8 +180,8 @@ impl Observer {
         let names = self.shared.names.lock().unwrap();
         let now = Instant::now();
         for r in &mut rows {
-            if let Ok(SocketAddr::V4(dst)) = r.dst.parse() {
-                r.domain = names.name_of(*dst.ip(), now).map(str::to_string);
+            if let Ok(dst) = r.dst.parse::<SocketAddr>() {
+                r.domain = names.name_of(dst.ip(), now).map(str::to_string);
             }
         }
         rows

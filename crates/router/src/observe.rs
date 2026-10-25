@@ -112,7 +112,7 @@ fn be32(b: &[u8], at: usize) -> u32 {
 fn endpoints(p: &[u8]) -> Option<(Protocol, SocketAddr, SocketAddr)> {
     match p.first()? >> 4 {
         4 => match parse_tcp(p) {
-            Some(t) => Some((Protocol::Tcp, t.src.into(), t.dst.into())),
+            Some(t) => Some((Protocol::Tcp, t.src, t.dst)),
             None => parse_udp(p).map(|u| (Protocol::Udp, u.src.into(), u.dst.into())),
         },
         6 if p.len() >= 44 => {

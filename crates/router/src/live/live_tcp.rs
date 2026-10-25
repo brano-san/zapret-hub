@@ -2,7 +2,7 @@
 //! names learned from sniffed DNS answers.
 
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpStream};
+use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -13,7 +13,7 @@ use crate::dns;
 use crate::flows::ProxyState;
 use crate::flows::{self, DirectReason, FlowKey, QUEUE, Via};
 use crate::owner::{self, PID_WAIT};
-use crate::packet::{self, ACK, SYN, Tcp, parse_tcp, parse_udp, rewrite_tcp};
+use crate::packet::{self, ACK, SYN, Tcp, parse_tcp, parse_udp_any, rewrite_tcp};
 use crate::rules::Protocol;
 use crate::rules::Table;
 use crate::socks::{self, OPEN_TIMEOUT, SocksError};
@@ -36,8 +36,8 @@ impl Live {
         handle: Option<&Handle>,
         packet: &[u8],
         addr: &Address,
-        src: SocketAddrV4,
-        dst: SocketAddrV4,
+        src: SocketAddr,
+        dst: SocketAddr,
     ) {
         let mut p = packet.to_vec();
         rewrite_tcp(&mut p, src, dst);
@@ -87,6 +87,10 @@ impl Live {
         seg: &Tcp,
         addr: Address,
     ) {
+        // No IPv6 acceptor: IPv6 connections go direct.
+        if seg.src.is_ipv6() && self.acceptor6.is_none() {
+            return self.out(handle, packet, &addr);
+        }
         let now = Instant::now();
         // Only the acceptor sends from its port; a reply without an entry is dropped.
         if seg.src.port() == self.acceptor_port {
@@ -96,7 +100,7 @@ impl Live {
             }
             return;
         }
-        if self.is_stopped() || !packet::unicast(*seg.src.ip(), *seg.dst.ip()) {
+        if self.is_stopped() || !packet::unicast(seg.src.ip(), seg.dst.ip()) {
             return self.out(handle, packet, &addr);
         }
         let verdict = self
@@ -107,7 +111,7 @@ impl Live {
         let key = FlowKey {
             protocol: Protocol::Tcp,
             local_port: seg.src.port(),
-            dst: seg.dst.into(),
+            dst: seg.dst,
         };
         match verdict {
             Verdict::Rewrite { src, dst } => {
@@ -122,7 +126,7 @@ impl Live {
             Verdict::Drop => {}
             Verdict::Marked => {
                 let table = self.table.read().unwrap().clone();
-                if let Some(rule) = table.matches(Protocol::Tcp, seg.dst.into()) {
+                if let Some(rule) = table.matches(Protocol::Tcp, seg.dst) {
                     self.direct_row(key, rule, None, DirectReason::Marked, now);
                 }
                 self.out(handle, packet, &addr);
@@ -141,7 +145,7 @@ impl Live {
         now: Instant,
     ) {
         let table = self.table.read().unwrap().clone();
-        if table.matches(Protocol::Tcp, seg.dst.into()).is_none()
+        if table.matches(Protocol::Tcp, seg.dst).is_none()
             && !table.wants_owner(Protocol::Tcp, seg.dst.port())
         {
             return self.out(handle, packet, &addr);
@@ -153,7 +157,7 @@ impl Live {
         });
         let exe = pid.and_then(|p| self.images.get(p));
         let exe = exe.as_deref();
-        let Some(rule) = table.matches_flow(Protocol::Tcp, seg.dst.into(), exe) else {
+        let Some(rule) = table.matches_flow(Protocol::Tcp, seg.dst, exe) else {
             self.direct_row(key, "", exe, DirectReason::NoRule, now);
             return self.out(handle, packet, &addr);
         };
@@ -192,7 +196,7 @@ impl Live {
     /// Hands the held SYNs (admitted already) the filter just put in force covers (`active` and
     /// its held destinations) to it, keeping the rest; when it could not open, forgets their
     /// entries and sends them unchanged.
-    pub(crate) fn release(self: &Arc<Self>, active: Option<(Arc<Table>, Vec<Ipv4Addr>)>) {
+    pub(crate) fn release(self: &Arc<Self>, active: Option<(Arc<Table>, Vec<IpAddr>)>) {
         let opened = active.is_some();
         let syns = {
             let mut waiting = self.waiting.lock().unwrap();
@@ -215,7 +219,7 @@ impl Live {
             let key = FlowKey {
                 protocol: Protocol::Tcp,
                 local_port: seg.src.port(),
-                dst: seg.dst.into(),
+                dst: seg.dst,
             };
             let reason = DirectReason::Failed {
                 error: "the capture filter did not open".into(),
@@ -251,7 +255,7 @@ impl Live {
     pub(crate) fn dns_loop(self: &Arc<Self>, handle: &Handle) {
         let mut buf = vec![0u8; MAX_PACKET];
         while let Ok((n, _)) = handle.recv(&mut buf) {
-            let Some(answer) = parse_udp(&buf[..n]).and_then(|u| dns::parse(u.payload)) else {
+            let Some(answer) = parse_udp_any(&buf[..n]).and_then(|(_, _, p)| dns::parse(p)) else {
                 continue;
             };
             if !self.base.lock().unwrap().wants(&answer.name) {
@@ -264,8 +268,8 @@ impl Live {
     }
 
     /// Ends on the first connection after the session stopped (`shut` makes one).
-    pub(crate) fn accept_loop(self: &Arc<Self>) {
-        for conn in self.acceptor.incoming() {
+    pub(crate) fn accept_loop(self: &Arc<Self>, acceptor: &TcpListener) {
+        for conn in acceptor.incoming() {
             if self.is_stopped() {
                 return;
             }
@@ -281,13 +285,13 @@ impl Live {
 
     // ponytail: two threads per connection; a pool or IOCP if connections reach the hundreds.
     fn relay_tcp(self: Arc<Self>, client: TcpStream) {
-        let Ok(SocketAddr::V4(peer)) = client.peer_addr() else {
+        let Ok(peer) = client.peer_addr() else {
             return tcp::reset(client);
         };
         let port = peer.port();
         let orig = {
             let mut nat = self.nat.lock().unwrap();
-            let orig = nat.original(port, *peer.ip());
+            let orig = nat.original(port, peer.ip());
             if orig.is_some() {
                 nat.accepted(port);
             }
@@ -300,10 +304,10 @@ impl Live {
         let key = FlowKey {
             protocol: Protocol::Tcp,
             local_port: port,
-            dst: orig.into(),
+            dst: orig,
         };
-        let domain = self.domain_of(orig.into(), Instant::now());
-        let up = match socks::connect(self.proxy, orig.into(), domain.as_deref(), OPEN_TIMEOUT) {
+        let domain = self.domain_of(orig, Instant::now());
+        let up = match socks::connect(self.proxy, orig, domain.as_deref(), OPEN_TIMEOUT) {
             Ok(up) => up,
             Err(e) => {
                 let now = Instant::now();
@@ -347,10 +351,7 @@ impl Live {
         if self.is_stopped() {
             return Ok(()); // `shut` may have run before the insert
         }
-        // The NAT is IPv4, as are the connections it hands over.
-        let IpAddr::V4(dst) = key.dst.ip() else {
-            return Ok(());
-        };
+        let dst = key.dst.ip();
         let l = self.clone();
         let stop = move || {
             l.is_stopped()
@@ -410,17 +411,17 @@ impl Live {
                 .unwrap()
                 .destinations()
                 .iter()
-                .map(|d| IpAddr::V4(*d.ip())),
+                .map(|d| d.ip()),
         );
         self.names.lock().unwrap().expire(now, &live);
         let (gone, unaccepted) = {
             let mut nat = self.nat.lock().unwrap();
             (nat.expire(now), nat.unaccepted(now))
         };
-        let key = |local_port, dst: SocketAddrV4| FlowKey {
+        let key = |local_port, dst| FlowKey {
             protocol: Protocol::Tcp,
             local_port,
-            dst: dst.into(),
+            dst,
         };
         for (port, dst) in gone {
             self.end_conn(key(port, dst));

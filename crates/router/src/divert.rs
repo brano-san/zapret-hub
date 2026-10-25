@@ -2,13 +2,14 @@
 
 use crate::rules::{Protocol, Table};
 use anyhow::{Result, bail};
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 
 pub const MAX_FILTER_RANGES: usize = 64;
 pub const SOCKET_FILTER: &str =
     "!loopback and (udp or tcp) and (event == BIND or event == CONNECT or event == CLOSE)";
-pub const DNS_FILTER: &str = "ip and udp and udp.SrcPort == 53";
+/// IPv4 and IPv6: `udp` holds for both.
+pub const DNS_FILTER: &str = "udp and udp.SrcPort == 53";
 pub const EVENT_SOCKET_CLOSE: u8 = 7;
 pub const PROTO_TCP: u8 = 6;
 
@@ -29,6 +30,19 @@ fn range(&(lo, hi): &(u32, u32)) -> String {
     }
 }
 
+fn range6(&(lo, hi): &(u128, u128)) -> String {
+    let ip = |x: u128| Ipv6Addr::from(x);
+    if lo == hi {
+        format!("ipv6.DstAddr == {}", ip(lo))
+    } else {
+        format!(
+            "(ipv6.DstAddr >= {} and ipv6.DstAddr <= {})",
+            ip(lo),
+            ip(hi)
+        )
+    }
+}
+
 fn any(items: impl Iterator<Item = String>) -> String {
     format!("({})", items.collect::<Vec<_>>().join(" or "))
 }
@@ -45,8 +59,8 @@ fn on_ports(head: &str, proto: &str, ports: &[(u16, u16)]) -> String {
 /// WinDivert compiles a filter into at most 256 tests (`WINDIVERT_FILTER_MAXLEN`); this keeps
 /// a margin, since `capture_filter` counts the tests itself.
 pub const FILTER_BUDGET: usize = 200;
-/// `outbound`, `!loopback`, `ip`.
-const BASE_TESTS: usize = 3;
+/// `outbound`, `!loopback`.
+const BASE_TESTS: usize = 2;
 /// `tcp and tcp.SrcPort == N`.
 const ACCEPTOR_TESTS: usize = 2;
 
@@ -68,6 +82,8 @@ struct Part {
     ports: Vec<(u16, u16)>,
     /// Sorted, merged.
     ranges: Vec<(u32, u32)>,
+    /// IPv6 likewise.
+    ranges6: Vec<(u128, u128)>,
 }
 
 impl Part {
@@ -85,6 +101,11 @@ impl Part {
             .ranges
             .iter()
             .map(|&(a, b)| if a == b { 1 } else { 2 })
+            .chain(
+                self.ranges6
+                    .iter()
+                    .map(|&(a, b)| if a == b { 1 } else { 2 }),
+            )
             .sum();
         ranges
             + match self.kind {
@@ -107,17 +128,21 @@ impl Part {
             Kind::Syn => on_ports("tcp and tcp.Syn and !tcp.Ack", "tcp", &self.ports),
             Kind::Held => "tcp".into(),
         };
-        if self.ranges.is_empty() {
+        if self.ranges.is_empty() && self.ranges6.is_empty() {
             format!("({head})")
         } else {
-            format!("({head} and {})", any(self.ranges.iter().map(range)))
+            let ranges = self.ranges.iter().map(range);
+            format!(
+                "({head} and {})",
+                any(ranges.chain(self.ranges6.iter().map(range6)))
+            )
         }
     }
 }
 
 /// Inside one list, merges the two neighbouring items with the smallest gap (ties: the first).
 /// False when no list has two items.
-pub(crate) fn merge_closest<T: Copy + Ord + Into<u64>>(lists: Vec<&mut Vec<(T, T)>>) -> bool {
+pub(crate) fn merge_closest<T: Copy + Ord + Into<u128>>(lists: Vec<&mut Vec<(T, T)>>) -> bool {
     let closest = lists
         .iter()
         .enumerate()
@@ -136,19 +161,21 @@ pub(crate) fn merge_closest<T: Copy + Ord + Into<u64>>(lists: Vec<&mut Vec<(T, T
     true
 }
 
-/// Merges the closest IP ranges, then the closest ports, until at most `MAX_FILTER_RANGES`
+/// Merges the closest IPv6 ranges, then IPv4 ones (IPv4 filters stay as exact as before IPv6),
+/// then the closest ports, until at most `MAX_FILTER_RANGES`
 /// ranges are left and the filter has at most `FILTER_BUDGET` tests, or nothing is left to merge.
 // ponytail: O(n²) in the number of ranges and ports (hundreds at most); a heap of gaps if that
 // ever grows. The filter becomes a superset; `Table` stays exact and the hub re-sends what it does
 // not match.
 fn fit(parts: &mut [Part], extra: usize) {
     loop {
-        let ranges: usize = parts.iter().map(|p| p.ranges.len()).sum();
+        let ranges: usize = parts.iter().map(|p| p.ranges.len() + p.ranges6.len()).sum();
         let tests: usize = extra + parts.iter().map(Part::tests).sum::<usize>();
         if ranges <= MAX_FILTER_RANGES && tests <= FILTER_BUDGET {
             return;
         }
-        let merged = merge_closest(parts.iter_mut().map(|p| &mut p.ranges).collect())
+        let merged = merge_closest(parts.iter_mut().map(|p| &mut p.ranges6).collect())
+            || merge_closest(parts.iter_mut().map(|p| &mut p.ranges).collect())
             || (ranges <= MAX_FILTER_RANGES
                 && merge_closest(parts.iter_mut().map(|p| &mut p.ports).collect()));
         if !merged {
@@ -181,13 +208,13 @@ pub fn filter(table: &Table) -> Option<String> {
 /// resolved IPs; none yet, no part), the first SYNs of domain and program TCP rules (so the hub
 /// sees a SYN to an address learned since the last reopen, or decides a program's connection), the
 /// UDP of program rules while their program runs (`Compiled.running`), destinations of live NAT entries (`held`) and the
-/// local acceptor's replies.
-pub fn capture_filter(table: &Table, acceptor: Option<u16>, held: &[Ipv4Addr]) -> Option<String> {
+/// local acceptor's replies. IPv4 and IPv6: `tcp` and `udp` hold for both.
+pub fn capture_filter(table: &Table, acceptor: Option<u16>, held: &[IpAddr]) -> Option<String> {
     let mut parts: Vec<Part> = Vec::new();
     for r in &table.rules {
         let mut ports = r.ports.clone();
         ports.sort_unstable();
-        if !r.ranges.is_empty() {
+        if !r.ranges.is_empty() || !r.ranges6.is_empty() {
             let kind = match r.protocol {
                 Protocol::Udp => Kind::Udp,
                 Protocol::Tcp => Kind::Tcp,
@@ -197,27 +224,39 @@ pub fn capture_filter(table: &Table, acceptor: Option<u16>, held: &[Ipv4Addr]) -
                 kind,
                 ports: ports.clone(),
                 ranges: r.ranges.clone(),
+                ranges6: r.ranges6.clone(),
             });
         }
         let syn = r.protocol != Protocol::Udp && !(r.domains.is_empty() && r.apps.is_empty());
         // `running` is set only for rules that take UDP and have programs.
         let udp = r.protocol != Protocol::Tcp && !r.apps.is_empty() && r.running;
         for (wanted, kind) in [(syn, Kind::Syn), (udp, Kind::Udp)] {
-            let same = |p: &Part| p.kind == kind && p.ports == ports && p.ranges.is_empty();
+            let same = |p: &Part| {
+                p.kind == kind && p.ports == ports && p.ranges.is_empty() && p.ranges6.is_empty()
+            };
             if wanted && !parts.iter().any(same) {
                 parts.push(Part {
                     kind,
                     ports: ports.clone(),
                     ranges: vec![],
+                    ranges6: vec![],
                 });
             }
         }
     }
     if !held.is_empty() {
+        let (mut v4, mut v6) = (vec![], vec![]);
+        for ip in held {
+            match ip {
+                IpAddr::V4(ip) => v4.push((u32::from(*ip), u32::from(*ip))),
+                IpAddr::V6(ip) => v6.push((u128::from(*ip), u128::from(*ip))),
+            }
+        }
         parts.push(Part {
             kind: Kind::Held,
             ports: vec![],
-            ranges: crate::rules::merge(held.iter().map(|&ip| (ip.into(), ip.into())).collect()),
+            ranges: crate::rules::merge(v4),
+            ranges6: crate::rules::merge(v6),
         });
     }
     if parts.is_empty() {
@@ -231,7 +270,7 @@ pub fn capture_filter(table: &Table, acceptor: Option<u16>, held: &[Ipv4Addr]) -
         text.push(format!("(tcp and tcp.SrcPort == {port})"));
     }
     Some(format!(
-        "outbound and !loopback and ip and ({})",
+        "outbound and !loopback and ({})",
         text.join(" or ")
     ))
 }

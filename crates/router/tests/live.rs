@@ -319,8 +319,8 @@ fn the_largest_capture_filters_compile() {
         rules::preset(Preset::DiscordVoice),
     ])
     .with_names(&names);
-    let held: Vec<Ipv4Addr> = (0..100u32)
-        .map(|i| Ipv4Addr::from(0xC000_0000 + i * 7))
+    let held: Vec<std::net::IpAddr> = (0..100u32)
+        .map(|i| Ipv4Addr::from(0xC000_0000 + i * 7).into())
         .collect();
     let ranges = Table::new(&[Rule {
         domains: vec![],
@@ -333,8 +333,20 @@ fn the_largest_capture_filters_compile() {
         ..rules::preset(Preset::Discord)
     }]);
     let many: Vec<u16> = (0..300).map(|i| 10000 + 7 * i).collect();
+    let v6: Vec<String> = (0..80)
+        .map(|i| format!("2001:db8:{:x}::/48", i * 2))
+        .collect();
+    let v6 = Table::new(&[Rule {
+        domains: vec![],
+        ips: v6.into_iter().chain(["1.1.1.1".into()]).collect(),
+        ..rules::preset(Preset::DiscordVoice)
+    }]);
+    let held6 = ["2001:db8::1".parse().unwrap(), "1.2.3.4".parse().unwrap()];
     let dll = dll();
     for text in [
+        router::divert::DNS_FILTER.to_string(),
+        filter(&v6).unwrap(),
+        capture_filter(&Table::new(&[]), Some(61000), &held6).unwrap(),
         router::observe::sniff_text(&many),
         capture_filter(&table, Some(61000), &held).unwrap(),
         filter(&ranges).unwrap(),
@@ -342,5 +354,60 @@ fn the_largest_capture_filters_compile() {
     ] {
         dll.compile(&text, Layer::Network)
             .unwrap_or_else(|e| panic!("{e}: {text}"));
+    }
+}
+
+/// RFC 1071 over the IPv6 pseudo-header and the TCP/UDP segment (its checksum field zeroed).
+fn checksum6(p: &[u8]) -> u16 {
+    let mut seg = p[40..].to_vec();
+    let at = if p[6] == 6 { 16 } else { 6 };
+    seg[at..at + 2].fill(0);
+    let mut bytes = p[8..40].to_vec();
+    bytes.extend_from_slice(&(seg.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(&[0, 0, 0, p[6]]);
+    bytes.extend_from_slice(&seg);
+    if bytes.len() % 2 == 1 {
+        bytes.push(0);
+    }
+    let mut sum: u32 = bytes
+        .chunks(2)
+        .map(|w| u32::from(u16::from_be_bytes([w[0], w[1]])))
+        .sum();
+    while sum > 0xFFFF {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+    !(sum as u16)
+}
+
+#[test]
+#[ignore = "loads WinDivert.dll (no elevation needed): run with WINDIVERT_DLL set"]
+fn windivert_fills_ipv6_tcp_and_udp_checksums() {
+    use router::divert::Address;
+    use router::packet::{build_udp6, rewrite_tcp};
+    let dll = dll();
+    let mut tcp = vec![0x60, 0, 0, 0, 0, 27, 6, 64];
+    for ip in ["2a02:6b8::5", "2606:4700::1"] {
+        tcp.extend_from_slice(&ip.parse::<std::net::Ipv6Addr>().unwrap().octets());
+    }
+    tcp.extend_from_slice(&[
+        0xC3, 0x50, 0x01, 0xBB, 0, 0, 0, 1, 0, 0, 0, 0, 0x60, 0x18, 0xFA, 0xF0, 0x12, 0x34, 0, 0,
+    ]);
+    tcp.extend_from_slice(&[2, 4, 5, 0xA0, b'G', b'E', b'T']);
+    rewrite_tcp(
+        &mut tcp,
+        "[2606:4700::1]:50000".parse().unwrap(),
+        "[2a02:6b8::5]:61000".parse().unwrap(),
+    );
+    let udp = build_udp6(
+        "[2001:db8::53]:53".parse().unwrap(),
+        "[fd00::1]:40000".parse().unwrap(),
+        b"odd",
+    );
+    for (mut p, at) in [(tcp, 56), (udp, 46)] {
+        let mut addr = Address([0; 80]);
+        dll.checksums(&mut p, &mut addr);
+        let got = u16::from_be_bytes([p[at], p[at + 1]]);
+        assert_eq!(got, checksum6(&p), "{p:02x?}");
+        assert_ne!(got, 0);
     }
 }

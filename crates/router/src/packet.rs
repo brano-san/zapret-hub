@@ -1,6 +1,6 @@
 //! IPv4 and IPv6 UDP packets and the SOCKS5 UDP request header (RFC 1928, section 7).
 
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 pub struct Udp<'a> {
     pub src: SocketAddrV4,
@@ -8,9 +8,11 @@ pub struct Udp<'a> {
     pub payload: &'a [u8],
 }
 
-/// Multicast, broadcast and DHCP (from 0.0.0.0) packets are never relayed: they go out unchanged.
-pub fn unicast(src: Ipv4Addr, dst: Ipv4Addr) -> bool {
-    !(dst.is_multicast() || dst.is_broadcast() || src.is_unspecified())
+/// Multicast, broadcast and DHCP (from 0.0.0.0 or ::) packets are never relayed: they go out
+/// unchanged.
+pub fn unicast(src: IpAddr, dst: IpAddr) -> bool {
+    let broadcast = matches!(dst, IpAddr::V4(d) if d.is_broadcast());
+    !(dst.is_multicast() || broadcast || src.is_unspecified())
 }
 
 fn be16(b: &[u8], at: usize) -> u16 {
@@ -151,15 +153,54 @@ pub const RST: u8 = 0x04;
 pub const ACK: u8 = 0x10;
 
 pub struct Tcp<'a> {
-    pub src: SocketAddrV4,
-    pub dst: SocketAddrV4,
+    pub src: SocketAddr,
+    pub dst: SocketAddr,
     pub flags: u8,
     pub payload: &'a [u8],
 }
 
-/// Unfragmented IPv4/TCP only; header and option lengths must fit the packet.
+/// The TCP header's offset: the IPv4 header's length, or 40 for IPv6 with TCP right after the
+/// fixed header.
+fn l4_at(packet: &[u8]) -> usize {
+    match packet[0] >> 4 {
+        4 => usize::from(packet[0] & 0x0F) * 4,
+        _ => 40,
+    }
+}
+
+/// Unfragmented IPv4/TCP, or IPv6/TCP without extension headers; header and option lengths must
+/// fit the packet.
 pub fn parse_tcp(packet: &[u8]) -> Option<Tcp<'_>> {
-    if packet.len() < 40 || packet[0] >> 4 != 4 || packet[9] != 6 {
+    match packet.first()? >> 4 {
+        4 => parse_tcp4(packet),
+        6 => parse_tcp6(packet),
+        _ => None,
+    }
+}
+
+fn parse_tcp6(packet: &[u8]) -> Option<Tcp<'_>> {
+    if packet.len() < 60 || packet[6] != 6 {
+        return None;
+    }
+    let total = 40 + usize::from(be16(packet, 4));
+    let doff = usize::from(packet[52] >> 4) * 4;
+    if total > packet.len() || doff < 20 || 40 + doff > total {
+        return None;
+    }
+    let addr = |at: usize, port_at: usize| {
+        let ip: [u8; 16] = packet[at..at + 16].try_into().unwrap();
+        SocketAddr::new(Ipv6Addr::from(ip).into(), be16(packet, port_at))
+    };
+    Some(Tcp {
+        src: addr(8, 40),
+        dst: addr(24, 42),
+        flags: packet[53],
+        payload: &packet[40 + doff..total],
+    })
+}
+
+fn parse_tcp4(packet: &[u8]) -> Option<Tcp<'_>> {
+    if packet.len() < 40 || packet[9] != 6 {
         return None;
     }
     let ihl = usize::from(packet[0] & 0x0F) * 4;
@@ -172,8 +213,8 @@ pub fn parse_tcp(packet: &[u8]) -> Option<Tcp<'_>> {
         return None;
     }
     let addr = |at: usize, port_at: usize| {
-        SocketAddrV4::new(
-            Ipv4Addr::new(packet[at], packet[at + 1], packet[at + 2], packet[at + 3]),
+        SocketAddr::new(
+            Ipv4Addr::new(packet[at], packet[at + 1], packet[at + 2], packet[at + 3]).into(),
             be16(packet, port_at),
         )
     };
@@ -185,15 +226,34 @@ pub fn parse_tcp(packet: &[u8]) -> Option<Tcp<'_>> {
     })
 }
 
-/// For a packet that passed `parse_tcp`. Checksums are zeroed: `WinDivertHelperCalcChecksums` fills them in.
-pub fn rewrite_tcp(packet: &mut [u8], src: SocketAddrV4, dst: SocketAddrV4) {
-    let ihl = usize::from(packet[0] & 0x0F) * 4;
-    packet[12..16].copy_from_slice(&src.ip().octets());
-    packet[16..20].copy_from_slice(&dst.ip().octets());
-    packet[ihl..ihl + 2].copy_from_slice(&src.port().to_be_bytes());
-    packet[ihl + 2..ihl + 4].copy_from_slice(&dst.port().to_be_bytes());
-    packet[10..12].fill(0);
-    packet[ihl + 16..ihl + 18].fill(0);
+/// For a packet that passed `parse_tcp`, with addresses of its family. Checksums are zeroed:
+/// `WinDivertHelperCalcChecksums` fills them in (the IPv6 pseudo-header too).
+pub fn rewrite_tcp(packet: &mut [u8], src: SocketAddr, dst: SocketAddr) {
+    let at = l4_at(packet);
+    match (src.ip(), dst.ip()) {
+        (IpAddr::V4(s), IpAddr::V4(d)) => {
+            packet[12..16].copy_from_slice(&s.octets());
+            packet[16..20].copy_from_slice(&d.octets());
+            packet[10..12].fill(0);
+        }
+        (IpAddr::V6(s), IpAddr::V6(d)) => {
+            packet[8..24].copy_from_slice(&s.octets());
+            packet[24..40].copy_from_slice(&d.octets());
+        }
+        _ => unreachable!("a NAT entry keeps the family of its packets"),
+    }
+    packet[at..at + 2].copy_from_slice(&src.port().to_be_bytes());
+    packet[at + 2..at + 4].copy_from_slice(&dst.port().to_be_bytes());
+    packet[at + 16..at + 18].fill(0);
+}
+
+/// An IPv4 (with `id`) or IPv6 UDP packet; `None` when the families differ.
+pub fn build_udp_any(src: SocketAddr, dst: SocketAddr, payload: &[u8], id: u16) -> Option<Vec<u8>> {
+    match (src, dst) {
+        (SocketAddr::V4(s), SocketAddr::V4(d)) => Some(build_udp(s, d, payload, id)),
+        (SocketAddr::V6(s), SocketAddr::V6(d)) => Some(build_udp6(s, d, payload)),
+        _ => None,
+    }
 }
 
 /// `None` is the plain address header (type 1 or 4); a domain goes in as address type 3.

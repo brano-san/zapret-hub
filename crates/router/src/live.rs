@@ -4,7 +4,9 @@ mod live_tcp;
 
 use std::collections::{HashMap, hash_map::Entry};
 use std::mem::discriminant;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket};
+use std::net::{
+    IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket,
+};
 
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, Weak};
@@ -23,7 +25,9 @@ use crate::divert::{
 use crate::dns::Names;
 use crate::flows::{DirectReason, FlowKey, Pending, ProxyState, Stats, Via};
 use crate::owner::{Images, Owners, PID_WAIT};
-use crate::packet::{build_udp, parse_socks_udp_from, parse_tcp, parse_udp, socks_header_to};
+use crate::packet::{
+    build_udp_any, parse_socks_udp_from, parse_tcp, parse_udp_any, socks_header_to,
+};
 use crate::rules::{Protocol, Table};
 use crate::socks::{OPEN_TIMEOUT, SocksError};
 
@@ -34,7 +38,7 @@ const RULES_CHECK_TICKS: u32 = 4;
 const REOPEN_GAP: Duration = Duration::from_secs(1);
 /// On a stop, time for the acceptor's FINs to pass the capture before it shuts down.
 const FIN_DRAIN: Duration = Duration::from_millis(100);
-/// The largest UDP payload an IPv4 packet carries (`build_udp` refuses more).
+/// The largest UDP payload an IPv4 packet carries (`build_udp` refuses more; IPv6 takes it too).
 const MAX_PAYLOAD: usize = 65507;
 
 struct Relay {
@@ -42,7 +46,7 @@ struct Relay {
     socket: UdpSocket,
     relay: SocketAddrV4,
     inbound: Address,
-    local: SocketAddrV4,
+    local: SocketAddr,
     /// Named in each datagram's header instead of the address, when known.
     domain: Option<String>,
 }
@@ -76,19 +80,19 @@ struct Waiting {
     /// The table of the filter in force.
     active: Arc<Table>,
     /// The held destinations (live NAT entries) of the filter in force.
-    held: Vec<Ipv4Addr>,
+    held: Vec<IpAddr>,
     syns: Vec<(Vec<u8>, Address)>,
 }
 
 impl Waiting {
     /// The filter in force catches the connection's later segments.
-    fn covers(&self, dst: SocketAddrV4) -> bool {
-        self.active.matches(Protocol::Tcp, dst.into()).is_some() || self.held.contains(dst.ip())
+    fn covers(&self, dst: SocketAddr) -> bool {
+        self.active.matches(Protocol::Tcp, dst).is_some() || self.held.contains(&dst.ip())
     }
 
     /// Puts a new filter in force and takes the held SYNs it covers (and unparsable ones, which
     /// go out unchanged); the others stay held for the next filter (ruling R1).
-    fn activate(&mut self, active: Arc<Table>, held: Vec<Ipv4Addr>) -> Vec<(Vec<u8>, Address)> {
+    fn activate(&mut self, active: Arc<Table>, held: Vec<IpAddr>) -> Vec<(Vec<u8>, Address)> {
         self.active = active;
         self.held = held;
         let (go, stay) = std::mem::take(&mut self.syns)
@@ -100,7 +104,7 @@ impl Waiting {
 
     /// Drops the held SYNs of connections given up (source port, destination): a later filter
     /// must not replay them.
-    fn forget(&mut self, gone: &[(u16, SocketAddrV4)]) {
+    fn forget(&mut self, gone: &[(u16, SocketAddr)]) {
         self.syns
             .retain(|(p, _)| parse_tcp(p).is_none_or(|s| !gone.contains(&(s.src.port(), s.dst))));
     }
@@ -128,6 +132,8 @@ pub(super) struct Live {
     tcp_owners: Owners,
     nat: Mutex<tcp::Nat>,
     acceptor: TcpListener,
+    /// On the same port; `None` when IPv6 would not bind: IPv6 connections then go direct.
+    acceptor6: Option<TcpListener>,
     acceptor_port: u16,
     dns: Mutex<Option<Arc<Handle>>>,
     /// Both sockets of each proxied TCP connection, shut down when its NAT entry or the session ends.
@@ -148,6 +154,28 @@ fn learn_udp_programs(images: &Images) {
     for pid in owner::udp_pids() {
         images.get(pid);
     }
+}
+
+/// The local acceptor on every IPv4 address and, on the same port, on every IPv6 one (reflected
+/// segments go to the client's own address of either family).
+fn acceptors() -> Result<(TcpListener, Option<TcpListener>)> {
+    let mut v4 = None;
+    for _ in 0..16 {
+        let a = TcpListener::bind("0.0.0.0:0")
+            .map_err(|e| anyhow!("cannot open the local TCP acceptor: {e}"))?;
+        let port = a.local_addr()?.port();
+        // Windows sockets are IPv6-only by default: the two share the port number only.
+        match TcpListener::bind((Ipv6Addr::UNSPECIFIED, port)) {
+            Ok(b) => return Ok((a, Some(b))),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => v4 = Some(a),
+            Err(e) => {
+                log::warn!("IPv6 connections go direct: cannot open the IPv6 acceptor: {e}");
+                return Ok((a, None));
+            }
+        }
+    }
+    log::warn!("IPv6 connections go direct: the IPv6 acceptor port stays taken");
+    Ok((v4.expect("the loop ran"), None))
 }
 
 fn spawn(f: impl FnOnce() + Send + 'static) {
@@ -183,8 +211,7 @@ impl Live {
             )
             .map_err(|e| anyhow!("WinDivert refused the DNS handle: {e}"))?,
         );
-        let acceptor = TcpListener::bind("0.0.0.0:0")
-            .map_err(|e| anyhow!("cannot open the local TCP acceptor: {e}"))?;
+        let (acceptor, acceptor6) = acceptors()?;
         let acceptor_port = acceptor.local_addr()?.port();
         inner.names.lock().unwrap().expire(Instant::now(), &[]);
         if table.idle_apps() {
@@ -208,6 +235,7 @@ impl Live {
             tcp_owners: Owners::default(),
             nat: Mutex::new(tcp::Nat::default()),
             acceptor,
+            acceptor6,
             acceptor_port,
             dns: Mutex::new(Some(dns.clone())),
             conns: Mutex::new(HashMap::new()),
@@ -252,7 +280,11 @@ impl Live {
         let l = live.clone();
         spawn(move || l.dns_loop(&dns));
         let l = live.clone();
-        spawn(move || l.accept_loop());
+        spawn(move || l.accept_loop(&l.acceptor));
+        if live.acceptor6.is_some() {
+            let l = live.clone();
+            spawn(move || l.accept_loop(l.acceptor6.as_ref().unwrap()));
+        }
         let l = live.clone();
         spawn(move || l.housekeeping());
         let l = live.clone();
@@ -305,11 +337,17 @@ impl Live {
             // capture has reflected one per connection.
             std::thread::sleep(FIN_DRAIN);
         }
-        // Wakes the acceptor, which then sees `stopped`.
-        let _ = TcpStream::connect_timeout(
-            &SocketAddr::from((Ipv4Addr::LOCALHOST, self.acceptor_port)),
-            Duration::from_secs(1),
-        );
+        // Wakes the acceptors, which then see `stopped`.
+        let v6 = self
+            .acceptor6
+            .as_ref()
+            .map(|_| IpAddr::from(Ipv6Addr::LOCALHOST));
+        for ip in std::iter::once(IpAddr::from(Ipv4Addr::LOCALHOST)).chain(v6) {
+            let _ = TcpStream::connect_timeout(
+                &SocketAddr::new(ip, self.acceptor_port),
+                Duration::from_secs(1),
+            );
+        }
         if let Some(h) = self
             .sockets
             .lock()
@@ -361,14 +399,14 @@ impl Live {
             .with_names(&self.names.lock().unwrap().entries())
             .with_running(&exes);
         // Live connections keep their destination captured (spec 7), matched or not.
-        let held: Vec<Ipv4Addr> = self
+        let held: Vec<IpAddr> = self
             .nat
             .lock()
             .unwrap()
             .destinations()
             .into_iter()
-            .filter(|d| table.matches(Protocol::Tcp, (*d).into()).is_none())
-            .map(|d| *d.ip())
+            .filter(|d| table.matches(Protocol::Tcp, *d).is_none())
+            .map(|d| d.ip())
             .collect();
         let text = divert::capture_filter(&table, Some(self.acceptor_port), &held);
         let table = Arc::new(table);
@@ -468,25 +506,23 @@ impl Live {
             return self.on_tcp(Some(handle), packet, &seg, addr);
         }
         // Stopped: the old handle drains its queue unchanged, no new flows open.
-        let Some(udp) = parse_udp(packet)
-            .filter(|u| !self.is_stopped() && packet::unicast(*u.src.ip(), *u.dst.ip()))
+        let Some((src, dst, payload)) = parse_udp_any(packet)
+            .filter(|(s, d, _)| !self.is_stopped() && packet::unicast(s.ip(), d.ip()))
         else {
             let _ = handle.send(packet, &addr);
             return;
         };
         let table = self.table.read().unwrap().clone();
-        if table.match_udp(udp.dst.into()).is_none()
-            && !table.wants_owner(Protocol::Udp, udp.dst.port())
-        {
+        if table.match_udp(dst).is_none() && !table.wants_owner(Protocol::Udp, dst.port()) {
             let _ = handle.send(packet, &addr);
             return;
         }
         let key = FlowKey {
             protocol: rules::Protocol::Udp,
-            local_port: udp.src.port(),
-            dst: udp.dst.into(),
+            local_port: src.port(),
+            dst,
         };
-        let up = udp.payload.len() as u64;
+        let up = payload.len() as u64;
         if !self.flows.lock().unwrap().contains_key(&key) {
             // ponytail: waiting for the PID blocks capture up to 50 ms per new flow (new flows are
             // rare); upgrade: a deferred queue of first packets.
@@ -495,8 +531,7 @@ impl Live {
             });
             let exe = pid.and_then(|p| self.images.get(p));
             let now = Instant::now();
-            let Some(rule) = table.matches_flow(Protocol::Udp, udp.dst.into(), exe.as_deref())
-            else {
+            let Some(rule) = table.matches_flow(Protocol::Udp, dst, exe.as_deref()) else {
                 // Caught for a program rule, not its program: remembered, sent unchanged.
                 let mut flows = self.flows.lock().unwrap();
                 let new = match flows.entry(key) {
@@ -523,7 +558,7 @@ impl Live {
             let state = self.proxy_state.lock().unwrap().clone();
             let proxy_pid = *self.proxy_pid.lock().unwrap();
             let reason = flows::decide(&state, pid, std::process::id(), proxy_pid);
-            let domain = self.domain_of(udp.dst.into(), now);
+            let domain = self.domain_of(dst, now);
             let mut flows = self.flows.lock().unwrap();
             if let Entry::Vacant(e) = flows.entry(key) {
                 match reason {
@@ -556,7 +591,7 @@ impl Live {
                         }
                         drop(stats);
                         drop(flows);
-                        let (l, local, inbound) = (self.clone(), udp.src, addr.as_inbound());
+                        let (l, local, inbound) = (self.clone(), src, addr.as_inbound());
                         spawn(move || l.open_flow(key, local, inbound, domain));
                     }
                 }
@@ -569,7 +604,7 @@ impl Live {
             Some(FlowState::Proxy(relay)) => {
                 let relay = relay.clone();
                 drop(flows);
-                relay.send(udp.dst.into(), udp.payload);
+                relay.send(dst, payload);
                 self.stats.lock().unwrap().add(key, up, 0, Instant::now());
             }
             Some(FlowState::Direct(_)) | None => {
@@ -586,7 +621,7 @@ impl Live {
     fn open_flow(
         self: Arc<Self>,
         key: FlowKey,
-        local: SocketAddrV4,
+        local: SocketAddr,
         inbound: Address,
         domain: Option<String>,
     ) {
@@ -615,9 +650,9 @@ impl Live {
         let via = match opened {
             Ok(relay) => {
                 for (packet, _) in &pending {
-                    if let Some(udp) = parse_udp(packet) {
-                        relay.send(udp.dst.into(), udp.payload);
-                        up += udp.payload.len() as u64;
+                    if let Some((_, dst, payload)) = parse_udp_any(packet) {
+                        relay.send(dst, payload);
+                        up += payload.len() as u64;
                     }
                 }
                 flows.insert(key, FlowState::Proxy(relay.clone()));
@@ -632,7 +667,7 @@ impl Live {
             Err(e) => {
                 for (packet, addr) in &pending {
                     self.inject(packet, addr);
-                    up += parse_udp(packet).map_or(0, |u| u.payload.len() as u64);
+                    up += parse_udp_any(packet).map_or(0, |(_, _, p)| p.len() as u64);
                 }
                 let reason = DirectReason::from(&e);
                 flows.insert(key, FlowState::Direct(reason.clone()));
@@ -679,14 +714,15 @@ impl Live {
             if from != SocketAddr::V4(relay.relay) {
                 continue;
             }
-            // A short domain header leaves more than MAX_PAYLOAD, which `build_udp` refuses.
-            let Some((SocketAddr::V4(src), data)) = parse_socks_udp_from(&buf[..n], key.dst)
+            // A short domain header leaves more than MAX_PAYLOAD, which `build_udp` refuses; a
+            // reply from the other family has no packet to go in.
+            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            let Some((mut packet, data)) = parse_socks_udp_from(&buf[..n], key.dst)
                 .filter(|(_, data)| data.len() <= MAX_PAYLOAD)
+                .and_then(|(src, data)| Some((build_udp_any(src, relay.local, data, id)?, data)))
             else {
                 continue;
             };
-            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-            let mut packet = build_udp(src, relay.local, data, id);
             let mut addr = relay.inbound;
             self.dll.checksums(&mut packet, &mut addr);
             self.inject(&packet, &addr);
@@ -828,55 +864,76 @@ mod tests {
     use super::*;
     use crate::rules::Rule;
 
-    fn syn_to(dst: SocketAddrV4) -> (Vec<u8>, Address) {
-        let mut p = vec![
-            0x45, 0, 0, 40, 0, 1, 0x40, 0, 128, 6, 0, 0, 192, 168, 1, 5, 0, 0, 0, 0,
-        ];
-        p[16..20].copy_from_slice(&dst.ip().octets());
+    /// A bare SYN from port 50000 to `dst`, IPv4 or IPv6.
+    fn syn_to(dst: SocketAddr) -> (Vec<u8>, Address) {
+        let mut p = match dst.ip() {
+            IpAddr::V4(ip) => {
+                let mut p = vec![
+                    0x45, 0, 0, 40, 0, 1, 0x40, 0, 128, 6, 0, 0, 192, 168, 1, 5, 0, 0, 0, 0,
+                ];
+                p[16..20].copy_from_slice(&ip.octets());
+                p
+            }
+            IpAddr::V6(ip) => {
+                let mut p = vec![0x60, 0, 0, 0, 0, 20, 6, 128];
+                p.extend_from_slice(&Ipv6Addr::new(0x2a02, 0x6b8, 0, 0, 0, 0, 0, 5).octets());
+                p.extend_from_slice(&ip.octets());
+                p
+            }
+        };
         p.extend_from_slice(&[0xC3, 0x50]);
         p.extend_from_slice(&dst.port().to_be_bytes());
         p.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 0, 0x50, 0x02, 0xFA, 0xF0, 0, 0, 0, 0]);
         (p, Address([0; 80]))
     }
 
+    fn sa(s: &str) -> SocketAddr {
+        s.parse().unwrap()
+    }
+
     #[test]
     fn a_new_filter_takes_only_the_held_syns_it_covers() {
-        let ruled: SocketAddrV4 = "1.1.1.1:443".parse().unwrap();
-        let held: SocketAddrV4 = "8.8.8.8:443".parse().unwrap();
-        let later: SocketAddrV4 = "9.9.9.9:443".parse().unwrap();
+        let ruled = sa("1.1.1.1:443");
+        let held = sa("8.8.8.8:443");
+        let later = sa("9.9.9.9:443");
+        let ruled6 = sa("[2001:db8::1]:443");
+        let held6 = sa("[2001:db8::8]:443");
+        let later6 = sa("[2001:db8::9]:443");
         let table = Table::new(&[Rule {
             name: "one".into(),
             enabled: true,
             protocol: Protocol::Tcp,
             ports: vec![],
-            ips: vec!["1.1.1.1/32".into()],
+            ips: vec!["1.1.1.1/32".into(), "2001:db8::1".into()],
             domains: vec![],
             apps: vec![],
         }]);
         let mut w = Waiting {
-            syns: vec![
-                syn_to(ruled),
-                syn_to(held),
-                syn_to(later),
-                (vec![1, 2, 3], Address([0; 80])),
-            ],
+            syns: [ruled, held, later, ruled6, held6, later6]
+                .into_iter()
+                .map(syn_to)
+                .chain([(vec![1, 2, 3], Address([0; 80]))])
+                .collect(),
             ..Waiting::default()
         };
-        let go = w.activate(Arc::new(table), vec![*held.ip()]);
+        let go = w.activate(Arc::new(table), vec![held.ip(), held6.ip()]);
         let dst = |s: &(Vec<u8>, Address)| parse_tcp(&s.0).map(|t| t.dst);
         assert_eq!(
             go.iter().map(dst).collect::<Vec<_>>(),
-            [Some(ruled), Some(held), None],
+            [Some(ruled), Some(held), Some(ruled6), Some(held6), None],
             "covered and unparsable go"
         );
-        assert_eq!(w.syns.iter().map(dst).collect::<Vec<_>>(), [Some(later)]);
-        assert!(w.covers(held) && !w.covers(later));
+        assert_eq!(
+            w.syns.iter().map(dst).collect::<Vec<_>>(),
+            [Some(later), Some(later6)]
+        );
+        assert!(w.covers(held) && !w.covers(later) && w.covers(held6) && !w.covers(later6));
     }
 
     #[test]
     fn forgetting_a_connection_drops_only_its_held_syn() {
-        let a: SocketAddrV4 = "1.1.1.1:443".parse().unwrap();
-        let b: SocketAddrV4 = "2.2.2.2:443".parse().unwrap();
+        let a = sa("1.1.1.1:443");
+        let b = sa("[2001:db8::2]:443");
         let mut w = Waiting {
             syns: vec![syn_to(a), syn_to(b), (vec![1, 2, 3], Address([0; 80]))],
             ..Waiting::default()

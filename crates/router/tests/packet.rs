@@ -2,8 +2,8 @@ use router::divert::Address;
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 
 use router::packet::{
-    ACK, SYN, build_udp, build_udp6, parse_socks_udp, parse_socks_udp_from, parse_tcp, parse_udp,
-    parse_udp_any, parse_udp6, rewrite_tcp, socks_header, socks_header_to,
+    ACK, SYN, build_udp, build_udp_any, build_udp6, parse_socks_udp, parse_socks_udp_from,
+    parse_tcp, parse_udp, parse_udp_any, parse_udp6, rewrite_tcp, socks_header, socks_header_to,
 };
 
 #[test]
@@ -98,13 +98,17 @@ fn an_outbound_address_turns_inbound_and_socket_fields_read() {
 #[test]
 fn only_unicast_packets_are_routed() {
     use router::packet::unicast;
-    let ip = |s: &str| s.parse::<std::net::Ipv4Addr>().unwrap();
+    let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
     assert!(unicast(ip("192.168.1.5"), ip("104.29.1.1")));
     assert!(!unicast(ip("192.168.1.5"), ip("224.0.0.251")), "mDNS");
     assert!(!unicast(ip("192.168.1.5"), ip("239.255.255.250")), "SSDP");
     assert!(!unicast(ip("192.168.1.5"), ip("255.255.255.255")));
     assert!(!unicast(ip("0.0.0.0"), ip("255.255.255.255")), "DHCP");
     assert!(!unicast(ip("0.0.0.0"), ip("104.29.1.1")));
+    assert!(unicast(ip("2a02:6b8::5"), ip("2606:4700::1")));
+    assert!(!unicast(ip("fe80::1"), ip("ff02::fb")), "IPv6 mDNS");
+    assert!(!unicast(ip("::"), ip("ff02::1:2")), "DHCPv6");
+    assert!(!unicast(ip("::"), ip("2606:4700::1")));
 }
 
 /// 192.168.1.5:50000 -> 162.159.135.232:443, SYN, data offset 6 (an MSS option), checksums 0x1234 / 0xABCD.
@@ -242,5 +246,102 @@ fn an_ipv6_udp_packet_builds_and_parses_back() {
     assert_eq!(
         parse_udp_any(&v4).map(|(_, d, x)| (d.to_string(), x)),
         Some(("10.0.0.2:53".into(), &b"x"[..]))
+    );
+}
+
+/// [2a02:6b8::5]:50000 -> [2606:4700::1]:443, SYN, data offset 6 (an MSS option), checksum 0x1234.
+fn syn6() -> Vec<u8> {
+    let mut p = vec![0x60, 0, 0, 0, 0, 24, 6, 64];
+    p.extend_from_slice(
+        &"2a02:6b8::5"
+            .parse::<std::net::Ipv6Addr>()
+            .unwrap()
+            .octets(),
+    );
+    p.extend_from_slice(
+        &"2606:4700::1"
+            .parse::<std::net::Ipv6Addr>()
+            .unwrap()
+            .octets(),
+    );
+    p.extend_from_slice(&[
+        0xC3, 0x50, 0x01, 0xBB, 0, 0, 0, 1, 0, 0, 0, 0, 0x60, 0x02, 0xFA, 0xF0, 0x12, 0x34, 0, 0,
+    ]);
+    p.extend_from_slice(&[2, 4, 5, 0xA0]);
+    p
+}
+
+#[test]
+fn an_ipv6_tcp_segment_parses_and_rewrites() {
+    let p = syn6();
+    let t = parse_tcp(&p).unwrap();
+    assert_eq!(
+        (t.src.to_string(), t.dst.to_string()),
+        ("[2a02:6b8::5]:50000".into(), "[2606:4700::1]:443".into())
+    );
+    assert_eq!(t.flags & (SYN | ACK), SYN);
+    assert!(t.payload.is_empty(), "options are not payload");
+    let mut data = p.clone();
+    data.extend_from_slice(b"GET");
+    data[5] = 27;
+    assert_eq!(parse_tcp(&data).unwrap().payload, b"GET");
+    let (mut udp, mut short, mut long, mut hop) = (p.clone(), p.clone(), p.clone(), p.clone());
+    udp[6] = 17;
+    short[52] = 0x40;
+    long[52] = 0xF0;
+    hop[6] = 0;
+    for bad in [udp, short, long, hop, p[..59].to_vec()] {
+        assert!(parse_tcp(&bad).is_none());
+    }
+    let mut r = p.clone();
+    rewrite_tcp(
+        &mut r,
+        "[2606:4700::1]:50000".parse().unwrap(),
+        "[2a02:6b8::5]:61000".parse().unwrap(),
+    );
+    assert_eq!(
+        (&r[8..24], &r[24..40]),
+        (&p[24..40], &p[8..24]),
+        "addresses swap"
+    );
+    assert_eq!(r[40..44], [0xC3, 0x50, 0xEE, 0x48]);
+    assert_eq!(
+        &r[56..58],
+        &[0u8, 0][..],
+        "the checksum is left to WinDivert"
+    );
+    assert_eq!(
+        (&r[..8], &r[44..56], &r[58..]),
+        (&p[..8], &p[44..56], &p[58..]),
+        "header, sequence, flags, window and options stay"
+    );
+}
+
+#[test]
+fn a_udp_reply_is_built_in_the_flows_family() {
+    let v6 = build_udp_any(
+        "[2001:db8::53]:53".parse().unwrap(),
+        "[fd00::1]:40000".parse().unwrap(),
+        b"x",
+        9,
+    )
+    .unwrap();
+    assert_eq!(v6[0] >> 4, 6);
+    let v4 = build_udp_any(
+        "1.2.3.4:53".parse().unwrap(),
+        "10.0.0.1:40000".parse().unwrap(),
+        b"x",
+        9,
+    )
+    .unwrap();
+    assert_eq!(&v4[4..6], &[0, 9][..], "the IPv4 id");
+    assert!(
+        build_udp_any(
+            "1.2.3.4:53".parse().unwrap(),
+            "[fd00::1]:40000".parse().unwrap(),
+            b"x",
+            9
+        )
+        .is_none()
     );
 }

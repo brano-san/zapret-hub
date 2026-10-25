@@ -8,7 +8,7 @@
 use crate::packet::{ACK, FIN, RST, SYN, Tcp};
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
-use std::net::{Ipv4Addr, Shutdown, SocketAddrV4, TcpStream};
+use std::net::{IpAddr, Shutdown, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
 pub const IDLE: Duration = Duration::from_secs(120);
@@ -25,14 +25,14 @@ pub enum Verdict {
     Syn,
     /// Rewrite the addresses and send the segment as inbound.
     Rewrite {
-        src: SocketAddrV4,
-        dst: SocketAddrV4,
+        src: SocketAddr,
+        dst: SocketAddr,
     },
     Drop,
 }
 
 struct Entry {
-    orig: SocketAddrV4,
+    orig: SocketAddr,
     client_fin: bool,
     acceptor_fin: bool,
     closed: Option<Instant>,
@@ -66,9 +66,9 @@ impl Entry {
 #[derive(Default)]
 pub struct Nat {
     entries: HashMap<u16, Entry>,
-    marks: HashMap<SocketAddrV4, Instant>,
+    marks: HashMap<SocketAddr, Instant>,
     /// Closed entries a new SYN replaced, reported by the next `expire`.
-    replaced: Vec<(u16, SocketAddrV4)>,
+    replaced: Vec<(u16, SocketAddr)>,
 }
 
 fn bare_syn(seg: &Tcp) -> bool {
@@ -124,7 +124,7 @@ impl Nat {
                 e.see(seg.flags, false, now);
                 Verdict::Rewrite {
                     src: e.orig,
-                    dst: SocketAddrV4::new(*seg.src.ip(), port),
+                    dst: SocketAddr::new(seg.src.ip(), port),
                 }
             }
             _ => Verdict::Drop,
@@ -132,11 +132,11 @@ impl Nat {
     }
 
     /// `peer` is the accepted socket's peer ip, which reflection set to the original one.
-    pub fn original(&self, client_port: u16, peer: Ipv4Addr) -> Option<SocketAddrV4> {
+    pub fn original(&self, client_port: u16, peer: IpAddr) -> Option<SocketAddr> {
         self.entries
             .get(&client_port)
             .map(|e| e.orig)
-            .filter(|o| *o.ip() == peer)
+            .filter(|o| o.ip() == peer)
     }
 
     pub fn accepted(&mut self, client_port: u16) {
@@ -146,7 +146,7 @@ impl Nat {
     }
 
     /// Removes entries the acceptor has not seen for `ACCEPT_WAIT`, marks their destinations.
-    pub fn unaccepted(&mut self, now: Instant) -> Vec<(u16, SocketAddrV4)> {
+    pub fn unaccepted(&mut self, now: Instant) -> Vec<(u16, SocketAddr)> {
         let gone: Vec<_> = self
             .entries
             .iter()
@@ -161,11 +161,11 @@ impl Nat {
     }
 
     /// Removes the entry without marking its destination (its SYN goes out unchanged).
-    pub fn forget(&mut self, client_port: u16) -> Option<SocketAddrV4> {
+    pub fn forget(&mut self, client_port: u16) -> Option<SocketAddr> {
         self.entries.remove(&client_port).map(|e| e.orig)
     }
 
-    pub fn mark_direct(&mut self, dst: SocketAddrV4, now: Instant) {
+    pub fn mark_direct(&mut self, dst: SocketAddr, now: Instant) {
         self.marks.insert(dst, now);
     }
 
@@ -175,7 +175,7 @@ impl Nat {
 
     /// Closes idle entries (they linger too), removes closed entries past `LINGER` and old marks;
     /// returns the newly idle and the removed entries.
-    pub fn expire(&mut self, now: Instant) -> Vec<(u16, SocketAddrV4)> {
+    pub fn expire(&mut self, now: Instant) -> Vec<(u16, SocketAddr)> {
         let mut gone = std::mem::take(&mut self.replaced);
         self.entries.retain(|port, e| {
             if e.closed.is_none() && now.duration_since(e.last) >= IDLE {
@@ -193,11 +193,11 @@ impl Nat {
         gone
     }
 
-    pub fn destinations(&self) -> Vec<SocketAddrV4> {
+    pub fn destinations(&self) -> Vec<SocketAddr> {
         self.entries.values().map(|e| e.orig).collect()
     }
 
-    fn marked(&self, dst: SocketAddrV4, now: Instant) -> bool {
+    fn marked(&self, dst: SocketAddr, now: Instant) -> bool {
         self.marks
             .get(&dst)
             .is_some_and(|t| now.duration_since(*t) < DIRECT_FOR)
@@ -206,8 +206,8 @@ impl Nat {
 
 fn to_acceptor(seg: &Tcp, acceptor: u16) -> Verdict {
     Verdict::Rewrite {
-        src: SocketAddrV4::new(*seg.dst.ip(), seg.src.port()),
-        dst: SocketAddrV4::new(*seg.src.ip(), acceptor),
+        src: SocketAddr::new(seg.dst.ip(), seg.src.port()),
+        dst: SocketAddr::new(seg.src.ip(), acceptor),
     }
 }
 
