@@ -194,14 +194,14 @@ pub fn run() -> anyhow::Result<()> {
     // Read before the settings load: saving them drops the old key (0.8.0 used Flowseal).
     let flowseal = settings::flowseal_dir(&paths.settings());
     let (mut settings, damaged) = settings::load_or_default(&paths.settings());
+    // Saved once the move is done (`jobs::startup`): a stop before that keeps the old key in the
+    // file, and the next start moves again.
     if let Some(dir) = &flowseal {
         settings::migrate_flowseal(&mut settings, dir);
-        if let Err(err) = settings::save(&paths.settings(), &settings) {
-            log::error!("failed to save the settings moved off Flowseal: {err:#}");
-        }
     }
     // The `tg://proxy` link must survive restarts: a secret is made once and kept.
     if tgws::ensure_secret(&mut settings)
+        && flowseal.is_none()
         && let Err(err) = settings::save(&paths.settings(), &settings)
     {
         log::warn!("cannot save the TG WS Proxy secret: {err:#}");

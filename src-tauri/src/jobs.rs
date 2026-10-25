@@ -180,6 +180,11 @@ fn startup(app: &AppHandle, flowseal: Option<PathBuf>) {
     }
     if let Some(dir) = flowseal {
         actions::migrate_flowseal(app, &dir);
+        // Only now the file loses the old key: the move is not lost to a stop halfway.
+        let _saving = state.saving();
+        if let Err(err) = crate::settings::save(&state.paths.settings(), &state.settings()) {
+            log::error!("failed to save the settings moved off Flowseal: {err:#}");
+        }
     }
     if state.settings().autostart {
         let refreshed = std::env::current_exe()
