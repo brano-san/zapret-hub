@@ -263,36 +263,36 @@ fn as_root(exec: &str) -> String {
     }
 }
 
-/// Why root must not run `exe` (`owner`/`mode` of the file, then of its folder): a file or folder
-/// another user may change would run their code as root.
-fn refuse_root_engine(exe: &str, file: (u32, u32), dir: (u32, u32)) -> Option<String> {
-    let safe = |(owner, mode): (u32, u32)| owner == 0 && mode & 0o022 == 0;
-    (!safe(file) || !safe(dir)).then(|| {
-        format!(
-            "Zapret Hub runs as root without sudo or pkexec, so zapret2 would run {exe} as root, \
-             but that file or its folder is not root's alone: start Zapret Hub as your user (or \
-             through sudo), or keep zapret2 in a folder only root may change"
-        )
-    })
+/// Why root must not run `exe`: `chain` is (path, owner, mode) of the file and of every folder
+/// above it up to `/`; one that another user may change (a sticky `/tmp` too) would let them put
+/// their code in its place, to run as root.
+fn refuse_root_engine(exe: &str, chain: &[(String, u32, u32)]) -> Option<String> {
+    let (path, _, _) = chain
+        .iter()
+        .find(|(_, owner, mode)| *owner != 0 || mode & 0o022 != 0)?;
+    Some(format!(
+        "Zapret Hub runs as root without sudo or pkexec, so zapret2 would run {exe} as root, \
+         but {path} is not root's alone: start Zapret Hub as your user (or through sudo), or keep \
+         zapret2 in a folder only root may change, all the way up"
+    ))
 }
 
-/// The engine line of a unit that runs it as root (`as_root`), refused for a file that is not
-/// root's alone (`refuse_root_engine`).
+/// The engine line of a unit that runs it as root (`as_root`), with the program's canonical path
+/// (no link to swap later), refused for a file not root's alone up to `/` (`refuse_root_engine`).
 fn root_engine(exec: &str) -> anyhow::Result<String> {
     use std::os::unix::fs::MetadataExt as _;
-    let exe = first_word(exec)
-        .map(|(w, _)| PathBuf::from(w))
-        .context("the engine's command line has no program")?;
-    let meta = |p: &Path| {
-        std::fs::metadata(p)
-            .map(|m| (m.uid(), m.mode()))
-            .with_context(|| p.display().to_string())
-    };
-    let dir = exe.parent().unwrap_or(Path::new("/"));
-    if let Some(why) = refuse_root_engine(&exe.display().to_string(), meta(&exe)?, meta(dir)?) {
+    let (exe, end) = first_word(exec).context("the engine's command line has no program")?;
+    let real = std::fs::canonicalize(&exe).with_context(|| exe.clone())?;
+    let mut chain = Vec::new();
+    for p in real.ancestors() {
+        let meta = std::fs::symlink_metadata(p).with_context(|| p.display().to_string())?;
+        chain.push((p.display().to_string(), meta.uid(), meta.mode()));
+    }
+    if let Some(why) = refuse_root_engine(&real.display().to_string(), &chain) {
         anyhow::bail!(why);
     }
-    Ok(as_root(exec))
+    let program = exec_line(&[real.display().to_string()]);
+    Ok(as_root(&format!("{program}{}", &exec[end..])))
 }
 
 /// The unit of `name` as it should be: the `zapret2` one runs the engine (`EngineUnit`).
@@ -522,6 +522,25 @@ mod tests {
     }
 
     #[test]
+    fn a_root_engine_runs_the_canonical_path_of_roots_file_only() {
+        // `/bin/true` may be a link (merged /usr): the unit names where it leads.
+        let real = std::fs::canonicalize("/bin/true").unwrap();
+        let line = root_engine(&exec_line(&["/bin/true".into(), "--x".into()])).unwrap();
+        assert_eq!(
+            systemd_split(&line),
+            [real.display().to_string(), "--uid=0:0".into(), "--x".into()]
+        );
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } != 0 {
+            let dir = tempfile::tempdir().unwrap();
+            let mine = dir.path().join("nfqws2");
+            std::fs::write(&mine, "").unwrap();
+            let line = exec_line(&[mine.display().to_string()]);
+            assert!(root_engine(&line).is_err(), "a user's file");
+        }
+    }
+
+    #[test]
     fn a_root_engine_keeps_root_once_and_only_for_roots_own_file() {
         let argv: Vec<String> = ["/root/my \"z2\"/nfqws2", "--qnum=200"]
             .map(str::to_owned)
@@ -541,17 +560,32 @@ mod tests {
         assert_eq!(as_root(&own), own, "the strategy's own user stays");
 
         let exe = "/root/z2/nfqws2";
-        assert_eq!(refuse_root_engine(exe, (0, 0o755), (0, 0o700)), None);
-        for (file, dir) in [
-            ((1000, 0o755), (0, 0o755)),
-            ((0, 0o775), (0, 0o755)),
-            ((0, 0o755), (1000, 0o755)),
-            ((0, 0o755), (0, 0o777)),
+        let chain = |modes: [(u32, u32); 4]| {
+            ["/root/z2/nfqws2", "/root/z2", "/root", "/"]
+                .iter()
+                .zip(modes)
+                .map(|(p, (owner, mode))| ((*p).to_owned(), owner, mode))
+                .collect::<Vec<_>>()
+        };
+        let ok = [
+            (0, 0o100_755),
+            (0, 0o040_755),
+            (0, 0o040_700),
+            (0, 0o040_755),
+        ];
+        assert_eq!(refuse_root_engine(exe, &chain(ok)), None);
+        for (i, bad) in [
+            (0, (1000, 0o755)),
+            (0, (0, 0o775)),
+            (1, (1000, 0o755)),
+            (2, (0, 0o777)),
+            (3, (0, 0o1777)),
         ] {
-            assert!(
-                refuse_root_engine(exe, file, dir).is_some(),
-                "{file:?} {dir:?}"
-            );
+            let mut modes = ok;
+            modes[i] = bad;
+            let why = refuse_root_engine(exe, &chain(modes)).expect("refused");
+            let path = ["/root/z2/nfqws2", "/root/z2", "/root", "/"][i];
+            assert!(why.contains(&format!("but {path} is")), "{why}");
         }
     }
 
