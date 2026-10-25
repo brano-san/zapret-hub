@@ -206,3 +206,49 @@ pub fn image_path(pid: u32) -> Option<String> {
         Some(String::from_utf16_lossy(&buf[..len as usize]))
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_ipv6_table_row_names_the_owner_of_a_port() {
+        let row = |port: u16, pid: u32| MIB_TCP6ROW_OWNER_PID {
+            dwLocalPort: u32::from(port.to_be()),
+            dwOwningPid: pid,
+            ..Default::default()
+        };
+        let rows = [row(50000, 0), row(443, 7), row(50000, 4242)];
+        let at = std::mem::offset_of!(MIB_TCP6TABLE_OWNER_PID, table);
+        let mut table = vec![0u8; at + size_of_val(&rows)];
+        table[..4].copy_from_slice(&3u32.to_ne_bytes());
+        // SAFETY: `rows` is plain data of exactly that many bytes.
+        let bytes =
+            unsafe { std::slice::from_raw_parts(rows.as_ptr().cast::<u8>(), size_of_val(&rows)) };
+        table[at..].copy_from_slice(bytes);
+        let fetch = |buf: Option<*mut c_void>, size: &mut u32| match buf {
+            Some(buf) if *size as usize >= table.len() => {
+                // SAFETY: `owner_rows` passes a buffer of at least `*size` bytes.
+                unsafe { std::ptr::copy_nonoverlapping(table.as_ptr(), buf.cast(), table.len()) };
+                0
+            }
+            _ => {
+                *size = table.len() as u32;
+                ERROR_INSUFFICIENT_BUFFER
+            }
+        };
+        let owner = |port| {
+            owner_rows(fetch, at, |rows: &[MIB_TCP6ROW_OWNER_PID]| {
+                rows.iter()
+                    .find_map(|r| row_owner(r.dwLocalPort, r.dwOwningPid, port))
+            })
+        };
+        assert_eq!(
+            owner(50000),
+            Some(4242),
+            "a TIME_WAIT row (PID 0) never counts"
+        );
+        assert_eq!(owner(443), Some(7));
+        assert_eq!(owner(80), None);
+    }
+}
