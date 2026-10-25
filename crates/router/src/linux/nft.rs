@@ -1,8 +1,9 @@
 //! The routing table as `nft -f` takes it. Fixed base chains skip what must never loop back (the
 //! hub's own marked sockets, loopback, the `zapret-bypass` group, the SOCKS5 proxy itself) and jump
-//! to two match chains, the only part `update` rewrites: one transaction flushes and refills them,
-//! so a change of rules or resolved names never leaves a moment without a match, and live TCP
-//! connections keep their conntrack NAT.
+//! to two match chains; those and the set of local subnet broadcasts are the only part `update`
+//! rewrites: one transaction flushes and refills them, so a change of rules, resolved names or
+//! interfaces never leaves a moment without a match, and live TCP connections keep their
+//! conntrack NAT.
 //!
 //! TCP: `nat output` redirects a match to the acceptor. UDP: a `route output` chain marks a match
 //! with `MARK_TPROXY`; `ip rule fwmark … lookup <table>` (`Policy`) + a `local` route send it to `lo`,
@@ -74,10 +75,36 @@ fn matches(table: &Table, protocol: Protocol) -> Vec<String> {
     out
 }
 
-/// Replaces the match chains with `table`'s rules in one transaction (`apply`, new names).
-pub fn update(table: &Table, acceptor: u16) -> String {
-    let mut text =
-        format!("flush chain inet {TABLE} tcp_match\nflush chain inet {TABLE} udp_match\n");
+/// The subnet broadcasts of local IPv4 addresses `(address, prefix length, broadcast)`, as the
+/// kernel's `local` table holds them: the configured broadcast and, below /31, the subnet's last
+/// address. 255.255.255.255 is skipped anyway.
+pub fn broadcasts(addrs: &[(Ipv4Addr, u8, Option<Ipv4Addr>)]) -> Vec<Ipv4Addr> {
+    let mut out = Vec::new();
+    for &(addr, prefix, brd) in addrs {
+        out.extend(brd);
+        if prefix < 31 {
+            out.push(Ipv4Addr::from(u32::from(addr) | (u32::MAX >> prefix)));
+        }
+    }
+    out.retain(|a| !a.is_unspecified() && !a.is_broadcast());
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Replaces the match chains with `table`'s rules and the broadcast set with `broadcasts` in one
+/// transaction (`apply`, new names, changed interfaces).
+pub fn update(table: &Table, acceptor: u16, broadcasts: &[Ipv4Addr]) -> String {
+    let mut text = format!(
+        "flush chain inet {TABLE} tcp_match\nflush chain inet {TABLE} udp_match\nflush set inet {TABLE} broadcast\n"
+    );
+    if !broadcasts.is_empty() {
+        let items: Vec<String> = broadcasts.iter().map(ToString::to_string).collect();
+        text += &format!(
+            "add element inet {TABLE} broadcast {{ {} }}\n",
+            items.join(", ")
+        );
+    }
     for m in matches(table, Protocol::Tcp) {
         text += &format!(
             "add rule inet {TABLE} tcp_match meta l4proto tcp{m} redirect to :{acceptor}\n"
@@ -99,6 +126,7 @@ pub fn ruleset(
     tproxy: u16,
     proxy: SocketAddrV4,
     bypass_group: bool,
+    broadcasts: &[Ipv4Addr],
 ) -> String {
     let skips = |proto: &str| {
         let group = if bypass_group {
@@ -106,11 +134,12 @@ pub fn ruleset(
         } else {
             String::new()
         };
-        // Answers to multicast (mDNS, SSDP) and broadcast never come back to a relay.
-        // ponytail: a subnet broadcast (192.168.1.255) is not told apart; `fib daddr type` would,
-        // but needs nft_fib, which some kernels (WSL) lack.
+        // Answers to multicast (mDNS, SSDP) and broadcast never come back to a relay. Subnet
+        // broadcasts (192.168.1.255) come from the interfaces: `fib daddr type` would tell them
+        // apart, but needs nft_fib, which some kernels (WSL) lack.
         let cast = if proto == "udp" {
-            "        ip daddr { 224.0.0.0/4, 255.255.255.255 } return\n"
+            "        ip daddr { 224.0.0.0/4, 255.255.255.255 } return\n\
+             \x20       ip daddr @broadcast return\n"
         } else {
             ""
         };
@@ -128,6 +157,9 @@ pub fn ruleset(
     };
     format!(
         "{}table inet {TABLE} {{\n\
+         \x20   set broadcast {{\n\
+         \x20       type ipv4_addr;\n\
+         \x20   }}\n\
          \x20   chain tcp_match {{\n\
          \x20   }}\n\
          \x20   chain udp_match {{\n\
@@ -148,7 +180,7 @@ pub fn ruleset(
         delete(),
         skips("tcp"),
         skips("udp"),
-        update(table, acceptor)
+        update(table, acceptor, broadcasts)
     )
 }
 
@@ -281,12 +313,15 @@ mod tests {
 
     #[test]
     fn an_empty_table_is_the_skeleton_with_empty_match_chains() {
-        let text = ruleset(&Table::default(), 40000, 40001, PROXY, true);
+        let text = ruleset(&Table::default(), 40000, 40001, PROXY, true, &[]);
         assert_eq!(
             text,
             "table inet zapret_hub_route\n\
              delete table inet zapret_hub_route\n\
              table inet zapret_hub_route {\n\
+             \x20   set broadcast {\n\
+             \x20       type ipv4_addr;\n\
+             \x20   }\n\
              \x20   chain tcp_match {\n\
              \x20   }\n\
              \x20   chain udp_match {\n\
@@ -305,6 +340,7 @@ mod tests {
              \x20       meta nfproto ipv6 return\n\
              \x20       oifname \"lo\" return\n\
              \x20       ip daddr { 224.0.0.0/4, 255.255.255.255 } return\n\
+             \x20       ip daddr @broadcast return\n\
              \x20       meta mark & 0x20000000 != 0 return\n\
              \x20       meta skgid zapret-bypass return\n\
              \x20       ip daddr 127.0.0.1 udp dport 2080 return\n\
@@ -316,9 +352,10 @@ mod tests {
              \x20   }\n\
              }\n\
              flush chain inet zapret_hub_route tcp_match\n\
-             flush chain inet zapret_hub_route udp_match\n"
+             flush chain inet zapret_hub_route udp_match\n\
+             flush set inet zapret_hub_route broadcast\n"
         );
-        let without = ruleset(&Table::default(), 40000, 40001, PROXY, false);
+        let without = ruleset(&Table::default(), 40000, 40001, PROXY, false, &[]);
         assert!(!without.contains("skgid"));
         assert_eq!(
             without.len(),
@@ -347,9 +384,10 @@ mod tests {
             rule("UdpGame", Protocol::Udp, &["3000"], &[], &["game"]),
         ]);
         assert_eq!(
-            update(&table, 40000),
+            update(&table, 40000, &[]),
             "flush chain inet zapret_hub_route tcp_match\n\
              flush chain inet zapret_hub_route udp_match\n\
+             flush set inet zapret_hub_route broadcast\n\
              add rule inet zapret_hub_route tcp_match meta l4proto tcp ip daddr { 1.2.2.0/23, 9.9.9.9 } th dport { 80, 400-500 } redirect to :40000\n\
              add rule inet zapret_hub_route tcp_match meta l4proto tcp redirect to :40000\n\
              add rule inet zapret_hub_route udp_match meta l4proto udp ip daddr { 1.2.2.0/23, 9.9.9.9 } th dport { 80, 400-500 } meta mark set meta mark | 0x10000000\n\
@@ -357,8 +395,40 @@ mod tests {
         );
         // A UDP rule's program takes its ports only while it runs.
         let running = table.with_running(&["/usr/bin/game"]);
-        assert!(update(&running, 40000).ends_with(
+        assert!(update(&running, 40000, &[]).ends_with(
             "add rule inet zapret_hub_route udp_match meta l4proto udp th dport { 3000 } meta mark set meta mark | 0x10000000\n"
+        ));
+    }
+
+    #[test]
+    fn subnet_broadcasts_of_the_interfaces_fill_the_set() {
+        let ip = |s: &str| s.parse::<Ipv4Addr>().unwrap();
+        let found = broadcasts(&[
+            (ip("192.168.1.20"), 24, Some(ip("192.168.1.255"))),
+            // No configured broadcast: the subnet's last address all the same.
+            (ip("10.9.0.1"), 16, None),
+            // Configured apart from the subnet's own.
+            (ip("172.16.0.5"), 24, Some(ip("172.16.0.127"))),
+            (ip("127.0.0.1"), 8, None),
+            // /31 and /32 have none; 0.0.0.0/0 only the all-ones, skipped anyway.
+            (ip("100.64.0.1"), 31, None),
+            (ip("100.64.0.9"), 32, None),
+            (ip("0.0.0.0"), 0, Some(ip("255.255.255.255"))),
+        ]);
+        assert_eq!(
+            found,
+            [
+                "10.9.255.255",
+                "127.255.255.255",
+                "172.16.0.127",
+                "172.16.0.255",
+                "192.168.1.255"
+            ]
+            .map(ip)
+        );
+        assert!(update(&Table::default(), 40000, &found[..2]).ends_with(
+            "flush set inet zapret_hub_route broadcast\n\
+             add element inet zapret_hub_route broadcast { 10.9.255.255, 127.255.255.255 }\n"
         ));
     }
 
@@ -486,10 +556,79 @@ mod tests {
                 .unwrap();
             assert!(child.wait().unwrap().success(), "{text}");
         };
-        nft(&ruleset(&table, 40000, 40001, PROXY, false));
-        nft(&update(&Table::default(), 40000));
-        nft(&update(&table, 40000));
+        let b = [
+            Ipv4Addr::new(10, 9, 0, 255),
+            Ipv4Addr::new(192, 168, 1, 255),
+        ];
+        nft(&ruleset(&table, 40000, 40001, PROXY, false, &b));
+        nft(&update(&Table::default(), 40000, &[]));
+        nft(&update(&table, 40000, &b[..1]));
+        nft(&update(&table, 40000, &b));
         nft(&delete());
         nft(&delete());
+    }
+
+    /// A datagram to a subnet broadcast of an interface is never marked, one to a host of the
+    /// same rule subnet is: `unshare -rn <test binary> --ignored a_subnet_broadcast`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "needs ip, nft and CAP_NET_ADMIN (a user namespace will do)"]
+    fn a_subnet_broadcast_is_never_marked() {
+        use std::process::Command;
+        let run = |prog: &str, args: &[&str], stdin: Option<&str>| {
+            use std::io::Write;
+            let mut child = Command::new(prog)
+                .args(args)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let _ = child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(stdin.unwrap_or("").as_bytes());
+            let out = child.wait_with_output().unwrap();
+            assert!(out.status.success(), "{prog} {args:?}");
+            String::from_utf8(out.stdout).unwrap()
+        };
+        run("ip", &["link", "add", "zh0", "type", "dummy"], None);
+        run("ip", &["addr", "add", "10.9.0.1/24", "dev", "zh0"], None);
+        run("ip", &["link", "set", "zh0", "up"], None);
+        let found = broadcasts(&crate::linux::sockopt::ipv4_addrs().unwrap());
+        assert!(found.contains(&Ipv4Addr::new(10, 9, 0, 255)), "{found:?}");
+        let table = Table::new(&[rule("Lan", Protocol::Udp, &[], &["10.9.0.0/24"], &[])]);
+        run(
+            "nft",
+            &["-f", "-"],
+            Some(&ruleset(&table, 40000, 40001, PROXY, false, &found)),
+        );
+        // Counts marked datagrams after the route chain (mangle) marked them.
+        run(
+            "nft",
+            &["-f", "-"],
+            Some(&format!(
+                "table ip zh_count {{\n chain out {{\n type filter hook output priority 0;\n \
+                 meta mark & {MARK_TPROXY:#x} != 0 ip daddr 10.9.0.255 counter\n \
+                 meta mark & {MARK_TPROXY:#x} != 0 ip daddr 10.9.0.7 counter\n }}\n}}\n"
+            )),
+        );
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+        socket.set_broadcast(true).unwrap();
+        socket.send_to(b"x", "10.9.0.255:9").unwrap();
+        socket.send_to(b"x", "10.9.0.7:9").unwrap();
+        let counts: Vec<String> = run("nft", &["list", "chain", "ip", "zh_count", "out"], None)
+            .lines()
+            .filter_map(|l| {
+                Some(
+                    l.split("counter packets ")
+                        .nth(1)?
+                        .split(' ')
+                        .next()?
+                        .to_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(counts, ["0", "1"], "broadcast, then the host");
     }
 }

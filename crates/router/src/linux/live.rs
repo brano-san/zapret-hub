@@ -189,6 +189,12 @@ fn bypass_group() -> bool {
     std::fs::read_to_string("/etc/group").is_ok_and(|t| t.lines().any(|l| l.starts_with(&line)))
 }
 
+/// The subnet broadcasts of the local interfaces now: read on every `apply`, so housekeeping's
+/// re-apply each tick puts a changed network in force.
+fn broadcasts() -> Vec<Ipv4Addr> {
+    nft::broadcasts(&sockopt::ipv4_addrs().unwrap_or_default())
+}
+
 /// Caches the exe of every process with a UDP socket: a UDP rule's program is running.
 fn learn_udp_programs(images: &Images) {
     for pid in owner::udp_pids() {
@@ -250,12 +256,14 @@ impl Live {
         {
             let mut applied = live.applied.lock().unwrap();
             let full = live.compose(Some(table));
+            let broadcasts = broadcasts();
             let text = nft::ruleset(
                 &full,
                 acceptor_port,
                 tproxy_port,
                 setup.proxy,
                 bypass_group(),
+                &broadcasts,
             );
             let installed = nft(&text).and_then(|()| {
                 let policy = free_policy()?;
@@ -270,7 +278,7 @@ impl Live {
                 live.shut();
                 bail!("cannot set up routing: {e}");
             }
-            *applied = nft::update(&full, acceptor_port);
+            *applied = nft::update(&full, acceptor_port, &broadcasts);
         }
         let l = live.clone();
         spawn(move || l.accept_loop());
@@ -344,13 +352,13 @@ impl Live {
         table
     }
 
-    /// New rules (`None`: the same ones with the names and programs known now) replace the match
-    /// chains in one `nft` transaction: no moment without them, and live connections keep their
+    /// New rules (`None`: the same ones with the names and programs known now) and the interfaces'
+    /// broadcasts replace the match chains in one `nft` transaction: no moment without them, and live connections keep their
     /// redirect (conntrack NAT). Unchanged chains run nothing. `nft`'s refusal is the error.
     pub(crate) fn apply(self: &Arc<Self>, base: Option<Table>) -> Result<(), String> {
         let mut applied = self.applied.lock().unwrap();
         let table = self.compose(base);
-        let text = nft::update(&table, self.acceptor_port);
+        let text = nft::update(&table, self.acceptor_port, &broadcasts());
         if *applied == text || self.is_stopped() {
             return Ok(());
         }

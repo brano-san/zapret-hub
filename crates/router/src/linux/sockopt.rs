@@ -44,7 +44,7 @@ pub fn orig_dst(mut control: &[u8]) -> Option<SocketAddrV4> {
 mod sys {
     use std::io;
     use std::mem::MaybeUninit;
-    use std::net::{SocketAddrV4, TcpStream, UdpSocket};
+    use std::net::{Ipv4Addr, SocketAddrV4, TcpStream, UdpSocket};
     use std::os::fd::AsRawFd;
     use std::time::Duration;
 
@@ -112,7 +112,7 @@ mod sys {
         buf: &mut [u8],
     ) -> io::Result<(usize, SocketAddrV4, Option<SocketAddrV4>)> {
         let mut control = [MaybeUninit::<u8>::uninit(); 64];
-        let mut from = SockAddr::from(SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0));
+        let mut from = SockAddr::from(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
         // SAFETY: recvmsg only writes into the buffer; initialized bytes stay initialized.
         let uninit = unsafe { &mut *(std::ptr::from_mut::<[u8]>(buf) as *mut [MaybeUninit<u8>]) };
         let mut bufs = [MaybeUninitSlice::new(uninit)];
@@ -125,6 +125,42 @@ mod sys {
         // SAFETY: the kernel initialized the first `filled` control bytes.
         let control = unsafe { std::slice::from_raw_parts(control.as_ptr().cast::<u8>(), filled) };
         Ok((n, v4(&from)?, super::orig_dst(control)))
+    }
+
+    /// Each local IPv4 address: `(address, prefix length, broadcast)` (`getifaddrs`).
+    pub fn ipv4_addrs() -> io::Result<Vec<(Ipv4Addr, u8, Option<Ipv4Addr>)>> {
+        let mut head = std::ptr::null_mut();
+        // SAFETY: getifaddrs fills `head`, freed below.
+        if unsafe { libc::getifaddrs(&raw mut head) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let v4 = |sa: *const libc::sockaddr| {
+            // SAFETY: getifaddrs' addresses live until freeifaddrs; the family is checked first.
+            unsafe {
+                (!sa.is_null() && i32::from((*sa).sa_family) == libc::AF_INET).then(|| {
+                    Ipv4Addr::from(u32::from_be(
+                        (*sa.cast::<libc::sockaddr_in>()).sin_addr.s_addr,
+                    ))
+                })
+            }
+        };
+        let mut out = Vec::new();
+        let mut at = head;
+        while !at.is_null() {
+            // SAFETY: a node of the list getifaddrs returned.
+            let ifa = unsafe { &*at };
+            if let (Some(addr), Some(mask)) = (v4(ifa.ifa_addr), v4(ifa.ifa_netmask)) {
+                // Without IFF_BROADCAST the union holds a point-to-point peer.
+                let brd = (ifa.ifa_flags & libc::IFF_BROADCAST as u32 != 0)
+                    .then(|| v4(ifa.ifa_ifu))
+                    .flatten();
+                out.push((addr, u32::from(mask).leading_ones() as u8, brd));
+            }
+            at = ifa.ifa_next;
+        }
+        // SAFETY: the list getifaddrs returned, freed once.
+        unsafe { libc::freeifaddrs(head) };
+        Ok(out)
     }
 }
 

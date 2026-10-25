@@ -459,6 +459,18 @@ fn the_router_carries_tcp_udp_programs_and_domains_through_the_proxy() {
         (Some("dom"), Some("echo.test"), &Via::Proxy)
     );
 
+    // Subnet broadcasts follow the interfaces: one address more, then gone again.
+    let broadcasts = || cmd("nft", "list set inet zapret_hub_route broadcast");
+    assert!(broadcasts().contains("10.77.0.255"), "{}", broadcasts());
+    ip("addr add 10.78.0.1/24 dev va");
+    until("a new subnet's broadcast is skipped", || {
+        broadcasts().contains("10.78.0.255")
+    });
+    ip("addr del 10.78.0.1/24 dev va");
+    until("a gone subnet's broadcast goes", || {
+        !broadcasts().contains("10.78.0.255")
+    });
+
     // Stopped: nothing left behind, traffic goes directly.
     r.stop();
     assert_eq!(r.status().state, RouterState::Off);
