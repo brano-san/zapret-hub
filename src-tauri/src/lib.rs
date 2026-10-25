@@ -284,7 +284,10 @@ pub fn run() -> anyhow::Result<()> {
 }
 
 /// SIGTERM (logout, `kill`), SIGINT (Ctrl+C) and SIGHUP end the app as «Выход» does, routing
-/// stopped first: its table and rules outlive the process. Any second signal kills at once.
+/// stopped first: its table and rules outlive the process. A second Ctrl+C kills at once; a
+/// repeated SIGTERM or SIGHUP waits for the cleanup: GDBus raises SIGTERM itself when the session
+/// bus closes (`exit-on-close`), and logind sends SIGTERM with SIGHUP, both while a logout's first
+/// signal is still clearing the routing.
 #[cfg(target_os = "linux")]
 fn quit_on_signals(app: &tauri::AppHandle) {
     use std::sync::atomic::{AtomicI32, Ordering};
@@ -316,8 +319,11 @@ fn quit_on_signals(app: &tauri::AppHandle) {
         WRITE.store(fds[1], Ordering::Relaxed);
         let mut action: libc::sigaction = std::mem::zeroed();
         action.sa_sigaction = wake as extern "C" fn(libc::c_int) as libc::sighandler_t;
-        action.sa_flags = libc::SA_RESETHAND | libc::SA_RESTART;
         for signal in SIGNALS {
+            action.sa_flags = libc::SA_RESTART;
+            if signal == libc::SIGINT {
+                action.sa_flags |= libc::SA_RESETHAND;
+            }
             libc::sigaction(signal, &raw const action, std::ptr::null_mut());
         }
     }
@@ -326,10 +332,8 @@ fn quit_on_signals(app: &tauri::AppHandle) {
         let mut byte = 0u8;
         // SAFETY: reads one byte into a local.
         if unsafe { libc::read(fds[0], (&raw mut byte).cast(), 1) } == 1 {
-            for signal in SIGNALS {
-                // SAFETY: back to the default action.
-                unsafe { libc::signal(signal, libc::SIG_DFL) };
-            }
+            // SAFETY: back to the default action.
+            unsafe { libc::signal(libc::SIGINT, libc::SIG_DFL) };
             log::info!("quitting on a signal");
             routing::stop_on_exit(&app.state::<AppState>());
             tray::quit(&app);
