@@ -118,6 +118,14 @@ pub fn fill_defaults(report: &mut Value) -> anyhow::Result<()> {
                 confidence["why"] = serde_json::json!(["inconclusive"]);
             }
         }
+        // 0.9.1's steps never set a setting: an older report's `settings set` names a key 0.9.1
+        // removed, which now fails.
+        if let Some(Value::Array(steps)) = agent.get_mut("next_steps") {
+            steps.retain(|s| {
+                !s.as_str()
+                    .is_some_and(|s| s.starts_with("zapret-hub-cli settings set "))
+            });
+        }
     }
     // Patterns 0.9.1 dropped (`R1ViaSystemProxy`, `R3SlowProxyDns`) are left out.
     if let Some(Value::Array(patterns)) = report.get_mut("patterns") {
@@ -177,6 +185,12 @@ mod tests {
         .unwrap();
         value["agent"]["verdict"] = Value::String("proxy_broken".into());
         value["agent"]["confidence"] = serde_json::json!({"level": "medium", "why": []});
+        // A step 0.9.1 can no longer run: the key it sets is gone.
+        value["agent"]["next_steps"] = serde_json::json!([
+            "ask_user: Укажите папку прокси-клиента",
+            "zapret-hub-cli settings set proxy_client_dir <path>",
+            "zapret-hub-cli diag run --profile discord --wait --timeout 590",
+        ]);
         value["patterns"] = serde_json::json!([
             {"id": "R1ViaSystemProxy", "domain": "a.example", "direct_ok": false, "proxy_ok": true,
              "route": null, "direct": true, "rule": null},
@@ -189,5 +203,12 @@ mod tests {
         assert_eq!(summary.agent.confidence.level, crate::agent::Level::Low);
         assert_eq!(summary.agent.confidence.why, ["inconclusive"]);
         assert_eq!(summary.patterns, [Pattern::R6DaveStalled { alone: false }]);
+        assert_eq!(
+            summary.agent.next_steps,
+            [
+                "ask_user: Укажите папку прокси-клиента",
+                "zapret-hub-cli diag run --profile discord --wait --timeout 590"
+            ]
+        );
     }
 }

@@ -59,6 +59,15 @@ pub fn steps(s: &Summary, profile: &Profile) -> Vec<String> {
         ) {
             out.push(format!("ask_user: {}", profile.hint));
             out.push(again.clone());
+        } else if v == VerdictCode::Inconclusive
+            && s.agent.not_checked.iter().any(|f| f.code == "proxy_unseen")
+        {
+            out.push(format!(
+                "ask_user: {} ходит через системный прокси, и хаб не видит этих соединений: \
+                 выключите прокси для программы или добавьте правило «Маршруты», затем повторите",
+                profile.name
+            ));
+            out.push(again.clone());
         }
     }
     for c in s.system_checks.iter().filter(|c| c.level != CheckLevel::Ok) {
@@ -138,6 +147,24 @@ mod tests {
         let out = steps(&summary(VerdictCode::NoFlows), &profile());
         assert_eq!(out[0], "ask_user: Зайдите в голосовой канал");
         assert!(out[1].contains("diag run --profile discord"));
+    }
+
+    #[test]
+    fn traffic_through_the_system_proxy_asks_to_route_it_and_repeat() {
+        let mut s = summary(VerdictCode::Inconclusive);
+        s.agent.not_checked.push(crate::agent::Fact {
+            code: "proxy_unseen".into(),
+            args: vec![],
+            text: String::new(),
+        });
+        let out = steps(&s, &profile());
+        assert!(
+            out[0].starts_with("ask_user: Discord ходит через системный прокси"),
+            "{out:?}"
+        );
+        assert!(out[0].contains("«Маршруты»"), "{out:?}");
+        assert!(out[1].contains("diag run --profile discord"), "{out:?}");
+        assert_eq!(out.len(), 2);
     }
 
     #[test]

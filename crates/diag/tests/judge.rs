@@ -534,3 +534,22 @@ fn unobserved_on_linux_is_at_most_inconclusive_and_says_why() {
         3
     );
 }
+
+#[test]
+fn a_stuck_stage_alone_names_the_stage_in_the_text() {
+    let mut s = with_stage(Some(VoiceStage::WsFailed));
+    fill(
+        &mut s,
+        &[tcp_ok(), voice_flow(40)],
+        &Evidence::default(),
+        &ctx(&[ProbeKind::DiscordIpDiscovery]),
+        30,
+    );
+    assert_eq!(s.agent.verdict, VerdictCode::Inconclusive);
+    assert!(
+        s.verdict_text
+            .ends_with("голосовое WebSocket-соединение Discord не открылось"),
+        "{}",
+        s.verdict_text
+    );
+}

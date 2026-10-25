@@ -51,13 +51,6 @@ fn minus_default<T: Serialize + Default>(v: &T) -> Value {
     }
 }
 
-fn source_code(name: &str) -> String {
-    match name {
-        "журнал Discord" => "discord_log".into(),
-        other => other.into(),
-    }
-}
-
 /// What the fix is about: warnings that name it belong to it.
 fn subject(fix: &Fix) -> Option<&str> {
     match fix {
@@ -203,7 +196,7 @@ pub fn compact(s: &Summary) -> Value {
         "evidence": a.evidence,
         "checks": checks,
         "not_checked": a.not_checked,
-        "missing": s.sources_missing.iter().map(|m| source_code(m)).collect::<Vec<_>>(),
+        "missing": s.sources_missing.iter().map(|m| diag::judge::source_code(m)).collect::<Vec<_>>(),
         "coverage": a.coverage,
         "changes": a.changes,
         "warnings": rest,
@@ -268,6 +261,10 @@ mod tests {
         assert_eq!(out["checks"].as_array().unwrap().len(), 1);
         assert_eq!(out["checks"][0]["id"], "Proxy");
         assert_eq!(out["missing"], json!(["discord_log"]));
+        // A source an older version read and this one does not: a code, never its Russian name.
+        let mut old = load(include_str!("../tests/fixtures/diag-clean.json"));
+        old.sources_missing.push("журнал прокси-клиента".into());
+        assert_eq!(compact(&old)["missing"], json!(["discord_log", "other"]));
         // An old report has an empty agent part: nothing of it is printed.
         assert!(out.get("client").is_none() && out.get("context").is_none());
         assert!(out.get("evidence").is_none() && out.get("next_steps").is_none());

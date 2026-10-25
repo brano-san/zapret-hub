@@ -29,8 +29,9 @@ fn port_of(f: &FlowCounters) -> Option<u16> {
     f.dst.rsplit_once(':')?.1.parse().ok()
 }
 
-/// A stable code for a `sources_missing` entry (evidence.rs words them).
-fn source_code(what: &str) -> &'static str {
+/// A stable code for a `sources_missing` entry (evidence.rs words them); `other` for one this
+/// version does not know (an older report's).
+pub fn source_code(what: &str) -> &'static str {
     match what {
         "журнал Discord" => "discord_log",
         _ => "other",
@@ -102,6 +103,17 @@ fn client_stage(code: VerdictCode, summary: &Summary, ctx: &Ctx) -> (VerdictCode
             VerdictCode::Inconclusive,
             Some(format!("client_stage:{}", stage_code(stage))),
         ),
+    }
+}
+
+/// What a `client_stage:<code>` reason says, for the verdict's text.
+fn stage_text(code: &str) -> &'static str {
+    match code {
+        "no_endpoint" => "Discord не получил голосовой сервер",
+        "ws_failed" => "голосовое WebSocket-соединение Discord не открылось",
+        "udp_failed" => "голосовой UDP Discord не соединился",
+        "dave_stalled" => "шифрование DAVE в Discord зависло",
+        _ => "Discord не дошёл до соединения",
     }
 }
 
@@ -322,7 +334,17 @@ pub fn fill(
         text: (*text).into(),
     }));
     if verdict == VerdictCode::Inconclusive {
-        let why: Vec<&str> = unseen.iter().map(|(_, t)| *t).collect();
+        let mut why: Vec<&str> = unseen.iter().map(|(_, t)| *t).collect();
+        // Inconclusive from Discord's log alone: its stage is what was not seen.
+        if why.is_empty() {
+            why.extend(
+                confidence
+                    .why
+                    .iter()
+                    .filter_map(|w| w.strip_prefix("client_stage:"))
+                    .map(stage_text),
+            );
+        }
         summary.verdict_text = format!(
             "соединения программы проходят, но видно не всё: {}",
             why.join("; ")
