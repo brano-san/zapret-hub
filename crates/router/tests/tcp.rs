@@ -192,6 +192,47 @@ fn an_ipv6_connection_is_reflected_like_an_ipv4_one() {
 }
 
 #[test]
+fn an_ipv4_and_an_ipv6_socket_on_one_port_keep_their_own_entries() {
+    let (t0, mut nat) = (Instant::now(), Nat::default());
+    let (client6, server6) = (sa("[2a02:6b8::5]:50000"), sa("[2606:4700::1]:443"));
+    nat.admit(&seg(CLIENT, SERVER, SYN), AP, t0);
+    nat.admit(
+        &seg("[2a02:6b8::5]:50000", "[2606:4700::1]:443", SYN),
+        AP,
+        t0,
+    );
+    let mut dests = nat.destinations();
+    dests.sort();
+    assert_eq!(dests, [sa(SERVER), server6]);
+    assert_eq!(nat.expire(t0), [], "neither replaced the other");
+    assert_eq!(
+        nat.from_acceptor(&reply(50000, SYN | ACK), t0),
+        Verdict::Rewrite {
+            src: sa(SERVER),
+            dst: sa(CLIENT)
+        }
+    );
+    assert_eq!(
+        nat.from_acceptor(
+            &seg("[2a02:6b8::5]:61000", "[2606:4700::1]:50000", SYN | ACK),
+            t0
+        ),
+        Verdict::Rewrite {
+            src: server6,
+            dst: client6
+        }
+    );
+    nat.accepted(50000, "2606:4700::1".parse().unwrap());
+    assert_eq!(
+        nat.unaccepted(t0 + ACCEPT_WAIT),
+        [(50000, sa(SERVER))],
+        "only the IPv4 one"
+    );
+    assert_eq!(nat.forget(client6), Some(server6));
+    assert!(nat.destinations().is_empty());
+}
+
+#[test]
 fn a_connection_older_than_the_rule_passes_unchanged() {
     let (t0, mut nat) = (Instant::now(), Nat::default());
     assert_eq!(
@@ -362,7 +403,7 @@ fn a_syn_the_acceptor_never_saw_goes_direct_after_2_s() {
     let (t0, mut nat) = (Instant::now(), Nat::default());
     nat.admit(&seg(CLIENT, SERVER, SYN), AP, t0);
     nat.admit(&seg("192.168.1.5:50009", SERVER, SYN), AP, t0);
-    nat.accepted(50009);
+    nat.accepted(50009, "192.168.1.5".parse().unwrap());
     assert!(
         nat.unaccepted(t0 + ACCEPT_WAIT - Duration::from_millis(1))
             .is_empty()
@@ -423,7 +464,7 @@ fn reset_sends_an_rst() {
 fn a_forgotten_entry_leaves_no_mark() {
     let (t0, mut nat) = (Instant::now(), Nat::default());
     nat.admit(&seg(CLIENT, SERVER, SYN), AP, t0);
-    assert_eq!(nat.forget(50000), Some(sa(SERVER)));
+    assert_eq!(nat.forget(sa(CLIENT)), Some(sa(SERVER)));
     assert!(nat.destinations().is_empty());
     assert_eq!(
         nat.from_client(&seg(CLIENT, SERVER, SYN), AP, t0),

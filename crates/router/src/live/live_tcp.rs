@@ -215,7 +215,7 @@ impl Live {
                 self.on_tcp(None, &packet, &seg, addr);
                 continue;
             }
-            self.nat.lock().unwrap().forget(seg.src.port());
+            self.nat.lock().unwrap().forget(seg.src);
             let key = FlowKey {
                 protocol: Protocol::Tcp,
                 local_port: seg.src.port(),
@@ -293,7 +293,7 @@ impl Live {
             let mut nat = self.nat.lock().unwrap();
             let orig = nat.original(port, peer.ip());
             if orig.is_some() {
-                nat.accepted(port);
+                nat.accepted(port, peer.ip());
             }
             orig
         };

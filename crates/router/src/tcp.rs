@@ -57,18 +57,25 @@ impl Entry {
     }
 }
 
-/// Entries by client port. Every removal is reported as `(client port, original destination)`
-/// by `expire` or `unaccepted`, so the caller can close its flow row. An idle entry is reported
+/// Entries by client port and family (an IPv4 and an IPv6 socket may share a port number). Every
+/// removal is reported as `(client port, original destination)` by `expire` or `unaccepted`, so the caller can close its flow row. An idle entry is reported
 /// once more when it starts lingering, so the caller ends its connection while the acceptor's
 /// FIN can still be reflected to the client.
-// ponytail: keyed by client port alone; the same local port to another destination replaces a
-// live entry. Upgrade: key by (client port, original destination) if that shows up.
+// ponytail: keyed by client port and family; the same local port to another destination replaces
+// a live entry. Upgrade: key by (client port, original destination) if that shows up.
 #[derive(Default)]
 pub struct Nat {
-    entries: HashMap<u16, Entry>,
+    entries: HashMap<Key, Entry>,
     marks: HashMap<SocketAddr, Instant>,
     /// Closed entries a new SYN replaced, reported by the next `expire`.
     replaced: Vec<(u16, SocketAddr)>,
+}
+
+/// Client port, IPv6.
+type Key = (u16, bool);
+
+fn key(port: u16, ip: IpAddr) -> Key {
+    (port, ip.is_ipv6())
 }
 
 fn bare_syn(seg: &Tcp) -> bool {
@@ -78,15 +85,16 @@ fn bare_syn(seg: &Tcp) -> bool {
 impl Nat {
     pub fn from_client(&mut self, seg: &Tcp, acceptor: u16, now: Instant) -> Verdict {
         let port = seg.src.port();
+        let k = key(port, seg.src.ip());
         if bare_syn(seg)
-            && let Some(e) = self.entries.get(&port)
+            && let Some(e) = self.entries.get(&k)
             && e.closed.is_some()
         {
             // A new connection on this port: the lingering entry must not catch its segments.
             self.replaced.push((port, e.orig));
-            self.entries.remove(&port);
+            self.entries.remove(&k);
         }
-        if let Some(e) = self.entries.get_mut(&port)
+        if let Some(e) = self.entries.get_mut(&k)
             && e.orig == seg.dst
         {
             e.see(seg.flags, true, now);
@@ -111,7 +119,10 @@ impl Nat {
             accepted: false,
             last: now,
         };
-        if let Some(old) = self.entries.insert(seg.src.port(), entry) {
+        if let Some(old) = self
+            .entries
+            .insert(key(seg.src.port(), seg.src.ip()), entry)
+        {
             self.replaced.push((seg.src.port(), old.orig));
         }
         to_acceptor(seg, acceptor)
@@ -119,7 +130,7 @@ impl Nat {
 
     pub fn from_acceptor(&mut self, seg: &Tcp, now: Instant) -> Verdict {
         let port = seg.dst.port();
-        match self.entries.get_mut(&port) {
+        match self.entries.get_mut(&key(port, seg.dst.ip())) {
             Some(e) if e.orig.ip() == seg.dst.ip() => {
                 e.see(seg.flags, false, now);
                 Verdict::Rewrite {
@@ -134,13 +145,13 @@ impl Nat {
     /// `peer` is the accepted socket's peer ip, which reflection set to the original one.
     pub fn original(&self, client_port: u16, peer: IpAddr) -> Option<SocketAddr> {
         self.entries
-            .get(&client_port)
+            .get(&key(client_port, peer))
             .map(|e| e.orig)
             .filter(|o| o.ip() == peer)
     }
 
-    pub fn accepted(&mut self, client_port: u16) {
-        if let Some(e) = self.entries.get_mut(&client_port) {
+    pub fn accepted(&mut self, client_port: u16, peer: IpAddr) {
+        if let Some(e) = self.entries.get_mut(&key(client_port, peer)) {
             e.accepted = true;
         }
     }
@@ -151,18 +162,21 @@ impl Nat {
             .entries
             .iter()
             .filter(|(_, e)| !e.accepted && now.duration_since(e.syn_at) >= ACCEPT_WAIT)
-            .map(|(p, e)| (*p, e.orig))
+            .map(|(k, e)| (k.0, e.orig))
             .collect();
         for (port, orig) in &gone {
-            self.entries.remove(port);
+            self.entries.remove(&key(*port, orig.ip()));
             self.marks.insert(*orig, now);
         }
         gone
     }
 
-    /// Removes the entry without marking its destination (its SYN goes out unchanged).
-    pub fn forget(&mut self, client_port: u16) -> Option<SocketAddr> {
-        self.entries.remove(&client_port).map(|e| e.orig)
+    /// Removes the entry of the `client` socket without marking its destination (its SYN goes out
+    /// unchanged).
+    pub fn forget(&mut self, client: SocketAddr) -> Option<SocketAddr> {
+        self.entries
+            .remove(&key(client.port(), client.ip()))
+            .map(|e| e.orig)
     }
 
     pub fn mark_direct(&mut self, dst: SocketAddr, now: Instant) {
@@ -177,14 +191,14 @@ impl Nat {
     /// returns the newly idle and the removed entries.
     pub fn expire(&mut self, now: Instant) -> Vec<(u16, SocketAddr)> {
         let mut gone = std::mem::take(&mut self.replaced);
-        self.entries.retain(|port, e| {
+        self.entries.retain(|&(port, _), e| {
             if e.closed.is_none() && now.duration_since(e.last) >= IDLE {
                 e.closed = Some(now);
-                gone.push((*port, e.orig));
+                gone.push((port, e.orig));
             }
             let ended = e.closed.is_some_and(|c| now.duration_since(c) >= LINGER);
             if ended {
-                gone.push((*port, e.orig));
+                gone.push((port, e.orig));
             }
             !ended
         });
